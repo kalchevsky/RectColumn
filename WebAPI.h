@@ -242,7 +242,7 @@ private:
 
                 _tb->sync(unixMs, msAt, tzOffsetMin);
                 _log->refreshTimeStrings();
-                _log->add("Time synchronized", _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
+                _log->add("Время синхронизировано", _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
 
                 DynamicJsonDocument resp(320);
                 resp["ok"]            = true;
@@ -269,7 +269,7 @@ private:
                 _om->mute(muted);
                 _stor->saveOutputs(*_om);
                 _om->beepAcceptedCommand();
-                _log->add(String("Sound ") + (muted ? "muted" : "unmuted"),
+                _log->add(String("Звук ") + (muted ? "приглушён" : "включён"),
                           _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
 
                 DynamicJsonDocument resp(256);
@@ -287,7 +287,7 @@ private:
             const uint16_t unackedAfter = _om->unackedAlarmCount(*_sm);
             const uint16_t acknowledgedCount = (activeBefore >= unackedAfter) ? (activeBefore - unackedAfter) : 0;
             if (acknowledgedCount > 0) {
-                _log->add("Alarms acknowledged", _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
+                _log->add("Оператор подтвердил тревоги", _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
             }
             DynamicJsonDocument resp(448);
             resp["ok"] = true;
@@ -353,7 +353,7 @@ private:
 
         _server.on("/api/v1/log", HTTP_DELETE, [this](AsyncWebServerRequest* req) {
             _log->clear();
-            _log->add("Log cleared", _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
+            _log->add("Журнал очищен", _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
             _sendOk(req);
         });
     }
@@ -509,7 +509,7 @@ private:
                 _stor->saveSensors(*_sm);
                 _om->beepAcceptedCommand();
 
-                _log->add("Output config updated",
+                _log->add("Конфигурация выходов обновлена",
                           _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
 
                 DynamicJsonDocument resp(512);
@@ -558,10 +558,10 @@ private:
                 resp["wizardPending"]  = _wifiWizardPending();
 
                 if (result.ok) {
-                    _log->add("WiFi STA connected: " + result.ssid + " IP=" + result.ip,
+                    _log->add("WiFi STA подключён: " + result.ssid + " IP=" + result.ip,
                               _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
                 } else {
-                    _log->add("WiFi STA connect failed: " + result.ssid + " status=" + result.statusText,
+                    _log->add("WiFi STA: ошибка подключения к " + result.ssid + " status=" + result.statusText,
                               _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
                 }
 
@@ -583,7 +583,7 @@ private:
                 _wifi->setAPPassword(pass, *_stor);
                 _stor->saveWifiWizardDone(true);
                 _om->beepAcceptedCommand();
-                _log->add(String("AP password ") + (pass.length() ? "set" : "cleared"),
+                _log->add(String("Пароль точки доступа ") + (pass.length() ? "установлен" : "сброшен"),
                           _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
 
                 DynamicJsonDocument resp(320);
@@ -592,8 +592,8 @@ private:
                 resp["apIP"] = _wifi->apIP();
                 resp["wizardPending"] = _wifiWizardPending();
                 resp["reconnectHint"] = pass.length()
-                    ? "AP may require reconnect with the new password"
-                    : "AP remains open";
+                    ? "Точке доступа может потребоваться переподключение с новым паролем"
+                    : "Точка доступа остаётся открытой";
                 _sendDoc(req, 200, resp);
             });
 
@@ -606,7 +606,7 @@ private:
                 const bool done = doc["done"] | true;
                 _stor->saveWifiWizardDone(done);
                 _om->beepAcceptedCommand();
-                _log->add(String("WiFi wizard ") + (done ? "completed" : "reopened"),
+                _log->add(String("Мастер WiFi ") + (done ? "завершён" : "открыт повторно"),
                           _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
 
                 DynamicJsonDocument resp(192);
@@ -656,7 +656,7 @@ private:
 
                 _notifier->setConfig(enabled, url, token);
                 _om->beepAcceptedCommand();
-                _log->add("Notify config updated",
+                _log->add("Настройки уведомлений обновлены",
                           _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
 
                 DynamicJsonDocument resp(256);
@@ -698,7 +698,7 @@ private:
                 resp["ok"] = ok;
                 if (ok) {
                     _om->beepAcceptedCommand();
-                    _log->add("Notify test sent",
+                    _log->add("Тест уведомления отправлен",
                               _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
                     _sendDoc(req, 200, resp);
                 } else {
@@ -733,14 +733,22 @@ private:
                 if (doc.containsKey("WER_CH2")) _cm->setEmuActive(1, doc["WER_CH2"]);
                 if (doc.containsKey("WER_CH3")) _cm->setEmuActive(2, doc["WER_CH3"]);
                 if (doc.containsKey("WER_CH4")) _cm->setEmuActive(3, doc["WER_CH4"]);
+                if (doc.containsKey("WER_CH1_mode")) _cm->setEmuMode(0, _parseEmuConfirmMode(doc["WER_CH1_mode"]));
+                if (doc.containsKey("WER_CH2_mode")) _cm->setEmuMode(1, _parseEmuConfirmMode(doc["WER_CH2_mode"]));
+                if (doc.containsKey("WER_CH3_mode")) _cm->setEmuMode(2, _parseEmuConfirmMode(doc["WER_CH3_mode"]));
+                if (doc.containsKey("WER_CH4_mode")) _cm->setEmuMode(3, _parseEmuConfirmMode(doc["WER_CH4_mode"]));
                 if (doc.containsKey("W1")) _cm->setEmuActive(0, doc["W1"]);
                 if (doc.containsKey("W2")) _cm->setEmuActive(1, doc["W2"]);
                 if (doc.containsKey("W3")) _cm->setEmuActive(2, doc["W3"]);
                 if (doc.containsKey("W4")) _cm->setEmuActive(3, doc["W4"]);
+                if (doc.containsKey("W1_mode")) _cm->setEmuMode(0, _parseEmuConfirmMode(doc["W1_mode"]));
+                if (doc.containsKey("W2_mode")) _cm->setEmuMode(1, _parseEmuConfirmMode(doc["W2_mode"]));
+                if (doc.containsKey("W3_mode")) _cm->setEmuMode(2, _parseEmuConfirmMode(doc["W3_mode"]));
+                if (doc.containsKey("W4_mode")) _cm->setEmuMode(3, _parseEmuConfirmMode(doc["W4_mode"]));
 
                 _sendOk(req);
             #else
-                _sendError(req, 403, "forbidden", "EMU_MODE disabled");
+                _sendError(req, 403, "forbidden", "Режим эмуляции отключён");
             #endif
             });
 
@@ -752,10 +760,10 @@ private:
                 if (!_parseJson(req, data, len, doc)) return;
                 String name = doc["name"] | "none";
                 _emu->setScenario(name);
-                _log->add("EMU scenario: " + name, _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
+                _log->add("Сценарий эмуляции: " + name, _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
                 _sendOk(req);
             #else
-                _sendError(req, 403, "forbidden", "EMU_MODE disabled");
+                _sendError(req, 403, "forbidden", "Режим эмуляции отключён");
             #endif
             });
     }
@@ -866,7 +874,7 @@ private:
 
         _stor->saveSensors(*_sm);
         _om->beepAcceptedCommand();
-        _log->add("Config: " + s->name + " " + String(s->enabled ? "enabled" : "disabled"),
+        _log->add("Настройка датчика: " + s->name + " " + String(s->enabled ? "включён" : "отключён"),
                   _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
         _sendOk(req);
     }
@@ -893,7 +901,7 @@ private:
 
         _stor->saveSensors(*_sm);
         _om->beepAcceptedCommand();
-        _log->add("Alarm set: " + s->name + " #" + String(ai),
+        _log->add("Настройка тревоги: " + s->name + " #" + String(ai),
                   _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
         _sendOk(req);
     }
@@ -947,7 +955,7 @@ private:
             _sm->normalizeSchemeControlRules();
             _stor->saveSensors(*_sm);
             _om->beepAcceptedCommand();
-            _log->add("Ctrl set: " + s->name + "->" + _outputName(oi),
+            _log->add("Настройка управления: " + s->name + " -> " + _outputName(oi),
                       _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
             _sendOk(req);
             return;
@@ -982,7 +990,7 @@ private:
         _stor->saveSensors(*_sm);
         _om->beepAcceptedCommand();
 
-        _log->add("Ctrl set: " + s->name + "->" + _outputName(oi),
+        _log->add("Настройка управления: " + s->name + " -> " + _outputName(oi),
                   _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
         _sendOk(req);
     }
@@ -1023,7 +1031,7 @@ private:
         _om->setMainStopLatched(true);
         _stor->saveOutputs(*_om);
 
-        _log->add("Stop pressed: CH1-CH3 inhibited",
+        _log->add("STOP активирован: CH1-CH3 запрещены, ручное включение заблокировано",
                   _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
 
         DynamicJsonDocument resp(384);
@@ -1039,7 +1047,7 @@ private:
         _om->setMainStopLatched(false);
         _stor->saveOutputs(*_om);
 
-        _log->add("Stop released: automation enabled",
+        _log->add("STOP снят: автоматике и ручным командам снова разрешено включать CH1-CH3",
                   _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
 
         DynamicJsonDocument resp(384);
@@ -1131,9 +1139,10 @@ private:
         resp["accepted"] = r.accepted;
         resp["reason"] = r.reason;
         resp["detail"] = r.detail;
+        resp["detailText"] = _om->relayBlockDetailText((uint8_t)oi, r.detail);
         resp["cmd"] = relayCommandName(cmd);
         resp["target"] = targetOn;
-        if (!r.accepted) resp["userMessage"] = _relayCommandUserMessage(r.detail);
+        if (!r.accepted) resp["userMessage"] = _relayCommandUserMessage(oi, r.detail);
 
         if (legacyManual && !r.accepted && cmd == CMD_ON) {
             _sendDoc(req, 409, resp);
@@ -1172,6 +1181,10 @@ private:
         root["operatorHoldOff"] = _om->operatorHoldOff((uint8_t)oi);
         root["forbidden"] = o->forbidden();
         root["forbidMask"] = o->forbidMask();
+        root["effectiveForbidMask"] = _om->effectiveForbidMask((uint8_t)oi);
+        root["forbidReasonText"] = _om->formatForbidReasons(o->forbidMask());
+        JsonArray reasons = root.createNestedArray("forbidReasons");
+        _appendForbidReasons(reasons, o->forbidMask());
         root["wantOnMask"] = o->wantOnMask();
         root["stopLatched"] = _om->mainStopLatched();
         root["pending"] = _om->relayCommandPending((uint8_t)oi);
@@ -1184,17 +1197,39 @@ private:
         if (err && err[0]) {
             root["relayError"] = err;
             root["relayErrorMs"] = _om->relayCommandErrorMs((uint8_t)oi);
+            root["relayErrorText"] = _om->relayErrorText((uint8_t)oi);
+        }
+        if (hasConfirm) {
+            const ConfirmationChannel& c = _cm->get(oi);
+            root["confirmMismatch"] = c.mismatch;
+            root["confirmTimeout"] = c.timeout;
+            root["confirmFault"] = ConfirmationManager::faultName(c.fault);
+            root["confirmFaultText"] = ConfirmationManager::faultNameRu(c.fault);
+            root["confirmFaultLatched"] = c.faultLatched;
+            root["confirmEmuMode"] = ConfirmationManager::emuModeName(_cm->emuMode((uint8_t)oi));
+            root["confirmEmuModeText"] = ConfirmationManager::emuModeNameRu(_cm->emuMode((uint8_t)oi));
         }
     }
 
-    const char* _relayCommandUserMessage(const char* detail) const {
+    String _relayCommandUserMessage(int oi, const char* detail) const {
         if (!detail || !detail[0]) return "";
-        if (strcmp(detail, "stop_active") == 0) return "Активен STOP. Сначала нажмите Отменить стоп.";
-        if (strcmp(detail, "forbidden") == 0) return "Включение запрещено текущими условиями автоматики.";
-        if (strcmp(detail, "disabled") == 0) return "Выход отключён в конфигурации.";
-        if (strcmp(detail, "duplicate") == 0) return "Команда уже выполняется.";
-        if (strcmp(detail, "busy") == 0) return "Предыдущая команда ещё ожидает подтверждения.";
-        return detail;
+        const String prefix = String("Команда ") + _outputName(oi) + ": ";
+        if (strcmp(detail, "stop_active") == 0) {
+            return prefix + "включение запрещено, активен STOP. Сначала снимите STOP.";
+        }
+        if (strcmp(detail, "forbidden") == 0) {
+            const String reasons = _om->formatForbidReasons(_om->effectiveForbidMask((uint8_t)oi));
+            if (reasons.length() > 0) {
+                return prefix + "включение запрещено текущими условиями автоматики: " + reasons + ".";
+            }
+            return prefix + "включение запрещено текущими условиями автоматики.";
+        }
+        if (strcmp(detail, "disabled") == 0) return prefix + "выход отключён в конфигурации.";
+        if (strcmp(detail, "duplicate") == 0) return prefix + "такая же команда уже выполняется.";
+        if (strcmp(detail, "busy") == 0) return prefix + "предыдущая команда ещё ожидает подтверждения.";
+        if (strcmp(detail, "auto_on_active") == 0) return prefix + "выключение запрещено, автоматика требует держать канал включённым.";
+        if (strcmp(detail, "invalid_command") == 0) return prefix + "некорректная команда.";
+        return prefix + _om->relayBlockDetailText((uint8_t)oi, detail);
     }
 
     // ------------------------------------------------------------
@@ -1396,6 +1431,7 @@ private:
             oo["sensorForbidMask"] = _om->lastForbidMask((uint8_t)i);
             oo["safetyForbidMask"] = _om->safetyForbidMask((uint8_t)i);
             oo["effectiveForbidMask"] = _om->effectiveForbidMask((uint8_t)i);
+            oo["forbidReasonText"] = _om->formatForbidReasons(o->forbidMask());
             oo["wantOnMask"] = o->wantOnMask();
             JsonArray reasons = oo.createNestedArray("forbidReasons");
             _appendForbidReasons(reasons, o->forbidMask());
@@ -1410,6 +1446,7 @@ private:
             if (relayErr && relayErr[0]) {
                 oo["relayError"] = relayErr;
                 oo["relayErrorMs"] = _om->relayCommandErrorMs((uint8_t)i);
+                oo["relayErrorText"] = _om->relayErrorText((uint8_t)i);
             }
 
             if (i < 4) {
@@ -1454,8 +1491,11 @@ private:
             co["timeout"]    = c.timeout;
             co["faultLatched"] = c.faultLatched;
             co["fault"]      = ConfirmationManager::faultName(c.fault);
+            co["faultText"]  = ConfirmationManager::faultNameRu(c.fault);
             co["timeoutMs"]  = c.timeoutMs;
             co["debounceMs"] = c.debounceMs;
+            co["emuMode"]    = ConfirmationManager::emuModeName(_cm->emuMode((uint8_t)i));
+            co["emuModeText"] = ConfirmationManager::emuModeNameRu(_cm->emuMode((uint8_t)i));
             if (strlen(c.note) > 0) co["note"] = c.note;
         }
     }
@@ -1473,15 +1513,15 @@ private:
         root["apRssi"] = _wifi->apRssi();
         root["storageReady"] = (_stor ? _stor->ready() : false);
         root["storageRecovered"] = (_stor ? _stor->recovered() : false);
-        root["storageStatus"] = (_stor ? _stor->statusText() : String("unavailable"));
+        root["storageStatus"] = (_stor ? _stor->statusText() : String("недоступно"));
         root["stopLatched"] = _om->mainStopLatched();
 
         JsonArray hw = root.createNestedArray("hardwareLimitations");
         if (adc2Warning) {
-            hw.add("GPIO27/ADC2 (sensor C) does not work reliably while WiFi is active in REAL mode");
+            hw.add("GPIO27/ADC2 (датчик C) ненадёжен при активном WiFi в реальном режиме");
         }
-        hw.add("GPIO35 is shared between V and WER_CH2; compile-time GPIO35_MODE selects only one in REAL mode");
-        hw.add("WER_CH1 (GPIO27) uses internal pull-down; WER_CH2/CH3/CH4 (GPIO35/34/36) require external pull-downs to GND");
+        hw.add("GPIO35 общий для V и WER_CH2; в реальном режиме работает только то, что выбрано через GPIO35_MODE");
+        hw.add("WER_CH1 (GPIO27) использует внутренний pull-down; для WER_CH2/CH3/CH4 (GPIO35/34/36) нужна внешняя подтяжка к GND");
 
         JsonArray mism = root.createNestedArray("activeConfirmMismatches");
         for (int i = 0; i < 4; i++) {
@@ -1504,6 +1544,22 @@ private:
         if (mask & (1u << RULEIDX_SAFETY_WER)) arr.add("SAFETY_WER");
     }
 
+    uint8_t _parseEmuConfirmMode(const JsonVariantConst& v) const {
+        if (v.is<bool>()) {
+            return v.as<bool>() ? EMU_CONFIRM_FORCE_ON : EMU_CONFIRM_FORCE_OFF;
+        }
+        String mode = v.as<String>();
+        mode.trim();
+        mode.toLowerCase();
+        if (mode == "on" || mode == "force_on" || mode == "high" || mode == "1") {
+            return EMU_CONFIRM_FORCE_ON;
+        }
+        if (mode == "off" || mode == "force_off" || mode == "low" || mode == "0") {
+            return EMU_CONFIRM_FORCE_OFF;
+        }
+        return EMU_CONFIRM_AUTO;
+    }
+
     void _applyOutputLogicMode(int outIdx, uint8_t logic) {
         if (!_om || !_sm) return;
         if (!SensorManager::isMainOutputIndex((uint8_t)outIdx)) return;
@@ -1521,12 +1577,12 @@ private:
 
     bool _parseJson(AsyncWebServerRequest* req, uint8_t* data, size_t len, DynamicJsonDocument& doc) {
         if (len == 0) {
-            _sendError(req, 400, "invalid_json", "empty body");
+            _sendError(req, 400, "invalid_json", "Пустое тело запроса");
             return false;
         }
         DeserializationError err = deserializeJson(doc, data, len);
         if (err) {
-            _sendError(req, 400, "invalid_json", "invalid json");
+            _sendError(req, 400, "invalid_json", "Некорректный JSON");
             return false;
         }
         return true;

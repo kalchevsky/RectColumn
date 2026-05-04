@@ -9,7 +9,7 @@ from api_testlib import LiveEmuApiTestCase, output_map, safe_emu_payload, sensor
 class EmuManualLogicTests(LiveEmuApiTestCase):
     def test_manual_on_allowed_when_stop_and_forbids_are_clear(self):
         self.isolate_ch1_t1_rule()
-        self.api.post_json("/api/v1/emu/set", safe_emu_payload(T1=75.0, WER_CH1=False))
+        self.api.post_json("/api/v1/emu/set", safe_emu_payload(T1=75.0))
 
         response = self.api.post_json("/api/v1/output/CH1/manual", {"state": True}, ok_statuses=(200,))
         self.assertTrue(response["accepted"])
@@ -32,7 +32,8 @@ class EmuManualLogicTests(LiveEmuApiTestCase):
         self.assertEqual(status, 409)
         self.assertFalse(response["accepted"])
         self.assertEqual(response["detail"], "forbidden")
-        self.assertEqual(response["userMessage"], "Включение запрещено текущими условиями автоматики.")
+        self.assertIn("запрещено текущими условиями автоматики", response["userMessage"])
+        self.assertIn("T1", response["userMessage"])
 
     def test_manual_on_blocked_when_control_sensor_is_in_error(self):
         self.isolate_ch1_t1_rule()
@@ -63,7 +64,7 @@ class EmuManualLogicTests(LiveEmuApiTestCase):
             ok_statuses=(409,),
         )
         self.assertEqual(response["detail"], "stop_active")
-        self.assertEqual(response["userMessage"], "Активен STOP. Сначала нажмите Отменить стоп.")
+        self.assertIn("активен STOP", response["userMessage"])
 
 
 if __name__ == "__main__":

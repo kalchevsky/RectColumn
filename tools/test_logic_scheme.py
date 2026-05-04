@@ -461,7 +461,8 @@ class SourceGuardTests(unittest.TestCase):
 
     def test_gpio35_availability_disables_wer_ch2_when_v_sensor_enabled(self):
         # WER array index: 0=CH1, 1=CH2, 2=CH3, 3=CH4.
-        self.assertRegex(self.confirm_h, r"idx\s*==\s*1[^\n]+GPIO35_MODE[^\n]+V_SENSOR")
+        self.assertRegex(self.confirm_h, r"idx\s*==\s*1[^\n]+GPIO35_MODE\s*!=\s*GPIO35_MODE_WER_CH2")
+        self.assertIn("PIN_V == PIN_WER_CH2", self.config_h)
 
     def test_alarm_error_branch_is_before_nan_branch(self):
         primary = self.sensors_h.find("primaryErrorAlarmIdx")

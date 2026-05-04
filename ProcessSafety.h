@@ -53,7 +53,7 @@ public:
         }
         for (uint8_t i = 0; i < 4; i++) _werFaultLatched[i] = false;
         if (_cm) _cm->resetFaults();
-        if (_log && _sm) _alarm("Safety faults reset by operator");
+        if (_log && _sm) _alarm("Оператор сбросил защёлкнутые аварии safety-слоя");
     }
 
 private:
@@ -89,7 +89,7 @@ private:
             _om->setSafetyForbid(oi, RULEIDX_SAFETY_FLOW, true);
         }
         _om->setMainStopLatched(true);
-        _alarm(why);
+        _alarm(why + ". STOP защёлкнут, ручное включение CH1-CH3 заблокировано до снятия STOP.");
     }
 
     void _handleLevelEmergency(uint32_t now) {
@@ -257,7 +257,9 @@ private:
                 _werFaultLatched[i] = true;
                 _om->setSafetyForbid(c.outputIdx, RULEIDX_SAFETY_WER, true);
                 _om->out[c.outputIdx]->forceOff(true);
-                _alarm(String(c.id) + " fault latched: " + ConfirmationManager::faultName(c.fault));
+                _alarm(String(c.id) + ": защёлкнута авария подтверждения - " +
+                       ConfirmationManager::faultNameRu(c.fault) +
+                       ". Канал заблокирован до сброса аварии.");
             }
         }
     }

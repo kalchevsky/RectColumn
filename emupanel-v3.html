@@ -572,10 +572,10 @@ const DEFAULT_EMU_PRESET = {
   T1err: false,
   T2err: false,
   T3err: false,
-  WER_CH1: false,
-  WER_CH2: false,
-  WER_CH3: false,
-  WER_CH4: false
+  WER_CH1_mode: 'auto',
+  WER_CH2_mode: 'auto',
+  WER_CH3_mode: 'auto',
+  WER_CH4_mode: 'auto'
 };
 const state = {
   connected: false,
@@ -675,13 +675,19 @@ function renderWerToggles(saved) {
   const host = $('werGrid');
   host.innerHTML = DEFAULT_CONFIRM_IDS.map(id => `
     <div class="toggle-line">
-      <div class="toggle-label"><strong>${id}</strong><span>эмуляция confirmation</span></div>
-      <label class="switch"><input type="checkbox" id="emu_${id}"><span class="track"></span><span class="thumb"></span></label>
+      <div class="toggle-label"><strong>${id}</strong><span>режим эмуляции подтверждения</span></div>
+      <select id="emu_${id}_mode">
+        <option value="auto">авто</option>
+        <option value="force_on">принудительно ON</option>
+        <option value="force_off">принудительно OFF</option>
+      </select>
     </div>
   `).join('');
   DEFAULT_CONFIRM_IDS.forEach(id => {
-    $('emu_' + id).checked = !!saved[id];
-    $('emu_' + id).addEventListener('change', saveSettings);
+    const legacyBool = (typeof saved[id] === 'boolean') ? saved[id] : null;
+    const mode = saved[id + '_mode'] || (legacyBool === true ? 'force_on' : 'auto');
+    $('emu_' + id + '_mode').value = mode;
+    $('emu_' + id + '_mode').addEventListener('change', saveSettings);
   });
 }
 function fillSelects(sensorIds = DEFAULT_SENSOR_IDS, outputIds = DEFAULT_OUTPUT_IDS) {
@@ -781,7 +787,7 @@ function collectEmuPayload() {
   payload.T1err = $('emu_T1err').checked;
   payload.T2err = $('emu_T2err').checked;
   payload.T3err = $('emu_T3err').checked;
-  DEFAULT_CONFIRM_IDS.forEach(id => payload[id] = $('emu_' + id).checked);
+  DEFAULT_CONFIRM_IDS.forEach(id => payload[id + '_mode'] = $('emu_' + id + '_mode').value);
   return payload;
 }
 function applyEmuDefaults() {
@@ -1015,14 +1021,14 @@ function renderOutputs() {
   const outputs = state.deviceState?.outputs || [];
   tbody.innerHTML = outputs.map(output => {
     const forbidReasons = Array.isArray(output.forbidReasons) && output.forbidReasons.length
-      ? output.forbidReasons.join(', ')
+      ? (output.forbidReasonText || output.forbidReasons.join(', '))
       : '—';
     const confirmText = output.confirmAvailable === false
       ? (output.confirmNote || 'n/a')
       : `conf=${String(output.confirmed)} actual=${String(output.confirmActual)} exp=${String(output.confirmExpected)}${output.timeout ? ' timeout' : ''}${output.mismatch ? ' mismatch' : ''}`;
     const relayText = [
       output.relayPending ? `pending=${output.pendingCmd || 'yes'}` : '',
-      output.relayError ? `error=${output.relayError}` : '',
+      output.relayErrorText || (output.relayError ? `error=${output.relayError}` : ''),
       output.stopLatched ? 'STOP' : '',
       output.operatorHoldOff ? 'holdOff' : ''
     ].filter(Boolean).join(' · ') || '—';
@@ -1059,8 +1065,8 @@ function renderConfirmations() {
       <td>${boolBadge(c.pending)}</td>
       <td>${boolBadge(c.mismatch)}</td>
       <td>${boolBadge(c.timeout)}</td>
-      <td>${c.faultLatched ? `<span class="badge err">${textToHtml(c.fault || 'fault')}</span>` : '<span class="badge ok">none</span>'}</td>
-      <td>${textToHtml(c.note || '—')}</td>
+      <td>${c.faultLatched ? `<span class="badge err">${textToHtml(c.faultText || c.fault || 'fault')}</span>` : '<span class="badge ok">none</span>'}</td>
+      <td>${textToHtml([c.emuModeText, c.note].filter(Boolean).join(' · ') || '—')}</td>
     </tr>`).join('');
 }
 function renderLog() {

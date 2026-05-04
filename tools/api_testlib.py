@@ -105,10 +105,10 @@ def safe_emu_payload(**overrides: Any) -> dict[str, Any]:
         "T1err": False,
         "T2err": False,
         "T3err": False,
-        "WER_CH1": False,
-        "WER_CH2": False,
-        "WER_CH3": False,
-        "WER_CH4": False,
+        "WER_CH1_mode": "auto",
+        "WER_CH2_mode": "auto",
+        "WER_CH3_mode": "auto",
+        "WER_CH4_mode": "auto",
     }
     payload.update(overrides)
     return payload

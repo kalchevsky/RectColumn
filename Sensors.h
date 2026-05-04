@@ -210,9 +210,9 @@ public:
 
     virtual const char* diagText() const {
         switch (diagCode) {
-            case SENSOR_DIAG_ADC2_WIFI_CONFLICT:        return "ADC2 unavailable while WiFi is active";
-            case SENSOR_DIAG_GPIO35_RESERVED_FOR_WER_CH2:return "GPIO35 reserved for WER_CH2 in this build";
-            case SENSOR_DIAG_TEMP_RECOVERY_HOLD:         return "Temperature sensor recovered; error indication hold is active";
+            case SENSOR_DIAG_ADC2_WIFI_CONFLICT:         return "ADC2 недоступен при активном WiFi";
+            case SENSOR_DIAG_GPIO35_RESERVED_FOR_WER_CH2:return "GPIO35 зарезервирован под WER_CH2 в этой сборке";
+            case SENSOR_DIAG_TEMP_RECOVERY_HOLD:         return "Датчик температуры восстановился, удерживается индикация ошибки";
             default:                                     return "";
         }
     }

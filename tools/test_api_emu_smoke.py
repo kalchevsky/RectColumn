@@ -25,7 +25,7 @@ class EmuSmokeTests(LiveEmuApiTestCase):
         self.assertIn("confirmations", state)
 
     def test_emu_set_round_trips_sensor_values_and_confirmation_inputs(self):
-        payload = safe_emu_payload(T1=64.5, T2=42.0, P=1100.0, L=True, F=False, WER_CH2=True)
+        payload = safe_emu_payload(T1=64.5, T2=42.0, P=1100.0, L=True, F=False, WER_CH2_mode="force_on")
         res = self.api.post_json("/api/v1/emu/set", payload)
         self.assertTrue(res["ok"])
 

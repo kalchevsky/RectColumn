@@ -16,11 +16,11 @@ class EmuPanelStaticContractTests(unittest.TestCase):
         self.assertIn("/api/v1/safety/reset", self.html)
 
     def test_panel_reads_current_output_fields(self):
-        for token in ("effectiveForbidMask", "forbidReasons", "relayError", "confirmExpected"):
+        for token in ("effectiveForbidMask", "forbidReasons", "forbidReasonText", "relayError", "relayErrorText", "confirmExpected"):
             self.assertIn(token, self.html)
 
     def test_panel_reads_current_confirmation_fault_fields(self):
-        for token in ("faultLatched", "fault", "WER_CH4"):
+        for token in ("faultLatched", "fault", "emuModeText", "WER_CH4_mode"):
             self.assertIn(token, self.html)
 
 
@@ -33,9 +33,9 @@ class EmuPanelLiveContractTests(LiveEmuApiTestCase):
         output = state["outputs"][0]
         confirmation = state["confirmations"][0]
 
-        for key in ("effectiveForbidMask", "forbidReasons", "confirmExpected", "relayPending"):
+        for key in ("effectiveForbidMask", "forbidReasons", "forbidReasonText", "confirmExpected", "relayPending"):
             self.assertIn(key, output)
-        for key in ("faultLatched", "fault", "timeoutMs", "debounceMs"):
+        for key in ("faultLatched", "fault", "faultText", "timeoutMs", "debounceMs", "emuMode", "emuModeText"):
             self.assertIn(key, confirmation)
 
 

@@ -45,18 +45,18 @@ bool wifiLedBlinkState = false;
 
 static const char* resetReasonText(esp_reset_reason_t reason) {
     switch (reason) {
-        case ESP_RST_UNKNOWN:   return "UNKNOWN";
-        case ESP_RST_POWERON:   return "POWERON";
-        case ESP_RST_EXT:       return "EXT";
-        case ESP_RST_SW:        return "SW";
-        case ESP_RST_PANIC:     return "PANIC";
-        case ESP_RST_INT_WDT:   return "INT_WDT";
-        case ESP_RST_TASK_WDT:  return "TASK_WDT";
-        case ESP_RST_WDT:       return "WDT";
-        case ESP_RST_DEEPSLEEP: return "DEEPSLEEP";
-        case ESP_RST_BROWNOUT:  return "BROWNOUT";
-        case ESP_RST_SDIO:      return "SDIO";
-        default:                return "OTHER";
+        case ESP_RST_UNKNOWN:   return "неизвестно (UNKNOWN)";
+        case ESP_RST_POWERON:   return "включение питания (POWERON)";
+        case ESP_RST_EXT:       return "внешний сброс (EXT)";
+        case ESP_RST_SW:        return "программный сброс (SW)";
+        case ESP_RST_PANIC:     return "паника ядра (PANIC)";
+        case ESP_RST_INT_WDT:   return "сброс по внутреннему watchdog (INT_WDT)";
+        case ESP_RST_TASK_WDT:  return "сброс по task watchdog (TASK_WDT)";
+        case ESP_RST_WDT:       return "сброс по watchdog (WDT)";
+        case ESP_RST_DEEPSLEEP: return "выход из deep sleep (DEEPSLEEP)";
+        case ESP_RST_BROWNOUT:  return "просадка питания (BROWNOUT)";
+        case ESP_RST_SDIO:      return "сброс SDIO";
+        default:                return "прочая причина (OTHER)";
     }
 }
 
@@ -92,26 +92,26 @@ static void logSensorTransitions() {
 
         if (s->present != prevSenPresent[i]) {
             prevSenPresent[i] = s->present;
-            eventLog.add(s->name + (s->present ? " connected" : " disconnected"),
+            eventLog.add(s->name + (s->present ? " подключён" : " отключён"),
                          sensorMgr.getT1(), sensorMgr.getT2(), sensorMgr.getT3(), sensorMgr.getDT());
         }
 
         if (s->error != prevSenError[i]) {
             prevSenError[i] = s->error;
-            eventLog.add(s->name + String(s->error ? " ERROR" : " ERROR cleared"),
+            eventLog.add(s->name + String(s->error ? " ошибка" : " ошибка снята"),
                          sensorMgr.getT1(), sensorMgr.getT2(), sensorMgr.getT3(), sensorMgr.getDT());
         }
 
         const uint8_t curMask = s->alarmMask();
         if (curMask != prevAlarmMask[i]) {
             if (prevAlarmMask[i] == 0 && curMask != 0) {
-                eventLog.add(s->name + " alarm FIRED",
+                eventLog.add(s->name + " тревога сработала",
                              sensorMgr.getT1(), sensorMgr.getT2(), sensorMgr.getT3(), sensorMgr.getDT());
             } else if (prevAlarmMask[i] != 0 && curMask == 0) {
-                eventLog.add(s->name + " alarm cleared",
+                eventLog.add(s->name + " тревога снята",
                              sensorMgr.getT1(), sensorMgr.getT2(), sensorMgr.getT3(), sensorMgr.getDT());
             } else {
-                eventLog.add(s->name + " alarm changed",
+                eventLog.add(s->name + " состояние тревог изменилось",
                              sensorMgr.getT1(), sensorMgr.getT2(), sensorMgr.getT3(), sensorMgr.getDT());
             }
             prevAlarmMask[i] = curMask;
@@ -125,7 +125,7 @@ static void logOutputTransitions() {
         if (cur != prevOutState[i]) {
             prevOutState[i] = cur;
             if (i == OUT_CH4 || i == OUT_CH5) continue; // звуковое оформление не засоряет лог
-            eventLog.add(String(outputMgr.out[i]->name) + (cur ? " ON" : " OFF"),
+            eventLog.add(String(outputMgr.out[i]->name) + (cur ? " включён" : " выключен"),
                          sensorMgr.getT1(), sensorMgr.getT2(), sensorMgr.getT3(), sensorMgr.getDT());
         }
     }
@@ -208,7 +208,7 @@ void setup() {
     }
 
     outputMgr.begin();
-    confirmMgr.begin();
+    confirmMgr.begin(outputMgr);
     emulator.begin();
     initWiFiLed();
 

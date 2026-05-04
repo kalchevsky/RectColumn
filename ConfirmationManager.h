@@ -16,6 +16,12 @@ enum ConfirmationFault : uint8_t {
     CONFIRM_FAULT_STUCK_HIGH_BEFORE_ON,
 };
 
+enum EmuConfirmMode : uint8_t {
+    EMU_CONFIRM_AUTO = 0,
+    EMU_CONFIRM_FORCE_OFF,
+    EMU_CONFIRM_FORCE_ON,
+};
+
 struct ConfirmationChannel {
     const char* id       = "";
     const char* outputId = "";
@@ -56,7 +62,7 @@ public:
     #endif
     }
 
-    void begin() {
+    void begin(const OutputManager& om) {
         for (uint8_t i = 0; i < 4; i++) {
             ConfirmationChannel& c = _ch[i];
             c.available = _isAvailable(i);
@@ -68,7 +74,7 @@ public:
             }
 
             bool start = false;
-            if (c.available) start = _readPhysical(i);
+            if (c.available) start = _readPhysical(i, om);
 
             c.raw = start;
             c.actual = start;
@@ -109,7 +115,7 @@ public:
                 continue;
             }
 
-            const bool sample = _readPhysical(i);
+            const bool sample = _readPhysical(i, om);
 
             if (!c.rawInitialized) {
                 c.raw = sample;
@@ -182,7 +188,8 @@ public:
                 }
             } else if (prevMismatch && !c.mismatch && log) {
                 if (prevTimeout) {
-                    log->add(String(c.id) + " restored after timeout", sm.getT1(), sm.getT2(), sm.getT3(), sm.getDT());
+                    log->add(String(c.id) + ": подтверждение восстановилось после таймаута",
+                             sm.getT1(), sm.getT2(), sm.getT3(), sm.getDT());
                 }
             }
         }
@@ -192,9 +199,26 @@ public:
 
     void setEmuActive(uint8_t idx, bool active) {
     #if EMU_MODE
-        if (idx < 4) _emuActive[idx] = active;
+        if (idx < 4) _emuMode[idx] = active ? EMU_CONFIRM_FORCE_ON : EMU_CONFIRM_FORCE_OFF;
     #else
         (void)idx; (void)active;
+    #endif
+    }
+
+    void setEmuMode(uint8_t idx, uint8_t mode) {
+    #if EMU_MODE
+        if (idx < 4 && mode <= EMU_CONFIRM_FORCE_ON) _emuMode[idx] = mode;
+    #else
+        (void)idx; (void)mode;
+    #endif
+    }
+
+    uint8_t emuMode(uint8_t idx) const {
+    #if EMU_MODE
+        return (idx < 4) ? _emuMode[idx] : EMU_CONFIRM_AUTO;
+    #else
+        (void)idx;
+        return EMU_CONFIRM_AUTO;
     #endif
     }
 
@@ -230,9 +254,39 @@ public:
         }
     }
 
+    static const char* faultNameRu(uint8_t fault) {
+        switch (fault) {
+            case CONFIRM_FAULT_NO_ON_CONFIRM:         return "нет подтверждения включения";
+            case CONFIRM_FAULT_STUCK_ON:              return "подтверждение осталось включённым";
+            case CONFIRM_FAULT_STUCK_HIGH_BEFORE_ON:  return "подтверждение было HIGH до команды ON";
+            default:                                  return "";
+        }
+    }
+
+    static const char* emuModeName(uint8_t mode) {
+        switch (mode) {
+            case EMU_CONFIRM_FORCE_OFF: return "force_off";
+            case EMU_CONFIRM_FORCE_ON:  return "force_on";
+            default:                    return "auto";
+        }
+    }
+
+    static const char* emuModeNameRu(uint8_t mode) {
+        switch (mode) {
+            case EMU_CONFIRM_FORCE_OFF: return "принудительно OFF";
+            case EMU_CONFIRM_FORCE_ON:  return "принудительно ON";
+            default:                    return "авто";
+        }
+    }
+
 private:
     ConfirmationChannel _ch[4];
-    bool _emuActive[4] = {false, false, false, false};
+    uint8_t _emuMode[4] = {
+        EMU_CONFIRM_AUTO,
+        EMU_CONFIRM_AUTO,
+        EMU_CONFIRM_AUTO,
+        EMU_CONFIRM_AUTO
+    };
 
     bool _supportsInternalPulldown(int8_t pin) const {
         return pin == PIN_WER_CH1;
@@ -250,20 +304,28 @@ private:
     const char* _noteFor(uint8_t idx) const {
     #if EMU_MODE
         if (idx == 1 && GPIO35_MODE != GPIO35_MODE_WER_CH2) {
-            return "EMU override; real hardware disables WER_CH2 in GPIO35_MODE_V_SENSOR";
+            return "Эмуляция активна; в реальном режиме WER_CH2 недоступен при GPIO35_MODE_V_SENSOR";
         }
         return "";
     #else
         if (idx == 1 && GPIO35_MODE != GPIO35_MODE_WER_CH2) {
-            return "Unavailable: GPIO35 reserved for V sensor in this build";
+            return "Недоступно: GPIO35 выделен под датчик V в этой сборке";
         }
         return "";
     #endif
     }
 
-    bool _readPhysical(uint8_t idx) const {
+    bool _readPhysical(uint8_t idx, const OutputManager& om) const {
     #if EMU_MODE
-        return _emuActive[idx];
+        switch (_emuMode[idx]) {
+            case EMU_CONFIRM_FORCE_OFF: return false;
+            case EMU_CONFIRM_FORCE_ON:  return true;
+            default:
+                if (_ch[idx].outputIdx < OUT_COUNT && om.out[_ch[idx].outputIdx]) {
+                    return om.out[_ch[idx].outputIdx]->actualOn();
+                }
+                return false;
+        }
     #else
         int raw = digitalRead(_ch[idx].pin);
         if (WER_ACTIVE_LOW) return raw == LOW;
@@ -273,24 +335,24 @@ private:
 
     String _mismatchMessage(const ConfirmationChannel& c) const {
         if (c.expected && !c.actual && c.timeout) {
-            return String(c.id) + " timeout: output ON but confirmation missing";
+            return String(c.id) + ": таймаут подтверждения, выход включён, но сигнал подтверждения не пришёл";
         }
         if (!c.expected && c.actual) {
-            return String(c.id) + " mismatch: confirmation active while output OFF";
+            return String(c.id) + ": рассогласование, подтверждение активно при выключенном выходе";
         }
-        return String(c.id) + " mismatch";
+        return String(c.id) + ": рассогласование подтверждения";
     }
 
     String _faultMessage(const ConfirmationChannel& c) const {
         switch (c.fault) {
             case CONFIRM_FAULT_NO_ON_CONFIRM:
-                return String(c.id) + " fault: output ON but confirmation missing";
+                return String(c.id) + ": авария подтверждения, выход включён, но WER-сигнал не пришёл";
             case CONFIRM_FAULT_STUCK_ON:
-                return String(c.id) + " fault: confirmation stays ON while output OFF";
+                return String(c.id) + ": авария подтверждения, WER-сигнал остаётся включённым при выключенном выходе";
             case CONFIRM_FAULT_STUCK_HIGH_BEFORE_ON:
-                return String(c.id) + " fault: confirmation was HIGH before ON command";
+                return String(c.id) + ": авария подтверждения, WER-сигнал был HIGH ещё до команды включения";
             default:
-                return String(c.id) + " fault";
+                return String(c.id) + ": авария подтверждения";
         }
     }
 };

@@ -3,6 +3,7 @@
 // ================================================================
 #pragma once
 #include <math.h>
+#include <string.h>
 #include "Output.h"
 #include "SensorManager.h"
 #include "EventLog.h"
@@ -42,6 +43,7 @@ public:
             _safetyForbid[i] = 0;
             _lastCmdError[i] = RELAY_CMDERR_NONE;
             _lastCmdErrorMs[i] = 0;
+            _lastCmdDetail[i] = "";
             _cmdPrevManual[i] = false;
             _cmdPrevHoldOff[i] = false;
         }
@@ -149,7 +151,7 @@ public:
         RelayCommandResult result;
         if (outIdx >= OUT_COUNT || !out[outIdx] || cmd == CMD_NONE) {
             result.reason = "invalid_command";
-            result.detail = "invalid relay command";
+            result.detail = "invalid_command";
             return result;
         }
 
@@ -165,6 +167,7 @@ public:
         out[outIdx]->beginCommand(cmd);
         _lastCmdError[outIdx] = RELAY_CMDERR_NONE;
         _lastCmdErrorMs[outIdx] = 0;
+        _lastCmdDetail[outIdx] = "";
 
         const char* blockReason = nullptr;
         if (!_relayCommandAllowed(outIdx, targetOn, blockReason)) {
@@ -173,12 +176,13 @@ public:
             _lastCmdErrorMs[outIdx] = millis();
             result.reason = "blocked";
             result.detail = blockReason ? blockReason : "blocked";
-            if (log) _logRelayCommand(log, sm, outIdx, cmd, " blocked");
+            _lastCmdDetail[outIdx] = result.detail;
+            if (log) _logRelayCommand(log, sm, outIdx, cmd, false, result.detail);
             return result;
         }
 
         _applyRelayCommand(outIdx, targetOn);
-        if (log) _logRelayCommand(log, sm, outIdx, cmd, "");
+        if (log) _logRelayCommand(log, sm, outIdx, cmd, true, "");
         result.accepted = true;
         return result;
     }
@@ -203,9 +207,14 @@ public:
             const bool actualFeedback = feedbackAvailable[oi] ? feedbackOn[oi] : out[oi]->actualOn();
 
             if (actualFeedback == targetOn) {
+                if (_isMainOutput(oi) && out[oi]->manualWant()) {
+                    out[oi]->restoreManualWant(false);
+                    _manualStateDirty = true;
+                }
                 out[oi]->clearCommand();
                 _lastCmdError[oi] = RELAY_CMDERR_NONE;
                 _lastCmdErrorMs[oi] = 0;
+                _lastCmdDetail[oi] = "";
                 continue;
             }
 
@@ -223,7 +232,8 @@ public:
                 out[oi]->clearCommand();
                 _lastCmdError[oi] = RELAY_CMDERR_TIMEOUT;
                 _lastCmdErrorMs[oi] = now;
-                if (log) _logRelayCommand(log, sm, oi, cmd, " RELAY_CONFIRM_TIMEOUT");
+                _lastCmdDetail[oi] = "timeout";
+                if (log) _logRelayCommand(log, sm, oi, cmd, false, "timeout");
             }
         }
     }
@@ -335,6 +345,74 @@ public:
 
     uint32_t effectiveForbidMask(uint8_t outIdx) const {
         return (outIdx < OUT_COUNT) ? _effectiveForbidMask(outIdx) : 0;
+    }
+
+    String relayBlockDetailText(uint8_t outIdx, const char* reason) const {
+        if (!reason || !reason[0]) return "";
+        if (strcmp(reason, "stop_active") == 0) {
+            return "активен STOP: ручное включение CH1-CH3 заблокировано";
+        }
+        if (strcmp(reason, "forbidden") == 0) {
+            const String reasons = formatForbidReasons(_effectiveForbidMask(outIdx));
+            if (reasons.length() > 0) {
+                return String("действуют запреты автоматики: ") + reasons;
+            }
+            return "действуют запреты автоматики";
+        }
+        if (strcmp(reason, "disabled") == 0) {
+            return "выход отключён в конфигурации";
+        }
+        if (strcmp(reason, "auto_on_active") == 0) {
+            return "автоматика требует удерживать канал включённым";
+        }
+        if (strcmp(reason, "busy") == 0) {
+            return "предыдущая команда ещё ожидает подтверждения";
+        }
+        if (strcmp(reason, "duplicate") == 0) {
+            return "такая же команда уже выполняется";
+        }
+        if (strcmp(reason, "invalid_output") == 0) {
+            return "указан недопустимый выход";
+        }
+        if (strcmp(reason, "blocked") == 0) {
+            return "команда заблокирована";
+        }
+        if (strcmp(reason, "timeout") == 0) {
+            return "таймаут подтверждения реле";
+        }
+        return String(reason);
+    }
+
+    String relayTimeoutDetailText(uint8_t outIdx) const {
+        if (outIdx >= OUT_COUNT || !out[outIdx]) return "таймаут подтверждения реле";
+        return String("таймаут подтверждения реле ") + out[outIdx]->name +
+               ": ожидается сигнал " + _confirmationId(outIdx);
+    }
+
+    String relayErrorText(uint8_t outIdx) const {
+        switch (relayCommandError(outIdx)) {
+            case RELAY_CMDERR_BLOCKED:
+                return relayBlockDetailText(outIdx, _lastCmdDetail[outIdx]);
+            case RELAY_CMDERR_TIMEOUT:
+                return relayTimeoutDetailText(outIdx);
+            default:
+                return "";
+        }
+    }
+
+    String formatForbidReasons(uint32_t mask) const {
+        String outText;
+        for (uint8_t si = 0; si < SEN_COUNT; si++) {
+            if (!(mask & (1u << si))) continue;
+            if (outText.length() > 0) outText += ", ";
+            outText += SensorManager::sensorName(si);
+        }
+        if (mask & (1u << RULEIDX_STOP)) _appendReason(outText, "STOP");
+        if (mask & (1u << RULEIDX_SAFETY_LEVEL)) _appendReason(outText, "авария уровня");
+        if (mask & (1u << RULEIDX_SAFETY_FLOW)) _appendReason(outText, "авария потока");
+        if (mask & (1u << RULEIDX_SAFETY_PRESSURE)) _appendReason(outText, "авария давления");
+        if (mask & (1u << RULEIDX_SAFETY_WER)) _appendReason(outText, "авария подтверждения WER");
+        return outText;
     }
 
     void acknowledgeCurrentAlarms(const SensorManager& sm) {
@@ -517,17 +595,41 @@ private:
     }
 
     void _logRelayCommand(EventLog* log, SensorManager* sm, uint8_t outIdx,
-                          RelayCommand cmd, const char* suffix)
+                          RelayCommand cmd, bool accepted, const char* detail)
     {
         if (!log) return;
         String msg = String("Команда реле: ") + out[outIdx]->name + " " +
-                     (cmd == CMD_ON ? "ON" : "OFF");
-        if (suffix && suffix[0]) msg += suffix;
+                     (cmd == CMD_ON ? "ВКЛ" : "ВЫКЛ");
+        if (accepted) {
+            msg += " принята";
+        } else if (detail && strcmp(detail, "timeout") == 0) {
+            msg += " не подтверждена: " + relayTimeoutDetailText(outIdx);
+        } else {
+            const String why = relayBlockDetailText(outIdx, detail);
+            msg += " отклонена";
+            if (why.length() > 0) msg += ": " + why;
+        }
         log->add(msg,
                  sm ? sm->getT1() : NAN,
                  sm ? sm->getT2() : NAN,
                  sm ? sm->getT3() : NAN,
                  sm ? sm->getDT() : NAN);
+    }
+
+    static void _appendReason(String& dst, const char* text) {
+        if (!text || !text[0]) return;
+        if (dst.length() > 0) dst += ", ";
+        dst += text;
+    }
+
+    static const char* _confirmationId(uint8_t outIdx) {
+        switch (outIdx) {
+            case OUT_CH1: return "WER_CH1";
+            case OUT_CH2: return "WER_CH2";
+            case OUT_CH3: return "WER_CH3";
+            case OUT_CH4: return "WER_CH4";
+            default:      return "WER";
+        }
     }
 
     void _pruneAcknowledged(const SensorManager& sm) {
@@ -552,4 +654,5 @@ private:
     bool     _cmdPrevHoldOff[OUT_COUNT] = {};
     uint8_t  _lastCmdError[OUT_COUNT] = {};
     uint32_t _lastCmdErrorMs[OUT_COUNT] = {};
+    const char* _lastCmdDetail[OUT_COUNT] = {};
 };
