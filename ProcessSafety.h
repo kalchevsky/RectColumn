@@ -83,15 +83,24 @@ private:
         _log->add(msg, _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
     }
 
-    void _stopProcess(const String& why) {
-        // Process safety is an explicit emergency layer above normal sensor
-        // control. Keep STOP latched and expose the FLOW safety reason as
-        // separate forbid bits for diagnostics.
+    void _applyFlowSafetyInterlock(const String& why) {
+        // Flow safety remains an interlock even when sensor-driven STOP is
+        // disabled. STOP itself is now optional and controlled from config.
         for (uint8_t oi = OUT_CH1; oi <= OUT_CH3; oi++) {
             _om->setSafetyForbid(oi, RULEIDX_SAFETY_FLOW, true);
         }
+        if (SAFETY_MODE_SENSOR_STOP) {
+            _om->setMainStopLatched(true);
+            _alarm(why + ". STOP защёлкнут safety-режимом, ручное включение CH1-CH3 заблокировано до снятия STOP.");
+        } else {
+            _alarm(why + ". Каналы CH1-CH3 заблокированы safety-слоем до исчезновения причины аварии.");
+        }
+    }
+
+    void _applySensorStopIfEnabled(const String& why) {
+        if (!SAFETY_MODE_SENSOR_STOP) return;
         _om->setMainStopLatched(true);
-        _alarm(why + ". STOP защёлкнут, ручное включение CH1-CH3 заблокировано до снятия STOP.");
+        _alarm(why + ". STOP защёлкнут safety-режимом, ручное включение CH1-CH3 заблокировано до снятия STOP.");
     }
 
     void _handleLevelEmergency(uint32_t now) {
@@ -118,6 +127,7 @@ private:
             if (!_levelAlarmLatched && (now - _levelStartedMs >= alarmDelayMs)) {
                 _levelAlarmLatched = true;
                 _alarm("Авария уровня: цепь L разомкнута");
+                _applySensorStopIfEnabled("Подтверждена авария уровня L");
             }
 
             if ((now - _levelStartedMs >= alarmDelayMs) && ls->alarm[0].enabled) {
@@ -216,7 +226,7 @@ private:
             if (alarmActive && valveDemandActive && !_flowEmergencyLatched &&
                 _flowDemandLatched && (now - _flowDemandStartedMs >= ctrlDelayMs)) {
                 _flowEmergencyLatched = true;
-                _stopProcess("Поток отсутствует при активном CH2 дольше допустимой задержки: останов процесса");
+                _applyFlowSafetyInterlock("Поток отсутствует дольше допустимой задержки safety-слоя");
             }
             return;
         }

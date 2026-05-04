@@ -478,6 +478,11 @@ class SourceGuardTests(unittest.TestCase):
         self.assertIn("valveDemandActive", self.process_h)
         self.assertRegex(self.process_h, r"now\s*-\s*_flowDemandStartedMs\s*>=\s*ctrlDelayMs")
 
+    def test_sensor_stop_mode_is_configurable(self):
+        self.assertRegex(self.config_h, r"#define\s+SAFETY_MODE_SENSOR_STOP\s+(false|true|0|1)")
+        self.assertIn("_applySensorStopIfEnabled", self.process_h)
+        self.assertIn("if (!SAFETY_MODE_SENSOR_STOP) return;", self.process_h)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

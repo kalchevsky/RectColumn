@@ -16,7 +16,7 @@
 #define SERIAL_DEBUG_SENSOR_SNAPSHOT  0
 
 // ─── Версия прошивки / API ───────────────────────────────────────
-#define FW_VERSION      "1.6.20"
+#define FW_VERSION      "1.6.22"
 #define API_VERSION     "v1"
 #define AP_SSID_DEF     "Control_System"
 #define DEVICE_NAME     "RectColumn"
@@ -126,6 +126,12 @@ static_assert(PIN_V != PIN_WER_CH4, "PIN_V conflicts with WER_CH4");
 #define SAFETY_FLOW_LOSS_MS        5000UL
 #define SAFETY_PRESSURE_OFF_MS     0UL
 #define DIGITAL_ALARM_DEBOUNCE_MS  500UL
+
+// ─── Режим сенсорного STOP ──────────────────────────────────────
+// false -> STOP используется только оператором вручную.
+// true  -> safety-mode: подтверждённая авария уровня L и потеря потока F
+//          дополнительно защёлкивают STOP.
+#define SAFETY_MODE_SENSOR_STOP    false
 
 // ─── Валидация пользовательских параметров ──────────────────────
 #define SENSOR_PERIOD_MIN_MS       100UL
