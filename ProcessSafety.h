@@ -73,6 +73,8 @@ private:
     bool _flowAlarmLatched = false;
     bool _flowEmergencyLatched = false;
     uint32_t _flowStartedMs = 0;
+    bool _flowDemandLatched = false;
+    uint32_t _flowDemandStartedMs = 0;
 
     bool _pressureEmergencyLatched = false;
     bool _werFaultLatched[4] = { false, false, false, false };
@@ -171,6 +173,7 @@ private:
         const ConfirmationChannel& ch2 = _cm->get(1);
         const bool valveConfirmed = ch2.available ? ch2.actual : _om->out[OUT_CH2]->actualOn();
         const bool valveRequested = _om->out[OUT_CH2]->requestedOn() || _om->out[OUT_CH2]->actualOn();
+        const bool valveDemandActive = (valveConfirmed || valveRequested);
         const bool flowFault = fs->enabled && !_sm->flowActive();
         const uint32_t alarmDelayMs = fs->alarmDelayMs;
         const uint32_t ctrlDelayMs = SAFETY_FLOW_LOSS_MS;
@@ -182,6 +185,8 @@ private:
                 _flowStartedMs = now;
                 _flowAlarmLatched = false;
                 _flowEmergencyLatched = false;
+                _flowDemandLatched = false;
+                _flowDemandStartedMs = 0;
             }
 
             alarmActive = (now - _flowStartedMs >= alarmDelayMs);
@@ -198,10 +203,20 @@ private:
                 _alarm("Авария потока: цепь F разомкнута / нет потока");
             }
 
-            if (alarmActive && (valveConfirmed || valveRequested) &&
-                !_flowEmergencyLatched && (now - _flowStartedMs >= ctrlDelayMs)) {
+            if (valveDemandActive) {
+                if (!_flowDemandLatched) {
+                    _flowDemandLatched = true;
+                    _flowDemandStartedMs = now;
+                }
+            } else {
+                _flowDemandLatched = false;
+                _flowDemandStartedMs = 0;
+            }
+
+            if (alarmActive && valveDemandActive && !_flowEmergencyLatched &&
+                _flowDemandLatched && (now - _flowDemandStartedMs >= ctrlDelayMs)) {
                 _flowEmergencyLatched = true;
-                _stopProcess("Поток потерян при запросе CH2: останов процесса");
+                _stopProcess("Поток отсутствует при активном CH2 дольше допустимой задержки: останов процесса");
             }
             return;
         }
@@ -217,6 +232,8 @@ private:
         _flowAlarmLatched = false;
         _flowEmergencyLatched = false;
         _flowStartedMs = 0;
+        _flowDemandLatched = false;
+        _flowDemandStartedMs = 0;
     }
 
     void _handlePressureHigh() {

@@ -442,6 +442,7 @@ class SourceGuardTests(unittest.TestCase):
         cls.config_h = (cls.root / "config.h").read_text(encoding="utf-8", errors="ignore")
         cls.sensors_h = (cls.root / "Sensors.h").read_text(encoding="utf-8", errors="ignore")
         cls.confirm_h = (cls.root / "ConfirmationManager.h").read_text(encoding="utf-8", errors="ignore")
+        cls.process_h = (cls.root / "ProcessSafety.h").read_text(encoding="utf-8", errors="ignore")
 
     def define_int(self, name: str) -> int:
         m = re.search(rf"^\s*#define\s+{name}\s+(-?\d+)\b", self.config_h, re.MULTILINE)
@@ -471,6 +472,11 @@ class SourceGuardTests(unittest.TestCase):
         self.assertGreater(nan_branch, -1)
         self.assertLess(primary, nan_branch,
                         "sensor error alarm must be handled before generic NAN clearing")
+
+    def test_flow_emergency_timer_starts_from_ch2_demand(self):
+        self.assertIn("_flowDemandStartedMs", self.process_h)
+        self.assertIn("valveDemandActive", self.process_h)
+        self.assertRegex(self.process_h, r"now\s*-\s*_flowDemandStartedMs\s*>=\s*ctrlDelayMs")
 
 
 if __name__ == "__main__":
