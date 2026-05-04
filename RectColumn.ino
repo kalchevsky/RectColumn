@@ -1,0 +1,274 @@
+// ================================================================
+// RectColumn.ino – Контроллер ESP32 для колонны
+// ================================================================
+
+#include <Arduino.h>
+#include <esp_system.h>
+#include "config.h"
+#include "TimeBase.h"
+#include "EventLog.h"
+#include "Sensors.h"
+#include "SensorManager.h"
+#include "Output.h"
+#include "OutputManager.h"
+#include "ConfirmationManager.h"
+#include "Storage.h"
+#include "WiFiMgr.h"
+#include "WebAPI.h"
+#include "Emulator.h"
+#include "SerialDebugReporter.h"
+#include "ProcessSafety.h"
+#include "RemoteNotifier.h"
+
+// ── Глобальные объекты ───────────────────────────────────────────
+TimeBase            timeBase;
+EventLog            eventLog;
+SensorManager       sensorMgr;
+OutputManager       outputMgr;
+ConfirmationManager confirmMgr;
+Storage             storage;
+WiFiMgr             wifiMgr;
+WebAPI              webAPI(80);
+Emulator            emulator;
+SerialDebugReporter debugReporter;
+ProcessSafety       processSafety;
+RemoteNotifier      remoteNotifier;
+
+// ── Отслеживание состояния для журнала событий ──────────────────
+bool    prevOutState[OUT_COUNT]    = {};
+bool    prevSenError[SEN_COUNT]    = {};
+bool    prevSenPresent[SEN_COUNT]  = {};
+uint8_t prevAlarmMask[SEN_COUNT]   = {};
+uint32_t lastHeartbeatMs = 0;
+uint32_t lastWifiLedBlinkMs = 0;
+bool wifiLedBlinkState = false;
+
+static const char* resetReasonText(esp_reset_reason_t reason) {
+    switch (reason) {
+        case ESP_RST_UNKNOWN:   return "UNKNOWN";
+        case ESP_RST_POWERON:   return "POWERON";
+        case ESP_RST_EXT:       return "EXT";
+        case ESP_RST_SW:        return "SW";
+        case ESP_RST_PANIC:     return "PANIC";
+        case ESP_RST_INT_WDT:   return "INT_WDT";
+        case ESP_RST_TASK_WDT:  return "TASK_WDT";
+        case ESP_RST_WDT:       return "WDT";
+        case ESP_RST_DEEPSLEEP: return "DEEPSLEEP";
+        case ESP_RST_BROWNOUT:  return "BROWNOUT";
+        case ESP_RST_SDIO:      return "SDIO";
+        default:                return "OTHER";
+    }
+}
+
+static void syncCtrlLogicFromOutputModes() {
+    sensorMgr.normalizeDigitalOffOnlyRules();
+    for (int si = 0; si < SEN_COUNT; si++) {
+        if (!SensorManager::isSchemeAnalogControlSensorIndex((uint8_t)si)) continue;
+        SensorBase* s = sensorMgr.s[si];
+        if (!s) continue;
+        for (int ri = 0; ri < N_CTRL_OUT; ri++) {
+            const uint8_t outIdx = s->ctrl[ri].outIdx;
+            if (SensorManager::isMainOutputIndex(outIdx)) {
+                s->ctrl[ri].logic = outputMgr.chMode[outIdx];
+            }
+        }
+    }
+    sensorMgr.normalizeDigitalOffOnlyRules();
+    sensorMgr.normalizeSchemeControlRules();
+}
+
+static void initPrevState() {
+    for (int i = 0; i < OUT_COUNT; i++) prevOutState[i] = outputMgr.out[i]->isOn();
+    for (int i = 0; i < SEN_COUNT; i++) {
+        prevSenError[i]   = sensorMgr.s[i]->error;
+        prevSenPresent[i] = sensorMgr.s[i]->present;
+        prevAlarmMask[i]  = sensorMgr.s[i]->alarmMask();
+    }
+}
+
+static void logSensorTransitions() {
+    for (int i = 0; i < SEN_COUNT; i++) {
+        SensorBase* s = sensorMgr.s[i];
+
+        if (s->present != prevSenPresent[i]) {
+            prevSenPresent[i] = s->present;
+            eventLog.add(s->name + (s->present ? " connected" : " disconnected"),
+                         sensorMgr.getT1(), sensorMgr.getT2(), sensorMgr.getT3(), sensorMgr.getDT());
+        }
+
+        if (s->error != prevSenError[i]) {
+            prevSenError[i] = s->error;
+            eventLog.add(s->name + String(s->error ? " ERROR" : " ERROR cleared"),
+                         sensorMgr.getT1(), sensorMgr.getT2(), sensorMgr.getT3(), sensorMgr.getDT());
+        }
+
+        const uint8_t curMask = s->alarmMask();
+        if (curMask != prevAlarmMask[i]) {
+            if (prevAlarmMask[i] == 0 && curMask != 0) {
+                eventLog.add(s->name + " alarm FIRED",
+                             sensorMgr.getT1(), sensorMgr.getT2(), sensorMgr.getT3(), sensorMgr.getDT());
+            } else if (prevAlarmMask[i] != 0 && curMask == 0) {
+                eventLog.add(s->name + " alarm cleared",
+                             sensorMgr.getT1(), sensorMgr.getT2(), sensorMgr.getT3(), sensorMgr.getDT());
+            } else {
+                eventLog.add(s->name + " alarm changed",
+                             sensorMgr.getT1(), sensorMgr.getT2(), sensorMgr.getT3(), sensorMgr.getDT());
+            }
+            prevAlarmMask[i] = curMask;
+        }
+    }
+}
+
+static void logOutputTransitions() {
+    for (int i = 0; i < OUT_COUNT; i++) {
+        const bool cur = outputMgr.out[i]->isOn();
+        if (cur != prevOutState[i]) {
+            prevOutState[i] = cur;
+            if (i == OUT_CH4 || i == OUT_CH5) continue; // звуковое оформление не засоряет лог
+            eventLog.add(String(outputMgr.out[i]->name) + (cur ? " ON" : " OFF"),
+                         sensorMgr.getT1(), sensorMgr.getT2(), sensorMgr.getT3(), sensorMgr.getDT());
+        }
+    }
+}
+
+static void printHeartbeat() {
+    const uint32_t now = millis();
+    if (now - lastHeartbeatMs < 30000UL) return;
+    lastHeartbeatMs = now;
+
+    Serial.print("[HB] up=");
+    Serial.print(now);
+    Serial.print(" freeHeap=");
+    Serial.print(ESP.getFreeHeap());
+    Serial.print(" minFreeHeap=");
+    Serial.print(ESP.getMinFreeHeap());
+    Serial.print(" sta=");
+    Serial.print(wifiMgr.staConnected ? "ON" : "OFF");
+    Serial.print(" staIP=");
+    Serial.print(wifiMgr.staIP());
+    Serial.print(" apIP=");
+    Serial.print(wifiMgr.apIP());
+    Serial.print(" rssi=");
+    Serial.print(wifiMgr.rssi());
+    Serial.print(" synced=");
+    Serial.println(timeBase.isSynced() ? "YES" : "NO");
+}
+
+static void initWiFiLed() {
+    if (PIN_WIFI_LED < 0) return;
+    pinMode(PIN_WIFI_LED, OUTPUT);
+    digitalWrite(PIN_WIFI_LED, LOW);
+}
+
+static void updateWiFiLed() {
+    if (PIN_WIFI_LED < 0) return;
+    if (wifiMgr.staConnected) {
+        digitalWrite(PIN_WIFI_LED, HIGH);
+        return;
+    }
+
+    const wifi_mode_t mode = WiFi.getMode();
+    const bool apActive = (mode == WIFI_AP || mode == WIFI_AP_STA);
+    if (!apActive) {
+        digitalWrite(PIN_WIFI_LED, LOW);
+        return;
+    }
+
+    const uint32_t now = millis();
+    if (now - lastWifiLedBlinkMs >= WIFI_LED_BLINK_MS) {
+        lastWifiLedBlinkMs = now;
+        wifiLedBlinkState = !wifiLedBlinkState;
+        digitalWrite(PIN_WIFI_LED, wifiLedBlinkState ? HIGH : LOW);
+    }
+}
+
+void setup() {
+    Serial.begin(115200);
+    delay(300);
+    Serial.println();
+    Serial.println("=== " DEVICE_NAME " " FW_VERSION " ===");
+    Serial.println(String("Причина сброса: ") + resetReasonText(esp_reset_reason()));
+
+    eventLog.begin(&timeBase);
+    eventLog.add("Версия прошивки " FW_VERSION);
+    eventLog.add(String("Загрузка: причина сброса ") + resetReasonText(esp_reset_reason()));
+
+    storage.loadSensors(sensorMgr);
+    storage.loadOutputs(outputMgr);
+    syncCtrlLogicFromOutputModes();
+
+    if (!storage.ready()) {
+        eventLog.add(String("Хранилище: недоступно - ") + storage.statusText());
+    } else if (storage.recovered()) {
+        eventLog.add("Хранилище: NVS восстановлено, сохранённые настройки сброшены");
+    }
+
+    if (!EMU_MODE) {
+        sensorMgr.begin();
+    }
+
+    outputMgr.begin();
+    confirmMgr.begin();
+    emulator.begin();
+    initWiFiLed();
+
+    wifiMgr.begin(storage, eventLog);
+
+    webAPI.begin(timeBase, eventLog, sensorMgr, outputMgr, confirmMgr, wifiMgr, storage, emulator, remoteNotifier, processSafety);
+    debugReporter.begin();
+    processSafety.begin(timeBase, eventLog, sensorMgr, outputMgr, confirmMgr);
+    remoteNotifier.begin(wifiMgr, eventLog, sensorMgr, outputMgr, storage);
+
+    initPrevState();
+
+    eventLog.add("Веб-сервер запущен", sensorMgr.getT1(), sensorMgr.getT2(), sensorMgr.getT3(), sensorMgr.getDT());
+    eventLog.add(String("Режим прошивки: ") + (EMU_MODE ? "ЭМУЛЯЦИЯ" : "РЕАЛЬНЫЙ"),
+                 sensorMgr.getT1(), sensorMgr.getT2(), sensorMgr.getT3(), sensorMgr.getDT());
+
+    Serial.println("AP IP   : " + wifiMgr.apIP());
+    Serial.println(String("AP mode : ") + String(wifiMgr.apRunning() ? "ON" : "FAILED") + " / " + wifiMgr.apStatusText());
+    Serial.println(String("STA cfg : ") + String(wifiMgr.staConfigured() ? wifiMgr.staSSID : "<none>"));
+    Serial.println(String("Storage : ") + storage.statusText());
+    Serial.println("Готово.");
+}
+
+void loop() {
+    if (EMU_MODE) {
+        emulator.injectAll(sensorMgr);
+    }
+
+    sensorMgr.loop();
+    logSensorTransitions();
+
+    outputMgr.loop(sensorMgr);
+    logOutputTransitions();
+
+    confirmMgr.loop(outputMgr, sensorMgr, &eventLog);
+
+    bool relayFeedbackOn[OUT_COUNT] = {};
+    bool relayFeedbackAvailable[OUT_COUNT] = {};
+    for (uint8_t i = 0; i < 4; i++) {
+        const ConfirmationChannel& c = confirmMgr.get(i);
+        if (c.outputIdx < OUT_COUNT) {
+            relayFeedbackAvailable[c.outputIdx] = c.available;
+            relayFeedbackOn[c.outputIdx] = c.actual;
+        }
+    }
+    outputMgr.updateRelayCommandFeedback(relayFeedbackOn, relayFeedbackAvailable,
+                                         &eventLog, &sensorMgr);
+
+    processSafety.loop();
+    outputMgr.setSafetyAlarmActive(processSafety.safetyAlarmActive());
+    remoteNotifier.loop();
+
+    if (outputMgr.consumeManualStateDirty()) {
+        storage.saveOutputs(outputMgr);
+    }
+
+    wifiMgr.loop();
+    updateWiFiLed();
+    debugReporter.loop(timeBase, sensorMgr, confirmMgr);
+    printHeartbeat();
+
+    yield();
+}

@@ -1,0 +1,62 @@
+# Arduino / ESP32 build artifacts
+build/
+.cache/
+arduino-build-*/
+arduino-cache-*/
+*.elf
+*.bin
+*.hex
+*.map
+*.eep
+*.lst
+*.sym
+
+# Arduino CLI local config/cache if generated inside project
+.arduino15/
+arduino-cli.yaml
+
+# PlatformIO, if ever used
+.pio/
+.pioenvs/
+.piolibdeps/
+platformio.ini.bak
+
+# VS Code / IDE local files
+.vscode/.browse.c_cpp.db*
+.vscode/c_cpp_properties.json
+.vscode/launch.json
+.vscode/ipch/
+.idea/
+
+# Python cache / tests
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Logs / temporary dumps
+*.log
+*.tmp
+*.bak
+*.orig
+*.rej
+
+# Project dumps generated for ChatGPT/review
+ALL_TEXT.txt
+ENV_SUMMARY.txt
+TREE.txt
+
+# OS junk
+.DS_Store
+Thumbs.db
+desktop.ini
+*~
+*.swp
+*.swo
+
+# Secrets / local WiFi credentials
+.env
+secrets.h
+wifi_secrets.h
+local_config.h

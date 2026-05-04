@@ -1,0 +1,1284 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>EMU / API Test Panel</title>
+<style>
+:root {
+  --bg: #0a0f14;
+  --bg2: #0f1720;
+  --panel: #141f2a;
+  --panel2: #101923;
+  --line: #24384a;
+  --line2: #1a2a39;
+  --text: #d8e9f2;
+  --muted: #7f9aad;
+  --accent: #43d3ff;
+  --accent2: #ffb347;
+  --green: #42f587;
+  --yellow: #ffd84d;
+  --red: #ff5d73;
+  --blue: #6ea8ff;
+  --shadow: 0 10px 30px rgba(0,0,0,.28);
+  --radius: 14px;
+  --font: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: linear-gradient(180deg, #081018 0%, #0a0f14 100%); color: var(--text); font-family: var(--font); }
+body { min-height: 100vh; }
+a { color: var(--accent); }
+button, input, select, textarea { font: inherit; }
+body::before {
+  content: "";
+  position: fixed; inset: 0;
+  background: repeating-linear-gradient(0deg, rgba(255,255,255,.00) 0 2px, rgba(255,255,255,.018) 2px 4px);
+  pointer-events: none;
+  z-index: 999;
+}
+header {
+  position: sticky; top: 0; z-index: 50;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  padding: 14px 18px;
+  background: rgba(10,15,20,.92);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--line);
+}
+.brand {
+  font-weight: 800; letter-spacing: .08em; color: var(--accent);
+  text-transform: uppercase; text-shadow: 0 0 18px rgba(67,211,255,.35);
+}
+.brand small { color: var(--accent2); font-weight: 700; }
+.toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; flex: 1; }
+.toolbar input[type=text], .toolbar select {
+  background: var(--panel2); color: var(--text);
+  border: 1px solid var(--line); border-radius: 10px;
+  min-height: 38px; padding: 8px 12px;
+}
+#baseUrl { min-width: 250px; flex: 1 1 320px; }
+.btn {
+  min-height: 38px; padding: 8px 12px;
+  background: var(--panel); color: var(--text);
+  border: 1px solid var(--line); border-radius: 10px;
+  cursor: pointer; transition: .15s ease;
+}
+.btn:hover { border-color: var(--accent); color: var(--accent); transform: translateY(-1px); }
+.btn.primary { background: rgba(67,211,255,.1); border-color: rgba(67,211,255,.45); color: var(--accent); }
+.btn.green { background: rgba(66,245,135,.08); border-color: rgba(66,245,135,.35); color: var(--green); }
+.btn.yellow { background: rgba(255,216,77,.08); border-color: rgba(255,216,77,.35); color: var(--yellow); }
+.btn.red { background: rgba(255,93,115,.08); border-color: rgba(255,93,115,.35); color: var(--red); }
+.btn.small { min-height: 30px; padding: 4px 8px; font-size: 12px; border-radius: 8px; }
+.status {
+  display: flex; align-items: center; gap: 8px;
+  margin-left: auto; white-space: nowrap;
+}
+.dot {
+  width: 10px; height: 10px; border-radius: 50%;
+  background: var(--muted); box-shadow: 0 0 0 transparent;
+}
+.dot.ok { background: var(--green); box-shadow: 0 0 14px rgba(66,245,135,.7); }
+.dot.err { background: var(--red); box-shadow: 0 0 14px rgba(255,93,115,.7); animation: blink 1s infinite; }
+@keyframes blink { 50% { opacity: .35; } }
+.badges { display: flex; flex-wrap: wrap; gap: 6px; }
+.badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  min-height: 28px; padding: 4px 10px; border-radius: 999px;
+  background: var(--panel2); border: 1px solid var(--line2); color: var(--muted); font-size: 12px;
+}
+.badge.ok { color: var(--green); border-color: rgba(66,245,135,.35); }
+.badge.warn { color: var(--yellow); border-color: rgba(255,216,77,.35); }
+.badge.err { color: var(--red); border-color: rgba(255,93,115,.35); }
+main {
+  display: grid;
+  grid-template-columns: minmax(360px, 1.15fr) minmax(360px, 1.1fr) minmax(340px, .95fr);
+  gap: 14px; padding: 14px;
+}
+.panel {
+  background: linear-gradient(180deg, rgba(20,31,42,.98), rgba(16,25,35,.98));
+  border: 1px solid var(--line); border-radius: var(--radius);
+  box-shadow: var(--shadow); overflow: hidden;
+}
+.panel > .head {
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  padding: 12px 14px; border-bottom: 1px solid var(--line);
+  background: rgba(255,255,255,.02);
+}
+.title { font-size: 13px; letter-spacing: .12em; text-transform: uppercase; color: var(--accent); font-weight: 800; }
+.grow { flex: 1; }
+.panel .body { padding: 14px; }
+.stack { display: flex; flex-direction: column; gap: 12px; }
+.grid2 { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 10px; }
+.grid3 { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 10px; }
+.grid4 { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 8px; }
+.kv {
+  display: grid; grid-template-columns: 160px 1fr; gap: 8px 12px; align-items: center;
+}
+.kv .k { color: var(--muted); }
+.card {
+  background: rgba(0,0,0,.14);
+  border: 1px solid var(--line2);
+  border-radius: 12px;
+  padding: 10px;
+}
+.sensor-card { display: flex; flex-direction: column; gap: 8px; }
+.sensor-top { display: flex; align-items: baseline; gap: 8px; }
+.sensor-name { font-weight: 800; font-size: 15px; color: var(--text); }
+.sensor-desc { color: var(--muted); font-size: 12px; }
+.live { margin-left: auto; font-size: 18px; font-weight: 800; color: var(--green); }
+.live.warn { color: var(--yellow); }
+.live.err { color: var(--red); }
+.range-row { display: grid; grid-template-columns: 1fr 94px; gap: 8px; align-items: center; }
+input[type=range] { width: 100%; }
+input[type=number], input[type=password], select, textarea {
+  width: 100%; min-height: 36px;
+  background: #0b141d; color: var(--text);
+  border: 1px solid var(--line); border-radius: 10px;
+  padding: 8px 10px;
+}
+input[type=checkbox] { transform: translateY(1px); }
+textarea { min-height: 140px; resize: vertical; }
+.toggle-line {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 8px 10px; border: 1px solid var(--line2); border-radius: 10px; background: rgba(0,0,0,.12);
+}
+.toggle-label { display: flex; flex-direction: column; gap: 2px; }
+.toggle-label strong { color: var(--text); }
+.toggle-label span { color: var(--muted); font-size: 12px; }
+.switch {
+  position: relative; width: 52px; height: 28px; display: inline-block;
+}
+.switch input { opacity: 0; width: 0; height: 0; }
+.switch .track {
+  position: absolute; inset: 0; border-radius: 999px;
+  background: #33485d; border: 1px solid #456176; transition: .2s;
+}
+.switch .thumb {
+  position: absolute; top: 3px; left: 3px; width: 20px; height: 20px;
+  border-radius: 50%; background: white; transition: .2s;
+}
+.switch input:checked + .track { background: rgba(66,245,135,.45); border-color: rgba(66,245,135,.65); }
+.switch input:checked + .track + .thumb { transform: translateX(24px); }
+.table-wrap { overflow: auto; }
+.table {
+  width: 100%; border-collapse: collapse; font-size: 12px;
+}
+.table th, .table td { border-bottom: 1px solid var(--line2); padding: 8px 8px; text-align: left; vertical-align: top; }
+.table th { color: var(--muted); font-weight: 700; background: rgba(255,255,255,.03); position: sticky; top: 0; }
+.code, pre {
+  margin: 0; white-space: pre-wrap; word-break: break-word;
+  background: #091019; border: 1px solid var(--line2); border-radius: 12px;
+  padding: 10px; color: #c9ecff; font-size: 12px;
+}
+pre.raw { max-height: 340px; overflow: auto; }
+.log-box { max-height: 420px; overflow: auto; display: flex; flex-direction: column; gap: 8px; }
+.log-item {
+  border: 1px solid var(--line2); border-radius: 10px; padding: 8px 10px; background: rgba(0,0,0,.12);
+}
+.log-top { display: flex; gap: 10px; align-items: baseline; }
+.log-time { color: var(--accent); min-width: 86px; }
+.log-ev { color: var(--text); }
+.log-val { color: var(--muted); margin-top: 6px; font-size: 12px; }
+.warn-list, .pill-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.warn-pill, .pill {
+  padding: 6px 10px; border-radius: 999px; border: 1px solid var(--line2); background: rgba(0,0,0,.14); font-size: 12px;
+}
+.warn-pill { color: var(--yellow); border-color: rgba(255,216,77,.25); }
+.err-pill { color: var(--red); border-color: rgba(255,93,115,.25); }
+.ok-pill { color: var(--green); border-color: rgba(66,245,135,.25); }
+.form-row { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 10px; }
+.form-row3 { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 10px; }
+.caption { color: var(--muted); font-size: 12px; }
+.footer-note { color: var(--muted); font-size: 12px; line-height: 1.55; }
+.col-span-2 { grid-column: span 2; }
+.col-span-3 { grid-column: span 3; }
+.line { height: 1px; background: var(--line2); margin: 6px 0 2px; }
+.muted { color: var(--muted); }
+.right { text-align: right; }
+.center { text-align: center; }
+.nowrap { white-space: nowrap; }
+#responseMeta { margin-bottom: 8px; }
+@media (max-width: 1400px) {
+  main { grid-template-columns: 1fr 1fr; }
+  .wide { grid-column: span 2; }
+}
+@media (max-width: 960px) {
+  main { grid-template-columns: 1fr; }
+  .wide { grid-column: span 1; }
+  .form-row, .form-row3, .grid2, .grid3, .grid4, .kv { grid-template-columns: 1fr; }
+  .col-span-2, .col-span-3 { grid-column: span 1; }
+  .status { width: 100%; margin-left: 0; }
+}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">EMU / API TEST PANEL</small></div>
+  <div class="toolbar">
+    <input id="baseUrl" type="text" placeholder="http://192.168.4.1">
+    <select id="pollInterval">
+      <option value="500">0.5 c</option>
+      <option value="1000" selected>1 c</option>
+      <option value="1500">1.5 c</option>
+      <option value="2000">2 c</option>
+      <option value="5000">5 c</option>
+    </select>
+    <button class="btn primary" id="btnPoll">Старт опроса</button>
+    <button class="btn" id="btnRefreshAll">Обновить всё</button>
+    <button class="btn" id="btnSyncTime">Sync time</button>
+    <button class="btn red" id="btnStopAll">OFF всех выходов</button>
+  </div>
+  <div class="status">
+    <div class="dot" id="connDot"></div>
+    <div>
+      <div id="connText">нет связи</div>
+      <div class="caption" id="connMeta">ожидание</div>
+    </div>
+  </div>
+</header>
+
+<main>
+  <section class="panel">
+    <div class="head">
+      <div class="title">Сводка устройства</div>
+      <div class="grow"></div>
+      <div class="badges" id="topBadges"></div>
+    </div>
+    <div class="body stack">
+      <div class="kv">
+        <div class="k">Время</div><div id="sumTime">—</div>
+        <div class="k">FW / API</div><div id="sumFw">—</div>
+        <div class="k">AP / STA</div><div id="sumNet">—</div>
+        <div class="k">RSSI</div><div id="sumRssi">—</div>
+        <div class="k">GPIO35 mode</div><div id="sumPin35">—</div>
+        <div class="k">EMU / mute</div><div id="sumMode">—</div>
+      </div>
+      <div>
+        <div class="caption">Активные предупреждения</div>
+        <div class="warn-list" id="diagWarnings"></div>
+      </div>
+      <div>
+        <div class="caption">Активные confirmation mismatch</div>
+        <div class="pill-list" id="mismatchList"></div>
+      </div>
+      <details>
+        <summary>RAW info / diag / schema</summary>
+        <div class="stack" style="margin-top:10px">
+          <pre id="rawInfo" class="raw">{}</pre>
+          <pre id="rawDiag" class="raw">{}</pre>
+          <pre id="rawSchema" class="raw">{}</pre>
+        </div>
+      </details>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="head">
+      <div class="title">Эмуляция датчиков и подтверждений</div>
+      <div class="grow"></div>
+      <button class="btn small" id="btnEmuDefaults">Сброс</button>
+      <button class="btn small" id="btnPresetSave">Сохранить preset</button>
+      <button class="btn small" id="btnPresetLoad">Загрузить preset</button>
+      <button class="btn green" id="btnSendEmu">Отправить /emu/set</button>
+    </div>
+    <div class="body stack">
+      <div class="grid2" id="emuAnalogGrid"></div>
+      <div class="grid2">
+        <div class="card stack">
+          <div class="title" style="font-size:12px">Дискретные датчики</div>
+          <div class="toggle-line">
+            <div class="toggle-label"><strong>L</strong><span>датчик уровня</span></div>
+            <label class="switch"><input type="checkbox" id="emu_L"><span class="track"></span><span class="thumb"></span></label>
+          </div>
+          <div class="toggle-line">
+            <div class="toggle-label"><strong>F</strong><span>датчик протока</span></div>
+            <label class="switch"><input type="checkbox" id="emu_F"><span class="track"></span><span class="thumb"></span></label>
+          </div>
+        </div>
+        <div class="card stack">
+          <div class="title" style="font-size:12px">Ошибки DS18B20</div>
+          <div class="toggle-line">
+            <div class="toggle-label"><strong>T1err</strong><span>ошибка T1</span></div>
+            <label class="switch"><input type="checkbox" id="emu_T1err"><span class="track"></span><span class="thumb"></span></label>
+          </div>
+          <div class="toggle-line">
+            <div class="toggle-label"><strong>T2err</strong><span>ошибка T2</span></div>
+            <label class="switch"><input type="checkbox" id="emu_T2err"><span class="track"></span><span class="thumb"></span></label>
+          </div>
+          <div class="toggle-line">
+            <div class="toggle-label"><strong>T3err</strong><span>ошибка T3</span></div>
+            <label class="switch"><input type="checkbox" id="emu_T3err"><span class="track"></span><span class="thumb"></span></label>
+          </div>
+        </div>
+      </div>
+      <div class="card stack">
+        <div class="title" style="font-size:12px">Эмуляция WER_* / confirmation inputs</div>
+        <div class="grid2" id="werGrid"></div>
+      </div>
+      <div class="card stack">
+        <div class="title" style="font-size:12px">Сценарии</div>
+        <div class="grid3">
+          <button class="btn" data-scenario="none">STOP</button>
+          <button class="btn" data-scenario="warmup">warmup</button>
+          <button class="btn" data-scenario="boil">boil</button>
+          <button class="btn" data-scenario="heads">heads</button>
+          <button class="btn" data-scenario="body">body</button>
+        </div>
+        <div class="footer-note">Сценарии используют <code>/api/v1/emu/scenario</code>. Подтверждения WER остаются отдельными и задаются через <code>/api/v1/emu/set</code>.</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="head">
+      <div class="title">Быстрые действия</div>
+      <div class="grow"></div>
+      <button class="btn small" id="btnHealth">health</button>
+      <button class="btn small" id="btnInfo">info</button>
+      <button class="btn small" id="btnDiag">diag</button>
+      <button class="btn small" id="btnSchema">schema</button>
+    </div>
+    <div class="body stack">
+      <div class="grid2">
+        <button class="btn red" id="btnStopMain">STOP main</button>
+        <button class="btn yellow" id="btnStopRelease">STOP release</button>
+        <button class="btn green" id="btnMuteOn">mute ON</button>
+        <button class="btn yellow" id="btnMuteOff">mute OFF</button>
+        <button class="btn red" id="btnSafetyReset">safety reset</button>
+        <button class="btn" id="btnLogRefresh">refresh log</button>
+        <button class="btn red" id="btnLogClear">clear log</button>
+        <button class="btn" id="btnWifiScan">wifi scan</button>
+        <button class="btn" id="btnWifiStatus">wifi status</button>
+      </div>
+      <pre id="quickOut" class="raw">{}</pre>
+    </div>
+  </section>
+
+  <section class="panel wide">
+    <div class="head">
+      <div class="title">Состояние датчиков</div>
+      <div class="grow"></div>
+      <span class="caption">основано на <code>/api/v1/state</code></span>
+    </div>
+    <div class="body table-wrap">
+      <table class="table" id="sensorTable">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Value</th>
+            <th>Enabled</th>
+            <th>Present</th>
+            <th>Error</th>
+            <th>HW</th>
+            <th>Note</th>
+            <th>Alarms</th>
+            <th>Ctrl</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="head">
+      <div class="title">Ручное управление выходами</div>
+      <div class="grow"></div>
+      <span class="caption">POST /api/v1/output/{id}/manual</span>
+    </div>
+    <div class="body table-wrap">
+      <table class="table" id="outputTable">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>State</th>
+            <th>Requested</th>
+            <th>Manual</th>
+            <th>Forbidden</th>
+            <th>Confirm</th>
+            <th>Relay</th>
+            <th>ON / OFF</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="head">
+      <div class="title">Подтверждения WER_*</div>
+      <div class="grow"></div>
+      <span class="caption">из state.confirmations[]</span>
+    </div>
+    <div class="body table-wrap">
+      <table class="table" id="confirmTable">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Output</th>
+            <th>Available</th>
+            <th>Actual</th>
+            <th>Expected</th>
+            <th>Confirmed</th>
+            <th>Pending</th>
+            <th>Mismatch</th>
+            <th>Timeout</th>
+            <th>Fault</th>
+            <th>Note</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel wide">
+    <div class="head">
+      <div class="title">Редактор конфигурации API</div>
+      <div class="grow"></div>
+      <span class="caption">config / alarm / ctrl / wifi connect / wifi ap</span>
+    </div>
+    <div class="body stack">
+      <div class="grid3">
+        <div class="card stack">
+          <div class="title" style="font-size:12px">Sensor config</div>
+          <select id="cfgSensor"></select>
+          <label><input type="checkbox" id="cfgEnabled"> enabled</label>
+          <input id="cfgPeriod" type="number" min="100" step="100" placeholder="periodMs">
+          <input id="cfgAlarmDelay" type="number" min="0" step="100" placeholder="alarmDelayMs">
+          <input id="cfgCtrlDelay" type="number" min="0" step="100" placeholder="ctrlDelayMs">
+          <button class="btn green" id="btnApplyConfig">POST sensor/{id}/config</button>
+        </div>
+        <div class="card stack">
+          <div class="title" style="font-size:12px">Alarm</div>
+          <select id="alSensor"></select>
+          <div class="form-row">
+            <input id="alIdx" type="number" min="0" max="3" step="1" value="0">
+            <input id="alThreshold" type="number" step="0.1" value="78.5">
+          </div>
+          <label><input type="checkbox" id="alEnabled" checked> enabled</label>
+          <select id="alType">
+            <option value="true">isMax = true</option>
+            <option value="false">isMax = false</option>
+          </select>
+          <button class="btn green" id="btnApplyAlarm">POST sensor/{id}/alarm</button>
+        </div>
+        <div class="card stack">
+          <div class="title" style="font-size:12px">Control rule</div>
+          <select id="ctrlSensor"></select>
+          <select id="ctrlOutput"></select>
+          <label><input type="checkbox" id="ctrlEnabled" checked> enabled</label>
+          <select id="ctrlLogic">
+            <option value="heat">heat</option>
+            <option value="cool">cool</option>
+          </select>
+          <div class="form-row">
+            <input id="ctrlMin" type="number" step="0.1" value="77.0">
+            <input id="ctrlMax" type="number" step="0.1" value="78.0">
+          </div>
+          <button class="btn green" id="btnApplyCtrl">POST sensor/{id}/ctrl</button>
+        </div>
+      </div>
+      <div class="grid2">
+        <div class="card stack">
+          <div class="title" style="font-size:12px">WiFi connect</div>
+          <input id="wifiSsid" type="text" placeholder="SSID">
+          <input id="wifiPass" type="password" placeholder="Пароль сети">
+          <button class="btn green" id="btnWifiConnect">POST /api/v1/wifi/connect</button>
+        </div>
+        <div class="card stack">
+          <div class="title" style="font-size:12px">AP password</div>
+          <input id="apPass" type="password" placeholder="Пусто = open AP">
+          <button class="btn green" id="btnWifiAp">POST /api/v1/wifi/ap</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel wide">
+    <div class="head">
+      <div class="title">Журнал событий</div>
+      <div class="grow"></div>
+      <label class="caption"><input type="checkbox" id="autoScrollLog" checked> auto-scroll вверх новым</label>
+    </div>
+    <div class="body">
+      <div id="logBox" class="log-box"></div>
+    </div>
+  </section>
+
+  <section class="panel wide">
+    <div class="head">
+      <div class="title">API LAB / RAW запросы</div>
+      <div class="grow"></div>
+      <button class="btn small" data-template="state">GET state</button>
+      <button class="btn small" data-template="info">GET info</button>
+      <button class="btn small" data-template="diag">GET diag</button>
+      <button class="btn small" data-template="emu">POST emu/set</button>
+      <button class="btn small" data-template="manual">POST output manual</button>
+    </div>
+    <div class="body stack">
+      <div class="form-row3">
+        <select id="apiMethod">
+          <option>GET</option>
+          <option>POST</option>
+          <option>DELETE</option>
+          <option>OPTIONS</option>
+        </select>
+        <input id="apiPath" type="text" value="/api/v1/state">
+        <button class="btn primary" id="btnSendApi">Отправить запрос</button>
+      </div>
+      <textarea id="apiPayload" placeholder='{"muted":true}'></textarea>
+      <div id="responseMeta" class="badges"></div>
+      <pre id="apiCurl" class="raw"></pre>
+      <pre id="apiResponse" class="raw">{}</pre>
+    </div>
+  </section>
+
+  <section class="panel wide">
+    <div class="head">
+      <div class="title">RAW state</div>
+      <div class="grow"></div>
+      <button class="btn small" id="btnCopyState">Копировать JSON</button>
+    </div>
+    <div class="body">
+      <pre id="rawState" class="raw">{}</pre>
+    </div>
+  </section>
+</main>
+
+<script>
+const STORE_KEY = 'rectcolumn.emu-panel-pro.v1';
+const PRESET_KEY = 'rectcolumn.emu-panel-pro.preset';
+const ANALOG_META = [
+  { id: 'T1', label: 'T1', desc: 'температура 1', unit: '°C', min: 0, max: 120, step: 0.1, value: 20 },
+  { id: 'T2', label: 'T2', desc: 'температура 2', unit: '°C', min: 0, max: 120, step: 0.1, value: 20 },
+  { id: 'T3', label: 'T3', desc: 'температура 3', unit: '°C', min: 0, max: 120, step: 0.1, value: 20 },
+  { id: 'P',  label: 'P',  desc: 'давление',      unit: 'hPa', min: 900, max: 1100, step: 0.1, value: 1013 },
+  { id: 'C',  label: 'C',  desc: 'ADC ток',       unit: 'raw', min: 0, max: 4095, step: 1, value: 0 },
+  { id: 'V',  label: 'V',  desc: 'ADC напряжение',unit: 'raw', min: 0, max: 4095, step: 1, value: 0 }
+];
+const DEFAULT_SENSOR_IDS = ['T1','T2','T3','dT','P','L','F','C','V'];
+const DEFAULT_OUTPUT_IDS = ['CH1','CH2','CH3','CH4','CH5'];
+const DEFAULT_CONFIRM_IDS = ['WER_CH1','WER_CH2','WER_CH3','WER_CH4'];
+const DEFAULT_EMU_PRESET = {
+  T1: 20,
+  T2: 20,
+  T3: 20,
+  P: 1013,
+  C: 0,
+  V: 0,
+  L: true,
+  F: true,
+  T1err: false,
+  T2err: false,
+  T3err: false,
+  WER_CH1: false,
+  WER_CH2: false,
+  WER_CH3: false,
+  WER_CH4: false
+};
+const state = {
+  connected: false,
+  polling: false,
+  timer: null,
+  pollInterval: 1000,
+  schema: null,
+  info: null,
+  diag: null,
+  health: null,
+  deviceState: null,
+  log: [],
+  lastStatus: '',
+  counters: { tick: 0 },
+  activeScenario: 'none'
+};
+
+function $(id) { return document.getElementById(id); }
+function baseUrl() {
+  let value = $('baseUrl').value.trim();
+  if (!value) value = 'http://192.168.4.1';
+  if (!/^https?:\/\//i.test(value)) value = 'http://' + value;
+  return value.replace(/\/+$/, '');
+}
+function apiUrl(path) {
+  if (/^https?:\/\//i.test(path)) return path;
+  return baseUrl() + path;
+}
+function saveSettings() {
+  const payload = {
+    baseUrl: $('baseUrl').value.trim(),
+    pollInterval: $('pollInterval').value,
+    emu: collectEmuPayload()
+  };
+  localStorage.setItem(STORE_KEY, JSON.stringify(payload));
+}
+function loadSettings() {
+  const raw = localStorage.getItem(STORE_KEY);
+  if (!raw) {
+    $('baseUrl').value = 'http://192.168.4.1';
+    renderEmuControls(DEFAULT_EMU_PRESET);
+    fillSelects();
+    return;
+  }
+  try {
+    const payload = JSON.parse(raw);
+    $('baseUrl').value = payload.baseUrl || 'http://192.168.4.1';
+    $('pollInterval').value = String(payload.pollInterval || '1000');
+    renderEmuControls({ ...DEFAULT_EMU_PRESET, ...(payload.emu || {}) });
+  } catch (_) {
+    $('baseUrl').value = 'http://192.168.4.1';
+    renderEmuControls(DEFAULT_EMU_PRESET);
+  }
+  fillSelects();
+}
+function renderEmuControls(saved = null) {
+  const analogHost = $('emuAnalogGrid');
+  analogHost.innerHTML = ANALOG_META.map(meta => {
+    const val = saved && typeof saved[meta.id] !== 'undefined' ? saved[meta.id] : meta.value;
+    const isInt = meta.step === 1;
+    return `
+      <div class="card sensor-card">
+        <div class="sensor-top">
+          <div>
+            <div class="sensor-name">${meta.label}</div>
+            <div class="sensor-desc">${meta.desc}</div>
+          </div>
+          <div class="live" id="live_${meta.id}">—</div>
+        </div>
+        <div class="range-row">
+          <input type="range" id="rng_${meta.id}" min="${meta.min}" max="${meta.max}" step="${meta.step}" value="${val}">
+          <input type="number" id="num_${meta.id}" min="${meta.min}" max="${meta.max}" step="${meta.step}" value="${val}">
+        </div>
+        <div class="caption">${meta.unit}</div>
+      </div>`;
+  }).join('');
+  ANALOG_META.forEach(meta => {
+    $('rng_' + meta.id).addEventListener('input', e => {
+      $('num_' + meta.id).value = e.target.value;
+      saveSettings();
+    });
+    $('num_' + meta.id).addEventListener('input', e => {
+      $('rng_' + meta.id).value = e.target.value;
+      saveSettings();
+    });
+  });
+  const digitalSaved = saved || {};
+  $('emu_L').checked = !!digitalSaved.L;
+  $('emu_F').checked = !!digitalSaved.F;
+  $('emu_T1err').checked = !!digitalSaved.T1err;
+  $('emu_T2err').checked = !!digitalSaved.T2err;
+  $('emu_T3err').checked = !!digitalSaved.T3err;
+  ['emu_L','emu_F','emu_T1err','emu_T2err','emu_T3err'].forEach(id => $(id).addEventListener('change', saveSettings));
+  renderWerToggles(saved || {});
+}
+function renderWerToggles(saved) {
+  const host = $('werGrid');
+  host.innerHTML = DEFAULT_CONFIRM_IDS.map(id => `
+    <div class="toggle-line">
+      <div class="toggle-label"><strong>${id}</strong><span>эмуляция confirmation</span></div>
+      <label class="switch"><input type="checkbox" id="emu_${id}"><span class="track"></span><span class="thumb"></span></label>
+    </div>
+  `).join('');
+  DEFAULT_CONFIRM_IDS.forEach(id => {
+    $('emu_' + id).checked = !!saved[id];
+    $('emu_' + id).addEventListener('change', saveSettings);
+  });
+}
+function fillSelects(sensorIds = DEFAULT_SENSOR_IDS, outputIds = DEFAULT_OUTPUT_IDS) {
+  ['cfgSensor','alSensor','ctrlSensor'].forEach(id => {
+    $(id).innerHTML = sensorIds.map(v => `<option value="${v}">${v}</option>`).join('');
+  });
+  $('ctrlOutput').innerHTML = outputIds.map(v => `<option value="${v}">${v}</option>`).join('');
+  syncEditorsFromState();
+}
+function getSensorIds() {
+  return state.schema?.sensorIds || state.deviceState?.sensors?.map(s => s.id) || DEFAULT_SENSOR_IDS;
+}
+function getOutputIds() {
+  return state.schema?.outputIds || state.deviceState?.outputs?.map(o => o.id) || DEFAULT_OUTPUT_IDS;
+}
+function numberOrNull(v) {
+  if (v === '' || v === null || typeof v === 'undefined') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+function boolBadge(val, yes = 'YES', no = 'NO') {
+  if (val === null || typeof val === 'undefined') return '<span class="badge">—</span>';
+  return `<span class="badge ${val ? 'ok' : ''}">${val ? yes : no}</span>`;
+}
+function textToHtml(s) {
+  return String(s ?? '').replace(/[&<>]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[ch]));
+}
+function pretty(obj) {
+  return JSON.stringify(obj ?? {}, null, 2);
+}
+function flowAlarmVisible(sensor) {
+  if (!sensor || sensor.id !== 'F') return false;
+  if (!sensor.enabled || sensor.error || sensor.value === null || typeof sensor.value === 'undefined' || sensor.present === false) return false;
+  return Number(sensor.value) <= 0.5;
+}
+function formatValue(sensor) {
+  if (!sensor || !sensor.enabled) return 'DISABLED';
+  if (sensor.error) return 'ERR';
+  if (!sensor.present) return 'ABSENT';
+  if (sensor.value === null || typeof sensor.value === 'undefined') return '—';
+  if (sensor.id === 'L') return sensor.value > 0.5 ? 'OK' : 'MAX!';
+  if (sensor.id === 'F') return flowAlarmVisible(sensor) ? 'Нет протока!' : 'OK';
+  if (['T1','T2','T3','dT'].includes(sensor.id)) return Number(sensor.value).toFixed(2) + ' °C';
+  if (sensor.id === 'P') return Number(sensor.value).toFixed(1) + ' hPa';
+  return String(sensor.value);
+}
+function setConn(ok, text, meta = '') {
+  state.connected = ok;
+  $('connDot').className = 'dot ' + (ok ? 'ok' : 'err');
+  $('connText').textContent = text;
+  $('connMeta').textContent = meta;
+}
+async function requestJSON(path, options = {}) {
+  const timeoutMs = options.timeoutMs || 6000;
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), timeoutMs);
+  const started = performance.now();
+  try {
+    const response = await fetch(apiUrl(path), {
+      method: options.method || 'GET',
+      headers: options.headers || {},
+      body: options.body,
+      signal: controller.signal,
+      cache: 'no-store'
+    });
+    const text = await response.text();
+    let data = text;
+    try { data = text ? JSON.parse(text) : null; } catch (_) {}
+    return {
+      ok: response.ok,
+      status: response.status,
+      text,
+      data,
+      ms: Math.round(performance.now() - started)
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      status: 0,
+      text: String(error?.message || error),
+      data: { ok: false, error: String(error?.message || error) },
+      ms: Math.round(performance.now() - started),
+      error
+    };
+  } finally {
+    clearTimeout(t);
+  }
+}
+function collectEmuPayload() {
+  const payload = {};
+  ANALOG_META.forEach(meta => {
+    const val = numberOrNull($('num_' + meta.id).value);
+    payload[meta.id] = val === null ? meta.value : val;
+  });
+  payload.L = $('emu_L').checked;
+  payload.F = $('emu_F').checked;
+  payload.T1err = $('emu_T1err').checked;
+  payload.T2err = $('emu_T2err').checked;
+  payload.T3err = $('emu_T3err').checked;
+  DEFAULT_CONFIRM_IDS.forEach(id => payload[id] = $('emu_' + id).checked);
+  return payload;
+}
+function applyEmuDefaults() {
+  renderEmuControls(DEFAULT_EMU_PRESET);
+  saveSettings();
+}
+async function sendEmuSet() {
+  const payload = collectEmuPayload();
+  saveSettings();
+  const res = await requestJSON('/api/v1/emu/set', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  pushQuickResult('POST /api/v1/emu/set', res);
+  await refreshStateOnly();
+}
+async function sendScenario(name) {
+  state.activeScenario = name;
+  const res = await requestJSON('/api/v1/emu/scenario', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name })
+  });
+  pushQuickResult(`POST /api/v1/emu/scenario (${name})`, res);
+  await refreshStateOnly();
+}
+async function postMute(muted) {
+  const res = await requestJSON('/api/v1/mute', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ muted })
+  });
+  pushQuickResult(`POST /api/v1/mute ${muted}`, res);
+  await refreshStateOnly();
+}
+async function syncTime() {
+  const payload = {
+    unixTimeMs: Date.now(),
+    millisAtSend: 0,
+    tzOffsetMin: -new Date().getTimezoneOffset()
+  };
+  const res = await requestJSON('/api/v1/time/sync', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  pushQuickResult('POST /api/v1/time/sync', res);
+  await refreshEverything();
+}
+async function clearLog() {
+  const res = await requestJSON('/api/v1/log', { method: 'DELETE' });
+  pushQuickResult('DELETE /api/v1/log', res);
+  await refreshLog();
+}
+async function setStopLatched(active) {
+  const path = active ? '/api/v1/stop' : '/api/v1/stop?release=1';
+  const res = await requestJSON(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}'
+  });
+  pushQuickResult(`POST ${path}`, res);
+  await refreshStateOnly();
+}
+async function safetyReset() {
+  const res = await requestJSON('/api/v1/safety/reset', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}'
+  });
+  pushQuickResult('POST /api/v1/safety/reset', res);
+  await refreshStateOnly();
+}
+async function refreshLog() {
+  const res = await requestJSON('/api/v1/log');
+  if (res.ok && Array.isArray(res.data)) {
+    state.log = res.data;
+    renderLog();
+  }
+  return res;
+}
+async function sendManual(outputId, wanted) {
+  const res = await requestJSON(`/api/v1/output/${outputId}/manual`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ state: wanted })
+  });
+  pushQuickResult(`POST /api/v1/output/${outputId}/manual`, res);
+  await refreshStateOnly();
+}
+async function offAllOutputs() {
+  for (const id of getOutputIds()) {
+    await sendManual(id, false);
+  }
+}
+async function applySensorConfig() {
+  const sensorId = $('cfgSensor').value;
+  const payload = { enabled: $('cfgEnabled').checked };
+  if ($('cfgPeriod').value !== '') payload.periodMs = Number($('cfgPeriod').value);
+  if ($('cfgAlarmDelay').value !== '') payload.alarmDelayMs = Number($('cfgAlarmDelay').value);
+  if ($('cfgCtrlDelay').value !== '') payload.ctrlDelayMs = Number($('cfgCtrlDelay').value);
+  const res = await requestJSON(`/api/v1/sensor/${sensorId}/config`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+  });
+  pushQuickResult(`POST /api/v1/sensor/${sensorId}/config`, res);
+  await refreshStateOnly();
+}
+async function applyAlarm() {
+  const sensorId = $('alSensor').value;
+  const payload = {
+    idx: Number($('alIdx').value || 0),
+    enabled: $('alEnabled').checked,
+    threshold: Number($('alThreshold').value || 0),
+    isMax: $('alType').value === 'true'
+  };
+  const res = await requestJSON(`/api/v1/sensor/${sensorId}/alarm`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+  });
+  pushQuickResult(`POST /api/v1/sensor/${sensorId}/alarm`, res);
+  await refreshStateOnly();
+}
+async function applyCtrl() {
+  const sensorId = $('ctrlSensor').value;
+  const payload = {
+    outIdx: getOutputIds().indexOf($('ctrlOutput').value),
+    enabled: $('ctrlEnabled').checked,
+    logic: $('ctrlLogic').value,
+    min: Number($('ctrlMin').value || 0),
+    max: Number($('ctrlMax').value || 0)
+  };
+  const res = await requestJSON(`/api/v1/sensor/${sensorId}/ctrl`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+  });
+  pushQuickResult(`POST /api/v1/sensor/${sensorId}/ctrl`, res);
+  await refreshStateOnly();
+}
+async function wifiScan() {
+  const res = await requestJSON('/api/v1/wifi/scan');
+  pushQuickResult('GET /api/v1/wifi/scan', res);
+  if (res.ok && Array.isArray(res.data) && res.data.length) {
+    $('wifiSsid').value = res.data[0].ssid || '';
+  }
+}
+async function wifiConnect() {
+  const res = await requestJSON('/api/v1/wifi/connect', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ssid: $('wifiSsid').value.trim(), pass: $('wifiPass').value })
+  });
+  pushQuickResult('POST /api/v1/wifi/connect', res);
+  await refreshEverything();
+}
+async function wifiAp() {
+  const res = await requestJSON('/api/v1/wifi/ap', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pass: $('apPass').value })
+  });
+  pushQuickResult('POST /api/v1/wifi/ap', res);
+  await refreshEverything();
+}
+function pushQuickResult(label, res) {
+  $('quickOut').textContent = pretty({ label, status: res.status, ok: res.ok, ms: res.ms, body: res.data });
+}
+function renderSummary() {
+  const ds = state.deviceState || {};
+  const diag = ds.diag || state.diag || {};
+  const info = state.info || {};
+  $('sumTime').textContent = `${ds.time || info.time || '—'}${ds.synced ? ' · synced' : ' · unsynced'}`;
+  $('sumFw').textContent = `${ds.fw || info.fw || '—'} / ${ds.apiVersion || info.apiVersion || '—'}`;
+  $('sumNet').textContent = `AP ${ds.apIP || info.apIP || '—'} · STA ${ds.staIP || info.staIP || '—'}`;
+  const rssi = typeof ds.rssi === 'number' ? ds.rssi : (typeof info.rssi === 'number' ? info.rssi : null);
+  $('sumRssi').textContent = rssi === null ? '—' : `${rssi} dBm`;
+  $('sumPin35').textContent = diag.pin35Mode || '—';
+  $('sumMode').textContent = `EMU=${String(ds.emu ?? info.emu ?? '—')} · muted=${String(ds.muted ?? info.muted ?? '—')} · safety=${String(ds.safetyAlarmActive ?? '—')}`;
+
+  const badges = [];
+  badges.push(`<span class="badge ${ds.emu ? 'warn' : 'ok'}">EMU: ${ds.emu ? 'ON' : 'OFF'}</span>`);
+  badges.push(`<span class="badge ${ds.synced ? 'ok' : 'warn'}">TIME: ${ds.synced ? 'SYNCED' : 'T+ mode'}</span>`);
+  badges.push(`<span class="badge ${(ds.muted || info.muted) ? 'warn' : 'ok'}">MUTE: ${(ds.muted || info.muted) ? 'ON' : 'OFF'}</span>`);
+  if (ds.stopLatched) badges.push('<span class="badge err">STOP</span>');
+  if (ds.safetyAlarmActive) badges.push('<span class="badge err">SAFETY</span>');
+  if (diag.wifiQualityWarning) badges.push('<span class="badge warn">WiFi weak</span>');
+  if ((diag.activeConfirmMismatches || []).length) badges.push('<span class="badge err">CONF mismatch</span>');
+  $('topBadges').innerHTML = badges.join('');
+
+  const warnings = [];
+  (diag.hardwareLimitations || []).forEach(item => warnings.push(`<span class="warn-pill">${textToHtml(item)}</span>`));
+  if (diag.adc2Warning) warnings.push('<span class="warn-pill">ADC2 / GPIO27 под WiFi ограничен</span>');
+  if (diag.wifiQualityWarning) warnings.push('<span class="warn-pill">RSSI <= warning threshold</span>');
+  $('diagWarnings').innerHTML = warnings.length ? warnings.join('') : '<span class="pill ok-pill">нет</span>';
+
+  const mismatches = diag.activeConfirmMismatches || [];
+  $('mismatchList').innerHTML = mismatches.length
+    ? mismatches.map(item => `<span class="pill err-pill">${textToHtml(item)}</span>`).join('')
+    : '<span class="pill ok-pill">нет</span>';
+
+  $('rawInfo').textContent = pretty(state.info);
+  $('rawDiag').textContent = pretty(ds.diag || state.diag);
+  $('rawSchema').textContent = pretty(state.schema);
+}
+function renderSensors() {
+  const tbody = $('sensorTable').querySelector('tbody');
+  const sensors = state.deviceState?.sensors || [];
+  tbody.innerHTML = sensors.map(sensor => {
+    const alarms = (sensor.alarms || []).map((a, idx) => {
+      if (!a.enabled) return null;
+      return `${idx}:${a.isMax ? 'max' : 'min'} ${a.threshold}${a.triggered ? ' !' : ''}`;
+    }).filter(Boolean).join(' · ') || '—';
+    const ctrl = (sensor.ctrl || []).map(rule => rule.enabled ? `${getOutputIds()[rule.outIdx] || ('#' + rule.outIdx)} ${rule.logic} [${rule.min};${rule.max}]` : null).filter(Boolean).join(' | ') || '—';
+    return `
+      <tr>
+        <td class="nowrap"><strong>${sensor.id}</strong></td>
+        <td>${textToHtml(formatValue(sensor))}</td>
+        <td>${boolBadge(sensor.enabled)}</td>
+        <td>${boolBadge(sensor.present)}</td>
+        <td>${boolBadge(sensor.error, 'ERR', 'OK')}</td>
+        <td>${sensor.hwLimited ? '<span class="badge warn">limited</span>' : (sensor.stale ? '<span class="badge warn">stale</span>' : '<span class="badge ok">ok</span>')}</td>
+        <td>${textToHtml(sensor.note || '—')}</td>
+        <td>${textToHtml(alarms)}</td>
+        <td>${textToHtml(ctrl)}</td>
+      </tr>`;
+  }).join('');
+
+  sensors.forEach(sensor => {
+    const live = $('live_' + sensor.id);
+    if (live) {
+      live.textContent = formatValue(sensor);
+      live.className = 'live' + (sensor.error ? ' err' : ((sensor.alarms || []).some(a => a.triggered) ? ' warn' : ''));
+    }
+  });
+}
+function renderOutputs() {
+  const tbody = $('outputTable').querySelector('tbody');
+  const outputs = state.deviceState?.outputs || [];
+  tbody.innerHTML = outputs.map(output => {
+    const forbidReasons = Array.isArray(output.forbidReasons) && output.forbidReasons.length
+      ? output.forbidReasons.join(', ')
+      : '—';
+    const confirmText = output.confirmAvailable === false
+      ? (output.confirmNote || 'n/a')
+      : `conf=${String(output.confirmed)} actual=${String(output.confirmActual)} exp=${String(output.confirmExpected)}${output.timeout ? ' timeout' : ''}${output.mismatch ? ' mismatch' : ''}`;
+    const relayText = [
+      output.relayPending ? `pending=${output.pendingCmd || 'yes'}` : '',
+      output.relayError ? `error=${output.relayError}` : '',
+      output.stopLatched ? 'STOP' : '',
+      output.operatorHoldOff ? 'holdOff' : ''
+    ].filter(Boolean).join(' · ') || '—';
+    return `
+      <tr>
+        <td><strong>${output.id}</strong></td>
+        <td>${boolBadge(output.state, 'ON', 'OFF')}</td>
+        <td>${boolBadge(output.requested, 'ON', 'OFF')}</td>
+        <td>${boolBadge(output.manualWant, 'ON', 'OFF')}</td>
+        <td>${output.forbidden ? `<span class="badge err">eff=${output.effectiveForbidMask ?? output.forbidMask}</span> ${textToHtml(forbidReasons)}` : '<span class="badge ok">no</span>'}</td>
+        <td>${textToHtml(confirmText)}</td>
+        <td>${textToHtml(relayText)}</td>
+        <td>
+          <div class="badges">
+            <button class="btn small green" data-out="${output.id}" data-state="true">ON</button>
+            <button class="btn small red" data-out="${output.id}" data-state="false">OFF</button>
+          </div>
+        </td>
+      </tr>`;
+  }).join('');
+  tbody.querySelectorAll('button[data-out]').forEach(btn => btn.addEventListener('click', () => sendManual(btn.dataset.out, btn.dataset.state === 'true')));
+}
+function renderConfirmations() {
+  const tbody = $('confirmTable').querySelector('tbody');
+  const items = state.deviceState?.confirmations || [];
+  tbody.innerHTML = items.map(c => `
+    <tr>
+      <td><strong>${c.id}</strong></td>
+      <td>${c.outputId}</td>
+      <td>${boolBadge(c.available)}</td>
+      <td>${boolBadge(c.actual, 'ON', 'OFF')}</td>
+      <td>${boolBadge(c.expected, 'ON', 'OFF')}</td>
+      <td>${boolBadge(c.confirmed)}</td>
+      <td>${boolBadge(c.pending)}</td>
+      <td>${boolBadge(c.mismatch)}</td>
+      <td>${boolBadge(c.timeout)}</td>
+      <td>${c.faultLatched ? `<span class="badge err">${textToHtml(c.fault || 'fault')}</span>` : '<span class="badge ok">none</span>'}</td>
+      <td>${textToHtml(c.note || '—')}</td>
+    </tr>`).join('');
+}
+function renderLog() {
+  const host = $('logBox');
+  const entries = Array.isArray(state.log) ? [...state.log].reverse() : [];
+  host.innerHTML = entries.length ? entries.map(item => {
+    const vals = ['T1','T2','T3','dT'].map(key => `${key}=${item[key] === null || typeof item[key] === 'undefined' ? '—' : Number(item[key]).toFixed(2)}`).join(' · ');
+    return `
+      <div class="log-item">
+        <div class="log-top"><div class="log-time">${textToHtml(item.t || '—')}</div><div class="log-ev">${textToHtml(item.e || '—')}</div></div>
+        <div class="log-val">${textToHtml(vals)}</div>
+      </div>`;
+  }).join('') : '<div class="muted">журнал пуст</div>';
+}
+function renderRawState() {
+  $('rawState').textContent = pretty(state.deviceState);
+}
+function syncEditorsFromState() {
+  const sensors = state.deviceState?.sensors || [];
+  const byId = Object.fromEntries(sensors.map(sensor => [sensor.id, sensor]));
+  const current = byId[$('cfgSensor')?.value];
+  if (current) {
+    $('cfgEnabled').checked = !!current.enabled;
+    $('cfgPeriod').value = current.periodMs ?? '';
+    $('cfgAlarmDelay').value = current.alarmDelayMs ?? '';
+    $('cfgCtrlDelay').value = current.ctrlDelayMs ?? '';
+  }
+}
+async function refreshStateOnly() {
+  const res = await requestJSON('/api/v1/state');
+  if (res.ok && res.data && typeof res.data === 'object') {
+    state.deviceState = res.data;
+    renderSummary();
+    renderSensors();
+    renderOutputs();
+    renderConfirmations();
+    renderRawState();
+    syncEditorsFromState();
+    setConn(true, 'связь OK', `${baseUrl()} · ${res.ms} ms · state`);
+  } else {
+    setConn(false, 'ошибка state', `${baseUrl()} · ${res.status || 'ERR'} · ${res.text}`);
+  }
+  return res;
+}
+async function refreshEverything() {
+  const [stateRes, infoRes, diagRes, schemaRes, logRes] = await Promise.all([
+    refreshStateOnly(),
+    requestJSON('/api/v1/info'),
+    requestJSON('/api/v1/diag'),
+    requestJSON('/api/v1/schema'),
+    refreshLog()
+  ]);
+  if (infoRes.ok) state.info = infoRes.data;
+  if (diagRes.ok) state.diag = diagRes.data;
+  if (schemaRes.ok) state.schema = schemaRes.data;
+  renderSummary();
+  fillSelects(getSensorIds(), getOutputIds());
+  return { stateRes, infoRes, diagRes, schemaRes, logRes };
+}
+function startPolling() {
+  stopPolling();
+  state.polling = true;
+  state.pollInterval = Number($('pollInterval').value || 1000);
+  $('btnPoll').textContent = 'Стоп опроса';
+  $('btnPoll').classList.add('primary');
+  state.timer = setInterval(async () => {
+    state.counters.tick += 1;
+    await refreshStateOnly();
+    if (state.counters.tick % 3 === 0) await refreshLog();
+    if (state.counters.tick % 5 === 0) {
+      const infoRes = await requestJSON('/api/v1/info');
+      if (infoRes.ok) state.info = infoRes.data;
+      const diagRes = await requestJSON('/api/v1/diag');
+      if (diagRes.ok) state.diag = diagRes.data;
+      renderSummary();
+    }
+  }, state.pollInterval);
+}
+function stopPolling() {
+  state.polling = false;
+  $('btnPoll').textContent = 'Старт опроса';
+  $('btnPoll').classList.remove('primary');
+  if (state.timer) clearInterval(state.timer);
+  state.timer = null;
+}
+function togglePolling() {
+  if (state.polling) stopPolling();
+  else startPolling();
+}
+async function runQuick(path, label = path) {
+  const res = await requestJSON(path);
+  pushQuickResult(label, res);
+  return res;
+}
+function buildCurl(method, path, payloadText) {
+  const url = apiUrl(path);
+  const safe = payloadText?.trim();
+  let out = `curl -X ${method} "${url}"`;
+  if (method !== 'GET' && method !== 'OPTIONS') out += ' -H "Content-Type: application/json"';
+  if (safe && method !== 'GET' && method !== 'DELETE' && method !== 'OPTIONS') out += ` -d '${safe.replace(/'/g, "'\\''")}'`;
+  return out;
+}
+async function sendRawApi() {
+  const method = $('apiMethod').value;
+  const path = $('apiPath').value.trim() || '/api/v1/state';
+  const payloadText = $('apiPayload').value.trim();
+  $('apiCurl').textContent = buildCurl(method, path, payloadText);
+  const opts = { method };
+  if (payloadText && !['GET','DELETE','OPTIONS'].includes(method)) {
+    opts.headers = { 'Content-Type': 'application/json' };
+    opts.body = payloadText;
+  }
+  const res = await requestJSON(path, opts);
+  $('responseMeta').innerHTML = `
+    <span class="badge ${res.ok ? 'ok' : 'err'}">status ${res.status || 'ERR'}</span>
+    <span class="badge">${res.ms} ms</span>
+    <span class="badge">${textToHtml(method)}</span>
+    <span class="badge">${textToHtml(path)}</span>`;
+  $('apiResponse').textContent = typeof res.data === 'string' ? res.data : pretty(res.data);
+  if (res.ok && path === '/api/v1/state') {
+    state.deviceState = res.data;
+    renderSummary();
+    renderSensors();
+    renderOutputs();
+    renderConfirmations();
+    renderRawState();
+  }
+}
+function applyApiTemplate(kind) {
+  if (kind === 'state') {
+    $('apiMethod').value = 'GET';
+    $('apiPath').value = '/api/v1/state';
+    $('apiPayload').value = '';
+  } else if (kind === 'info') {
+    $('apiMethod').value = 'GET';
+    $('apiPath').value = '/api/v1/info';
+    $('apiPayload').value = '';
+  } else if (kind === 'diag') {
+    $('apiMethod').value = 'GET';
+    $('apiPath').value = '/api/v1/diag';
+    $('apiPayload').value = '';
+  } else if (kind === 'emu') {
+    $('apiMethod').value = 'POST';
+    $('apiPath').value = '/api/v1/emu/set';
+    $('apiPayload').value = pretty(collectEmuPayload());
+  } else if (kind === 'manual') {
+    $('apiMethod').value = 'POST';
+    $('apiPath').value = '/api/v1/output/CH1/manual';
+    $('apiPayload').value = pretty({ state: true });
+  }
+  $('apiCurl').textContent = buildCurl($('apiMethod').value, $('apiPath').value, $('apiPayload').value.trim());
+}
+function savePreset() {
+  localStorage.setItem(PRESET_KEY, JSON.stringify(collectEmuPayload()));
+  pushQuickResult('preset', { status: 200, ok: true, ms: 0, data: { saved: true } });
+}
+function loadPreset() {
+  const raw = localStorage.getItem(PRESET_KEY);
+  if (!raw) return;
+  try {
+    const payload = JSON.parse(raw);
+    renderEmuControls(payload);
+    saveSettings();
+    pushQuickResult('preset', { status: 200, ok: true, ms: 0, data: { loaded: true, payload } });
+  } catch (_) {}
+}
+async function copyRawState() {
+  try {
+    await navigator.clipboard.writeText($('rawState').textContent);
+    pushQuickResult('clipboard', { status: 200, ok: true, ms: 0, data: { copied: true } });
+  } catch (error) {
+    pushQuickResult('clipboard', { status: 0, ok: false, ms: 0, data: { error: String(error) } });
+  }
+}
+function bindEvents() {
+  $('btnPoll').addEventListener('click', togglePolling);
+  $('btnRefreshAll').addEventListener('click', refreshEverything);
+  $('btnSendEmu').addEventListener('click', sendEmuSet);
+  $('btnEmuDefaults').addEventListener('click', applyEmuDefaults);
+  $('btnPresetSave').addEventListener('click', savePreset);
+  $('btnPresetLoad').addEventListener('click', loadPreset);
+  $('btnMuteOn').addEventListener('click', () => postMute(true));
+  $('btnMuteOff').addEventListener('click', () => postMute(false));
+  $('btnStopMain').addEventListener('click', () => setStopLatched(true));
+  $('btnStopRelease').addEventListener('click', () => setStopLatched(false));
+  $('btnSafetyReset').addEventListener('click', safetyReset);
+  $('btnLogRefresh').addEventListener('click', refreshLog);
+  $('btnLogClear').addEventListener('click', clearLog);
+  $('btnSyncTime').addEventListener('click', syncTime);
+  $('btnStopAll').addEventListener('click', offAllOutputs);
+  $('btnApplyConfig').addEventListener('click', applySensorConfig);
+  $('btnApplyAlarm').addEventListener('click', applyAlarm);
+  $('btnApplyCtrl').addEventListener('click', applyCtrl);
+  $('btnWifiScan').addEventListener('click', wifiScan);
+  $('btnWifiStatus').addEventListener('click', () => runQuick('/api/v1/info', 'GET /api/v1/info'));
+  $('btnWifiConnect').addEventListener('click', wifiConnect);
+  $('btnWifiAp').addEventListener('click', wifiAp);
+  $('btnHealth').addEventListener('click', async () => pushQuickResult('GET /api/v1/health', await requestJSON('/api/v1/health')));
+  $('btnInfo').addEventListener('click', async () => { const r = await requestJSON('/api/v1/info'); if (r.ok) state.info = r.data; renderSummary(); pushQuickResult('GET /api/v1/info', r); });
+  $('btnDiag').addEventListener('click', async () => { const r = await requestJSON('/api/v1/diag'); if (r.ok) state.diag = r.data; renderSummary(); pushQuickResult('GET /api/v1/diag', r); });
+  $('btnSchema').addEventListener('click', async () => { const r = await requestJSON('/api/v1/schema'); if (r.ok) { state.schema = r.data; fillSelects(getSensorIds(), getOutputIds()); renderSummary(); } pushQuickResult('GET /api/v1/schema', r); });
+  $('btnSendApi').addEventListener('click', sendRawApi);
+  $('btnCopyState').addEventListener('click', copyRawState);
+  $('cfgSensor').addEventListener('change', syncEditorsFromState);
+  $('pollInterval').addEventListener('change', () => { saveSettings(); if (state.polling) startPolling(); });
+  $('baseUrl').addEventListener('change', async () => { saveSettings(); await refreshEverything(); });
+  ['state','info','diag','emu','manual'].forEach(kind => document.querySelectorAll(`[data-template="${kind}"]`).forEach(btn => btn.addEventListener('click', () => applyApiTemplate(kind))));
+  document.querySelectorAll('[data-scenario]').forEach(btn => btn.addEventListener('click', () => sendScenario(btn.dataset.scenario)));
+}
+async function boot() {
+  loadSettings();
+  bindEvents();
+  applyApiTemplate('state');
+  fillSelects();
+  await refreshEverything();
+  startPolling();
+}
+boot();
+</script>
+</body>
+</html>

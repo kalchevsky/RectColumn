@@ -1,0 +1,7 @@
+AsyncTCP
+ESP Async WebServer
+ArduinoJson
+OneWire
+DallasTemperature
+Adafruit BMP085 Library
+Adafruit Unified Sensor
