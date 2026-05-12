@@ -243,22 +243,26 @@ void loop() {
     outputMgr.loop(sensorMgr);
     logOutputTransitions();
 
-    confirmMgr.loop(outputMgr, sensorMgr, &eventLog);
+    if (!outputMgr.mainStopLatched()) {
+        confirmMgr.loop(outputMgr, sensorMgr, &eventLog);
 
-    bool relayFeedbackOn[OUT_COUNT] = {};
-    bool relayFeedbackAvailable[OUT_COUNT] = {};
-    for (uint8_t i = 0; i < 4; i++) {
-        const ConfirmationChannel& c = confirmMgr.get(i);
-        if (c.outputIdx < OUT_COUNT) {
-            relayFeedbackAvailable[c.outputIdx] = c.available;
-            relayFeedbackOn[c.outputIdx] = c.actual;
+        bool relayFeedbackOn[OUT_COUNT] = {};
+        bool relayFeedbackAvailable[OUT_COUNT] = {};
+        for (uint8_t i = 0; i < 4; i++) {
+            const ConfirmationChannel& c = confirmMgr.get(i);
+            if (c.outputIdx < OUT_COUNT) {
+                relayFeedbackAvailable[c.outputIdx] = c.available;
+                relayFeedbackOn[c.outputIdx] = c.actual;
+            }
         }
-    }
-    outputMgr.updateRelayCommandFeedback(relayFeedbackOn, relayFeedbackAvailable,
-                                         &eventLog, &sensorMgr);
+        outputMgr.updateRelayCommandFeedback(relayFeedbackOn, relayFeedbackAvailable,
+                                             &eventLog, &sensorMgr);
 
-    processSafety.loop();
-    outputMgr.setSafetyAlarmActive(processSafety.safetyAlarmActive());
+        processSafety.loop();
+        outputMgr.setSafetyAlarmActive(processSafety.safetyAlarmActive());
+    } else {
+        outputMgr.setSafetyAlarmActive(false);
+    }
     remoteNotifier.loop();
 
     if (outputMgr.consumeManualStateDirty()) {

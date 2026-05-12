@@ -145,11 +145,14 @@ class Sensor:
                 mask |= 1 << i
         return mask
 
-    def eval_ctrl(self, out_idx: int) -> int:
+    def eval_ctrl(self, out_idx: int, control_gate: bool = True) -> int:
         rule = self.ctrl.get(out_idx)
         if not rule or not rule.enabled or rule.out_idx != out_idx:
             return 0
         rule.validate()
+
+        if not control_gate:
+            return 0
 
         if not self.usable():
             if rule.fail_safe in (FailSafeMode.FORCE_OFF, FailSafeMode.LATCH_FAULT):
@@ -180,7 +183,7 @@ def normalize_lf_off_only(rule: CtrlRule, out_idx: int) -> CtrlRule:
         logic=LOGIC_COOL,
         min_val=0.5,
         max_val=2.0,
-        fail_safe=FailSafeMode.FORCE_OFF,
+        fail_safe=FailSafeMode.NEUTRAL,
         on_delay_ms=0,
         off_delay_ms=rule.off_delay_ms,
     )
@@ -363,19 +366,26 @@ class DigitalLFTests(unittest.TestCase):
         self.assertEqual(low.eval_ctrl(OUT_CH1), -1)
         self.assertEqual(high.eval_ctrl(OUT_CH1), 0)
 
-    def test_lf_missing_sensor_is_fail_safe_off(self):
+    def test_lf_missing_sensor_is_neutral(self):
         rule = normalize_lf_off_only(CtrlRule(enabled=True), OUT_CH1)
         lost = Sensor(present=False, value=math.nan)
         lost.ctrl[OUT_CH1] = rule
-        self.assertEqual(lost.eval_ctrl(OUT_CH1), -1)
+        self.assertEqual(lost.eval_ctrl(OUT_CH1), 0)
+
+    def test_flow_rule_is_ignored_while_output_is_off(self):
+        rule = normalize_lf_off_only(CtrlRule(enabled=True), OUT_CH1)
+        flow = Sensor(value=0.0)
+        flow.ctrl[OUT_CH1] = rule
+        self.assertEqual(flow.eval_ctrl(OUT_CH1, control_gate=False), 0)
+        self.assertEqual(flow.eval_ctrl(OUT_CH1, control_gate=True), -1)
 
 
 class SensorFaultAndAlarmTests(unittest.TestCase):
-    def test_analog_control_sensor_error_forces_off(self):
+    def test_analog_control_sensor_error_is_neutral(self):
         t1 = Sensor(present=False, error=True, value=math.nan)
         t1.ctrl[OUT_CH1] = CtrlRule(True, OUT_CH1, LOGIC_HEAT, 70, 80,
-                                    fail_safe=FailSafeMode.FORCE_OFF)
-        self.assertEqual(t1.eval_ctrl(OUT_CH1), -1)
+                                    fail_safe=FailSafeMode.NEUTRAL)
+        self.assertEqual(t1.eval_ctrl(OUT_CH1), 0)
 
     def test_nan_error_raises_first_enabled_alarm_slot(self):
         t1 = Sensor(present=False, error=True, value=math.nan,
@@ -443,6 +453,8 @@ class SourceGuardTests(unittest.TestCase):
         cls.sensors_h = (cls.root / "Sensors.h").read_text(encoding="utf-8", errors="ignore")
         cls.confirm_h = (cls.root / "ConfirmationManager.h").read_text(encoding="utf-8", errors="ignore")
         cls.process_h = (cls.root / "ProcessSafety.h").read_text(encoding="utf-8", errors="ignore")
+        cls.output_mgr_h = (cls.root / "OutputManager.h").read_text(encoding="utf-8", errors="ignore")
+        cls.main_ino = (cls.root / "RectColumn.ino").read_text(encoding="utf-8", errors="ignore")
 
     def define_int(self, name: str) -> int:
         m = re.search(rf"^\s*#define\s+{name}\s+(-?\d+)\b", self.config_h, re.MULTILINE)
@@ -482,6 +494,18 @@ class SourceGuardTests(unittest.TestCase):
         self.assertRegex(self.config_h, r"#define\s+SAFETY_MODE_SENSOR_STOP\s+(false|true|0|1)")
         self.assertIn("_applySensorStopIfEnabled", self.process_h)
         self.assertIn("if (!SAFETY_MODE_SENSOR_STOP) return;", self.process_h)
+
+    def test_output_manager_has_global_stop_short_circuit(self):
+        self.assertIn("if (_mainStopLatched)", self.output_mgr_h)
+        self.assertIn("_applyGlobalStop();", self.output_mgr_h)
+        self.assertIn("invalidMeansOff = false;", self.output_mgr_h)
+
+    def test_flow_rule_is_gated_by_previous_output_state(self):
+        self.assertIn("controlGate = prevState[outIdx];", self.output_mgr_h)
+
+    def test_main_loop_skips_confirmation_and_safety_while_stop_is_active(self):
+        self.assertIn("if (!outputMgr.mainStopLatched())", self.main_ino)
+        self.assertIn("outputMgr.setSafetyAlarmActive(false);", self.main_ino)
 
 
 if __name__ == "__main__":

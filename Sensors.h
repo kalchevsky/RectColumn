@@ -160,7 +160,7 @@ public:
         return threshold;
     }
 
-    int evalCtrl(uint8_t outIdx) {
+    int evalCtrl(uint8_t outIdx, bool invalidMeansOff = true, bool controlGate = true) {
         if (outIdx >= N_CTRL_OUT) return 0;
 
         const CtrlRule& r = ctrl[outIdx];
@@ -170,10 +170,16 @@ public:
             return 0;
         }
 
+        if (!controlGate) {
+            _ctrlCandidateCmd[outIdx] = 0;
+            _ctrlCandidateSinceMs[outIdx] = 0;
+            return 0;
+        }
+
         if (!hasUsableValue()) {
             _ctrlCandidateCmd[outIdx] = 0;
             _ctrlCandidateSinceMs[outIdx] = 0;
-            return -1;
+            return invalidMeansOff ? -1 : 0;
         }
 
         const float minVal = effectiveThreshold(r.minVal);

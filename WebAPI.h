@@ -1031,15 +1031,17 @@ private:
         _om->setMainStopLatched(true);
         _stor->saveOutputs(*_om);
 
-        _log->add("STOP активирован: CH1-CH3 запрещены, ручное включение заблокировано",
+        _log->add("STOP активирован: все выходы выключены, логика CH1-CH3 пропущена до снятия STOP",
                   _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
 
-        DynamicJsonDocument resp(384);
+        DynamicJsonDocument resp(448);
         resp["ok"] = true;
         resp["stopLatched"] = _om->mainStopLatched();
         resp["ch1"] = _om->out[OUT_CH1]->actualOn();
         resp["ch2"] = _om->out[OUT_CH2]->actualOn();
         resp["ch3"] = _om->out[OUT_CH3]->actualOn();
+        resp["ch4"] = _om->out[OUT_CH4]->actualOn();
+        resp["ch5"] = _om->out[OUT_CH5]->actualOn();
         _sendDoc(req, 200, resp);
     }
 
@@ -1047,7 +1049,7 @@ private:
         _om->setMainStopLatched(false);
         _stor->saveOutputs(*_om);
 
-        _log->add("STOP снят: автоматике и ручным командам снова разрешено включать CH1-CH3",
+        _log->add("STOP снят: логика CH1-CH3 будет заново рассчитана в следующем цикле",
                   _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
 
         DynamicJsonDocument resp(384);

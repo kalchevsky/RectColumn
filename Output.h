@@ -125,6 +125,14 @@ public:
         _cmdSentAt = 0;
     }
 
+    void clearTransientOverrides() {
+        _pulseActive = false;
+        _pulseUntilMs = 0;
+        _bellPatternActive = false;
+        _bellPhaseOn = false;
+        _bellPhaseStartedMs = 0;
+    }
+
     RelayCommand command() const { return _cmd; }
     bool commandPending() const { return _cmd != CMD_NONE; }
     uint32_t commandSentAt() const { return _cmdSentAt; }

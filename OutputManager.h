@@ -85,31 +85,35 @@ public:
         out[OUT_CH4]->enabled = ch4Enabled;
         out[OUT_CH5]->enabled = ch5Enabled;
 
-        for (int si = 0; si < SEN_COUNT; si++) {
-            SensorBase* sen = sm.s[si];
-            if (!sen || !sen->enabled) continue;
+        if (_mainStopLatched) {
+            _applyGlobalStop();
+        } else {
+            for (int si = 0; si < SEN_COUNT; si++) {
+                SensorBase* sen = sm.s[si];
+                if (!sen || !sen->enabled) continue;
+
+                for (int oi = 0; oi < OUT_COUNT; oi++) {
+                    const int cmd = _sensorCommandForOutput(sm, prevState, (uint8_t)si, (uint8_t)oi);
+                    if (cmd == 1) newWant[oi] |= (1u << si);
+                    else if (cmd == -1) newForbid[oi] |= (1u << si);
+                }
+            }
+
+            const bool anyUnackedAlarm = hasUnackedAlarms(sm);
+            const bool soundRequired = anyUnackedAlarm || _safetyAlarmActive;
+
+            if (ch5Enabled && !soundMuted && soundRequired) {
+                newWant[OUT_CH5] |= (1u << RULEIDX_SOUND);
+            }
 
             for (int oi = 0; oi < OUT_COUNT; oi++) {
-                const int cmd = sen->evalCtrl(oi);
-                if (cmd == 1) newWant[oi] |= (1u << si);
-                else if (cmd == -1) newForbid[oi] |= (1u << si);
+                _lastForbid[oi] = newForbid[oi];
+                _lastWant[oi]   = newWant[oi];
+                _applyCurrent((uint8_t)oi);
             }
+
+            out[OUT_CH4]->setBellPatternActive(ch4Enabled && !soundMuted && soundRequired);
         }
-
-        const bool anyUnackedAlarm = hasUnackedAlarms(sm);
-        const bool soundRequired = anyUnackedAlarm || _safetyAlarmActive || _mainStopLatched;
-
-        if (ch5Enabled && !soundMuted && soundRequired) {
-            newWant[OUT_CH5] |= (1u << RULEIDX_SOUND);
-        }
-
-        for (int oi = 0; oi < OUT_COUNT; oi++) {
-            _lastForbid[oi] = newForbid[oi];
-            _lastWant[oi]   = newWant[oi];
-            _applyCurrent((uint8_t)oi);
-        }
-
-        out[OUT_CH4]->setBellPatternActive(ch4Enabled && !soundMuted && soundRequired);
 
         for (int i = 0; i < OUT_COUNT; i++) {
             if (out[i]->loop()) changed |= (1u << i);
@@ -267,17 +271,11 @@ public:
         _mainStopLatched = active;
 
         if (active) {
+            _applyGlobalStop();
+        } else {
             for (uint8_t oi = OUT_CH1; oi <= OUT_CH3; oi++) {
-                if (out[oi]->manualWant()) {
-                    out[oi]->restoreManualWant(false);
-                    _manualStateDirty = true;
-                }
-                if (out[oi]->commandPending()) out[oi]->clearCommand();
+                _applyCurrent(oi);
             }
-        }
-
-        for (uint8_t oi = OUT_CH1; oi <= OUT_CH3; oi++) {
-            _applyCurrent(oi);
         }
 
         if (changed) _manualStateDirty = true;
@@ -500,6 +498,59 @@ public:
 private:
     static bool _isMainOutput(uint8_t outIdx) {
         return outIdx == OUT_CH1 || outIdx == OUT_CH2 || outIdx == OUT_CH3;
+    }
+
+    int _sensorCommandForOutput(const SensorManager& sm, const bool prevState[OUT_COUNT],
+                                uint8_t sensorIdx, uint8_t outIdx)
+    {
+        SensorBase* sen = sm.s[sensorIdx];
+        if (!sen) return 0;
+
+        bool invalidMeansOff = true;
+        bool controlGate = true;
+        if (_isMainOutput(outIdx) && SensorManager::isSchemeControlSensorIndex(sensorIdx)) {
+            invalidMeansOff = false;
+            if (sensorIdx == SEN_F) {
+                controlGate = prevState[outIdx];
+            }
+        }
+
+        return sen->evalCtrl(outIdx, invalidMeansOff, controlGate);
+    }
+
+    void _applyGlobalStop() {
+        bool dirty = false;
+
+        for (uint8_t oi = 0; oi < OUT_COUNT; oi++) {
+            _lastForbid[oi] = 0;
+            _lastWant[oi] = 0;
+
+            if (_operatorHoldOff[oi]) {
+                _operatorHoldOff[oi] = false;
+                dirty = true;
+            }
+
+            if (out[oi]->manualWant()) {
+                out[oi]->restoreManualWant(false);
+                dirty = true;
+            }
+
+            if (out[oi]->commandPending()) out[oi]->clearCommand();
+            out[oi]->clearTransientOverrides();
+            _lastCmdError[oi] = RELAY_CMDERR_NONE;
+            _lastCmdErrorMs[oi] = 0;
+            _lastCmdDetail[oi] = "";
+
+            if (!_begun) continue;
+
+            if (_isMainOutput(oi)) {
+                out[oi]->applyResolvedHold(_effectiveForbidMask(oi), 0);
+            } else {
+                out[oi]->applyResolved(0, 0);
+            }
+        }
+
+        if (dirty) _manualStateDirty = true;
     }
 
     bool _relayCommandAllowed(uint8_t outIdx, bool targetOn, const char*& reason) const {

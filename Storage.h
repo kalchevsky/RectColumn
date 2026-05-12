@@ -461,7 +461,7 @@ private:
         blob.manualMain[0] = om.manualWanted(OUT_CH1) ? 1 : 0;
         blob.manualMain[1] = om.manualWanted(OUT_CH2) ? 1 : 0;
         blob.manualMain[2] = om.manualWanted(OUT_CH3) ? 1 : 0;
-        blob.stopMainLatched = om.mainStopLatched() ? 1 : 0;
+        blob.stopMainLatched = 0;
         blob.operatorHoldOffMain[0] = om.operatorHoldOff(OUT_CH1) ? 1 : 0;
         blob.operatorHoldOffMain[1] = om.operatorHoldOff(OUT_CH2) ? 1 : 0;
         blob.operatorHoldOffMain[2] = om.operatorHoldOff(OUT_CH3) ? 1 : 0;
@@ -485,7 +485,7 @@ private:
         om.restoreManualState(OUT_CH1, blob.manualMain[0] != 0);
         om.restoreManualState(OUT_CH2, blob.manualMain[1] != 0);
         om.restoreManualState(OUT_CH3, blob.manualMain[2] != 0);
-        om.restoreMainStopLatched(blob.stopMainLatched != 0);
+        om.restoreMainStopLatched(false);
         om.restoreOperatorHoldOff(OUT_CH1, blob.operatorHoldOffMain[0] != 0);
         om.restoreOperatorHoldOff(OUT_CH2, blob.operatorHoldOffMain[1] != 0);
         om.restoreOperatorHoldOff(OUT_CH3, blob.operatorHoldOffMain[2] != 0);

@@ -24,11 +24,14 @@ class CtrlRule:
     maxVal: float = 100.0
 
 
-def eval_ctrl(value, present, error, rule: CtrlRule, out_idx: int, elapsed_ms=0, delay_ms=0):
+def eval_ctrl(value, present, error, rule: CtrlRule, out_idx: int,
+              elapsed_ms=0, delay_ms=0, invalid_means_off=True, control_gate=True):
     if out_idx != rule.outIdx or not rule.enabled:
         return 0
+    if not control_gate:
+        return 0
     if not present or error or value is None:
-        return -1
+        return -1 if invalid_means_off else 0
     cmd = 0
     if rule.logic == LOGIC_HEAT:
         if value < rule.minVal:
@@ -134,6 +137,14 @@ def test_digital(sensor_name):
     assert_seq(sensor_name, seq, [(0, True), (0, True), (-1, False), (0, False)])
 
 
+def test_flow_requires_output_on():
+    r = normalize_lf(CtrlRule(True, OUT_CH1, LOGIC_HEAT, 0.0, 100.0), OUT_CH1)
+    cmd_off = eval_ctrl(0.0, True, False, r, OUT_CH1, elapsed_ms=6000, delay_ms=5000, control_gate=False)
+    cmd_on = eval_ctrl(0.0, True, False, r, OUT_CH1, elapsed_ms=6000, delay_ms=5000, control_gate=True)
+    assert_seq("Flow gate OFF", cmd_off, 0)
+    assert_seq("Flow gate ON", cmd_on, -1)
+
+
 def test_lf_mode_isolation():
     lf = normalize_lf(CtrlRule(True, OUT_CH1, LOGIC_HEAT, 0.0, 100.0), OUT_CH1)
     for channel_logic in (LOGIC_HEAT, LOGIC_COOL, LOGIC_HEAT):
@@ -176,11 +187,11 @@ def test_manual_command():
     print("OK manual command")
 
 
-def test_control_sensor_failure_forbids():
+def test_control_sensor_failure_is_neutral():
     r = CtrlRule(True, OUT_CH1, LOGIC_HEAT, 70.0, 80.0)
-    assert_seq("sensor NAN fail-safe", eval_ctrl(None, True, False, r, OUT_CH1), -1)
-    assert_seq("sensor absent fail-safe", eval_ctrl(75.0, False, False, r, OUT_CH1), -1)
-    assert_seq("sensor error fail-safe", eval_ctrl(75.0, True, True, r, OUT_CH1), -1)
+    assert_seq("sensor NAN neutral", eval_ctrl(None, True, False, r, OUT_CH1, invalid_means_off=False), 0)
+    assert_seq("sensor absent neutral", eval_ctrl(75.0, False, False, r, OUT_CH1, invalid_means_off=False), 0)
+    assert_seq("sensor error neutral", eval_ctrl(75.0, True, True, r, OUT_CH1, invalid_means_off=False), 0)
 
 
 def test_scheme_excludes_extended_sensors():
@@ -197,10 +208,11 @@ def main():
     test_cool_hysteresis()
     test_digital("Digital L")
     test_digital("Digital F")
+    test_flow_requires_output_on()
     test_lf_mode_isolation()
     test_storage_migration()
     test_manual_command()
-    test_control_sensor_failure_forbids()
+    test_control_sensor_failure_is_neutral()
     test_scheme_excludes_extended_sensors()
 
 
