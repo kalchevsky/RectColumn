@@ -16,7 +16,7 @@
 #define SERIAL_DEBUG_SENSOR_SNAPSHOT  0
 
 // ─── Версия прошивки / API ───────────────────────────────────────
-#define FW_VERSION      "1.6.23"
+#define FW_VERSION      "1.6.24"
 #define API_VERSION     "v1"
 #define AP_SSID_DEF     "Control_System"
 #define DEVICE_NAME     "RectColumn"
@@ -83,8 +83,8 @@
 
 // ─── Выходные пины ───────────────────────────────────────────────
 #define PIN_CH1   26   // CH1: реле 220
-#define PIN_CH2   33   // CH2: клапан 2
-#define PIN_CH3   25   // CH3: клапан 1
+#define PIN_CH2   25   // CH2: клапан 2
+#define PIN_CH3   33   // CH3: клапан 1
 #define PIN_CH4   32   // CH4: внешний звонок
 #define PIN_CH5   13   // CH5: встроенный буззер
 #define PIN_WIFI_LED 4 // LED индикации WiFi
@@ -116,9 +116,13 @@ static_assert(PIN_V != PIN_WER_CH4, "PIN_V conflicts with WER_CH4");
 #define WIFI_LED_BLINK_MS 500UL
 
 // ─── Тайминги входов подтверждения ───────────────────────────────
-#define WER_DEBOUNCE_MS        80UL
-#define WER_CONFIRM_TIMEOUT_MS 1000UL
-#define RELAY_CONFIRM_TIMEOUT_MS 1000UL
+#define WER_DEBOUNCE_MS            80UL
+#define RELAY_CONFIRM_TIMEOUT_MS   1000UL
+#define RELAY_CONFIRM_TIMEOUT_CH1_MS 1000UL
+#define RELAY_CONFIRM_TIMEOUT_CH2_MS 5000UL   // клапан 2: подтверждение приходит заметно медленнее реле CH1
+#define RELAY_CONFIRM_TIMEOUT_CH3_MS 5000UL   // клапан 1: подтверждение приходит заметно медленнее реле CH1
+#define RELAY_CONFIRM_TIMEOUT_CH4_MS 1000UL
+#define WER_CONFIRM_TIMEOUT_MS     RELAY_CONFIRM_TIMEOUT_MS
 
 // ─── Жёсткие таймеры safety-слоя ────────────────────────────────
 // Эти значения не редактируются через API и не зависят от ctrlDelayMs.
@@ -144,6 +148,7 @@ static_assert(PIN_V != PIN_WER_CH4, "PIN_V conflicts with WER_CH4");
 // ─── WiFi / переподключение ──────────────────────────────────────
 #define WIFI_CONNECT_TIMEOUT_MS      12000UL
 #define WIFI_RECONNECT_COOLDOWN_MS   30000UL
+#define WIFI_SCAN_RECONNECT_PAUSE_MS 15000UL
 #define WIFI_RSSI_WARN_DBM           -75
 
 // ─── Журнал событий ──────────────────────────────────────────────

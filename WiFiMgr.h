@@ -129,6 +129,7 @@ public:
         }
 
         if (!isConn && staSSID.length() > 0 &&
+            !_reconnectPaused() &&
             (millis() - _lastReconnectMs >= WIFI_RECONNECT_COOLDOWN_MS)) {
             _lastReconnectMs = millis();
             _connectSTA();
@@ -136,7 +137,29 @@ public:
     }
 
     void fillScan(JsonArray arr) {
-        const int n = WiFi.scanNetworks(false, true);
+        const bool hadReconnect = WiFi.getAutoReconnect();
+        const bool reconnectingToStoredAp = (staSSID.length() > 0) && !staConnected;
+
+        _pauseStaReconnect(WIFI_SCAN_RECONNECT_PAUSE_MS);
+        WiFi.setAutoReconnect(false);
+        if (reconnectingToStoredAp) {
+            WiFi.disconnect(false, false);
+            delay(150);
+        }
+
+        WiFi.scanDelete();
+        delay(50);
+
+        int n = WiFi.scanNetworks(false, true);
+        if (n == WIFI_SCAN_FAILED && reconnectingToStoredAp) {
+            delay(250);
+            WiFi.scanDelete();
+            n = WiFi.scanNetworks(false, true);
+        }
+
+        _scanEverRun = true;
+        _lastScanStatus = n;
+        _lastScanCount = 0;
         for (int i = 0; i < n; i++) {
             const String ssid = WiFi.SSID(i);
             if (ssid.length() == 0) continue;
@@ -146,8 +169,10 @@ public:
             it["rssi"]    = WiFi.RSSI(i);
             it["enc"]     = (int)WiFi.encryptionType(i);
             it["channel"] = WiFi.channel(i);
+            _lastScanCount++;
         }
         WiFi.scanDelete();
+        WiFi.setAutoReconnect(hadReconnect);
     }
 
     WifiConnectResult connectSTA(const String& ssid,
@@ -192,17 +217,20 @@ public:
         }
 
         // Не подменяем рабочую конфигурацию неудачной попыткой подключения.
+        WiFi.disconnect(false, false);
+        delay(100);
         staConnected = false;
+        _pauseStaReconnect(WIFI_SCAN_RECONNECT_PAUSE_MS);
+        _lastReconnectMs = millis();
         if (prevSSID.length() > 0) {
             staSSID = prevSSID;
             staPass = prevPass;
-            _connectSTA();
             _lastStatus = (int)WiFi.status();
-            _lastStatusText = statusText(_lastStatus);
+            _lastStatusText = res.statusText;
         } else {
             staSSID = "";
             staPass = "";
-            _lastStatus = (int)cur;
+            _lastStatus = (int)WiFi.status();
             _lastStatusText = res.statusText;
         }
 
@@ -229,6 +257,11 @@ public:
     int    apRssi() const { return (_apClientCount > 0) ? _apClientRssi : -127; }
     int    rssi() const { return staConnected ? staRssi() : apRssi(); }
     int    apClientCount() const { return _apClientCount; }
+    int    lastScanStatus() const { return _lastScanStatus; }
+    int    lastScanCount() const { return _lastScanCount; }
+    uint32_t reconnectPauseRemainingMs() const {
+        return _reconnectPaused() ? (uint32_t)(_reconnectPausedUntilMs - millis()) : 0UL;
+    }
 
     bool staConfigured() const { return staSSID.length() > 0; }
     bool apProtected() const { return apPass.length() > 0; }
@@ -236,6 +269,10 @@ public:
     bool apFallbackToOpen() const { return _apFallbackToOpen; }
     String apStatusText() const { return _apStatusText; }
     String staStatusText() const { return _lastStatusText; }
+    String lastScanStatusText() const {
+        if (!_scanEverRun) return "idle";
+        return scanStatusText(_lastScanStatus);
+    }
     int lastStatus() const { return _lastStatus; }
 
     static String statusText(int status) {
@@ -256,10 +293,18 @@ public:
         return statusText((int)s);
     }
 
+    static String scanStatusText(int status) {
+        if (status == WIFI_SCAN_RUNNING) return "WIFI_SCAN_RUNNING";
+        if (status == WIFI_SCAN_FAILED)  return "WIFI_SCAN_FAILED";
+        if (status >= 0) return String("OK_") + status;
+        return String("SCAN_") + status;
+    }
+
 private:
     DNSServer _dns;
     EventLog* _log = nullptr;
     uint32_t  _lastReconnectMs = 0;
+    uint32_t  _reconnectPausedUntilMs = 0;
     int       _lastStatus = WL_IDLE_STATUS;
     String    _lastStatusText = "idle";
     bool      _mdnsStarted = false;
@@ -269,6 +314,9 @@ private:
     uint32_t  _lastApSignalPollMs = 0;
     int       _apClientCount = 0;
     int       _apClientRssi = -127;
+    bool      _scanEverRun = false;
+    int       _lastScanStatus = 0;
+    int       _lastScanCount = 0;
 
     void _startAP() {
         _apRunning = false;
@@ -306,9 +354,19 @@ private:
     }
 
     void _connectSTA(const String& ssid, const String& pass) {
+        WiFi.scanDelete();
         WiFi.disconnect(false, false);
         delay(100);
         WiFi.begin(ssid.c_str(), pass.c_str());
+    }
+
+    bool _reconnectPaused() const {
+        return (int32_t)(millis() - _reconnectPausedUntilMs) < 0;
+    }
+
+    void _pauseStaReconnect(uint32_t durationMs) {
+        if (durationMs == 0) return;
+        _reconnectPausedUntilMs = millis() + durationMs;
     }
 
     void _ensureMDNSStarted() {

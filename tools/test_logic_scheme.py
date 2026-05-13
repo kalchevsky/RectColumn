@@ -454,10 +454,11 @@ class SourceGuardTests(unittest.TestCase):
         cls.confirm_h = (cls.root / "ConfirmationManager.h").read_text(encoding="utf-8", errors="ignore")
         cls.process_h = (cls.root / "ProcessSafety.h").read_text(encoding="utf-8", errors="ignore")
         cls.output_mgr_h = (cls.root / "OutputManager.h").read_text(encoding="utf-8", errors="ignore")
+        cls.wifi_mgr_h = (cls.root / "WiFiMgr.h").read_text(encoding="utf-8", errors="ignore")
         cls.main_ino = (cls.root / "RectColumn.ino").read_text(encoding="utf-8", errors="ignore")
 
     def define_int(self, name: str) -> int:
-        m = re.search(rf"^\s*#define\s+{name}\s+(-?\d+)\b", self.config_h, re.MULTILINE)
+        m = re.search(rf"^\s*#define\s+{name}\s+(-?\d+)(?:[uUlL]*)\b", self.config_h, re.MULTILINE)
         self.assertIsNotNone(m, f"missing #define {name}")
         return int(m.group(1))
 
@@ -466,6 +467,20 @@ class SourceGuardTests(unittest.TestCase):
         self.assertEqual(self.define_int("PIN_WER_CH2"), 35)
         self.assertEqual(self.define_int("PIN_WER_CH3"), 34)
         self.assertEqual(self.define_int("PIN_WER_CH4"), 36)
+
+    def test_output_pin_map_matches_current_board_wiring(self):
+        self.assertEqual(self.define_int("PIN_CH1"), 26)
+        self.assertEqual(self.define_int("PIN_CH2"), 25)
+        self.assertEqual(self.define_int("PIN_CH3"), 33)
+        self.assertEqual(self.define_int("PIN_CH4"), 32)
+        self.assertEqual(self.define_int("PIN_CH5"), 13)
+
+    def test_valve_channels_have_longer_confirmation_timeout_than_ch1(self):
+        self.assertEqual(self.define_int("RELAY_CONFIRM_TIMEOUT_CH1_MS"), 1000)
+        self.assertGreater(self.define_int("RELAY_CONFIRM_TIMEOUT_CH2_MS"),
+                           self.define_int("RELAY_CONFIRM_TIMEOUT_CH1_MS"))
+        self.assertGreater(self.define_int("RELAY_CONFIRM_TIMEOUT_CH3_MS"),
+                           self.define_int("RELAY_CONFIRM_TIMEOUT_CH1_MS"))
 
     def test_gpio35_mode_names_match_actual_shared_pin(self):
         # GPIO35 is shared with WER_CH2, not WER_CH3.
@@ -506,6 +521,12 @@ class SourceGuardTests(unittest.TestCase):
     def test_main_loop_skips_confirmation_and_safety_while_stop_is_active(self):
         self.assertIn("if (!outputMgr.mainStopLatched())", self.main_ino)
         self.assertIn("outputMgr.setSafetyAlarmActive(false);", self.main_ino)
+
+    def test_wifi_scan_pauses_reconnect_and_breaks_connect_loop(self):
+        self.assertIn("_pauseStaReconnect(WIFI_SCAN_RECONNECT_PAUSE_MS);", self.wifi_mgr_h)
+        self.assertIn("WiFi.disconnect(false, false);", self.wifi_mgr_h)
+        self.assertIn("WiFi.setAutoReconnect(false);", self.wifi_mgr_h)
+        self.assertIn("reconnectPauseRemainingMs", self.wifi_mgr_h)
 
 
 if __name__ == "__main__":

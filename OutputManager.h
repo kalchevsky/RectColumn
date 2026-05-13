@@ -222,7 +222,7 @@ public:
                 continue;
             }
 
-            if (now - out[oi]->commandSentAt() >= RELAY_CONFIRM_TIMEOUT_MS) {
+            if (now - out[oi]->commandSentAt() >= _relayConfirmTimeoutMs(oi)) {
                 if (cmd == CMD_ON) {
                     // Do not leave a delayed ON request after a failed confirmation.
                     // For stateful CH1..CH3, neutral hold would otherwise keep the
@@ -680,6 +680,16 @@ private:
             case OUT_CH3: return "WER_CH3";
             case OUT_CH4: return "WER_CH4";
             default:      return "WER";
+        }
+    }
+
+    static uint32_t _relayConfirmTimeoutMs(uint8_t outIdx) {
+        switch (outIdx) {
+            case OUT_CH1: return RELAY_CONFIRM_TIMEOUT_CH1_MS;
+            case OUT_CH2: return RELAY_CONFIRM_TIMEOUT_CH2_MS;
+            case OUT_CH3: return RELAY_CONFIRM_TIMEOUT_CH3_MS;
+            case OUT_CH4: return RELAY_CONFIRM_TIMEOUT_CH4_MS;
+            default:      return RELAY_CONFIRM_TIMEOUT_MS;
         }
     }
 

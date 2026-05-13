@@ -67,6 +67,7 @@ public:
             ConfirmationChannel& c = _ch[i];
             c.available = _isAvailable(i);
             c.note = _noteFor(i);
+            c.timeoutMs = _timeoutForOutput(c.outputIdx);
 
             if (c.available) {
                 if (_supportsInternalPulldown(c.pin)) pinMode(c.pin, INPUT_PULLDOWN);
@@ -99,6 +100,7 @@ public:
             ConfirmationChannel& c = _ch[i];
             c.available = _isAvailable(i);
             c.note = _noteFor(i);
+            c.timeoutMs = _timeoutForOutput(c.outputIdx);
 
             const bool prevMismatch = c.mismatch;
             const bool prevTimeout = c.timeout;
@@ -290,6 +292,16 @@ private:
 
     bool _supportsInternalPulldown(int8_t pin) const {
         return pin == PIN_WER_CH1;
+    }
+
+    uint32_t _timeoutForOutput(uint8_t outIdx) const {
+        switch (outIdx) {
+            case OUT_CH1: return RELAY_CONFIRM_TIMEOUT_CH1_MS;
+            case OUT_CH2: return RELAY_CONFIRM_TIMEOUT_CH2_MS;
+            case OUT_CH3: return RELAY_CONFIRM_TIMEOUT_CH3_MS;
+            case OUT_CH4: return RELAY_CONFIRM_TIMEOUT_CH4_MS;
+            default:      return RELAY_CONFIRM_TIMEOUT_MS;
+        }
     }
 
     bool _isAvailable(uint8_t idx) const {

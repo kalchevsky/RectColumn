@@ -1253,6 +1253,10 @@ private:
         root["staRssi"]    = _wifi->staRssi();
         root["apRssi"]     = _wifi->apRssi();
         root["apClientCount"] = _wifi->apClientCount();
+        root["lastScanStatus"] = _wifi->lastScanStatus();
+        root["lastScanStatusText"] = _wifi->lastScanStatusText();
+        root["lastScanCount"] = _wifi->lastScanCount();
+        root["reconnectPauseMs"] = _wifi->reconnectPauseRemainingMs();
         root["muted"]      = _om->soundMuted;
         root["ch4Enabled"] = _om->ch4Enabled;
         root["ch5Enabled"] = _om->ch5Enabled;
@@ -1278,6 +1282,7 @@ private:
         sta["ip"]         = _wifi->staIP();
         sta["rssi"]       = _wifi->staRssi();
         sta["statusText"] = _wifi->staStatusText();
+        sta["reconnectPauseMs"] = _wifi->reconnectPauseRemainingMs();
 
         ap["clientCount"] = _wifi->apClientCount();
         ap["rssi"]        = _wifi->apRssi();
@@ -1513,6 +1518,10 @@ private:
         root["apStatusText"] = _wifi->apStatusText();
         root["apClientCount"] = _wifi->apClientCount();
         root["apRssi"] = _wifi->apRssi();
+        root["lastScanStatus"] = _wifi->lastScanStatus();
+        root["lastScanStatusText"] = _wifi->lastScanStatusText();
+        root["lastScanCount"] = _wifi->lastScanCount();
+        root["reconnectPauseMs"] = _wifi->reconnectPauseRemainingMs();
         root["storageReady"] = (_stor ? _stor->ready() : false);
         root["storageRecovered"] = (_stor ? _stor->recovered() : false);
         root["storageStatus"] = (_stor ? _stor->statusText() : String("недоступно"));

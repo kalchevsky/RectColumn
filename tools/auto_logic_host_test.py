@@ -123,7 +123,7 @@ def test_cool_hysteresis():
     assert_seq("COOL hysteresis", states, [True, True, False, False, True])
 
 
-def test_digital(sensor_name):
+def _check_digital(sensor_name):
     r = normalize_lf(CtrlRule(True, OUT_CH1, LOGIC_HEAT, 0.0, 100.0), OUT_CH1)
     o = OutputHold()
     o.manual(True)
@@ -135,6 +135,14 @@ def test_digital(sensor_name):
         o.apply(forbid, want)
         seq.append((cmd, o.actual))
     assert_seq(sensor_name, seq, [(0, True), (0, True), (-1, False), (0, False)])
+
+
+def test_digital_l():
+    _check_digital("Digital L")
+
+
+def test_digital_f():
+    _check_digital("Digital F")
 
 
 def test_flow_requires_output_on():
@@ -206,8 +214,8 @@ def test_scheme_excludes_extended_sensors():
 def main():
     test_heat_hysteresis()
     test_cool_hysteresis()
-    test_digital("Digital L")
-    test_digital("Digital F")
+    _check_digital("Digital L")
+    _check_digital("Digital F")
     test_flow_requires_output_on()
     test_lf_mode_isolation()
     test_storage_migration()
