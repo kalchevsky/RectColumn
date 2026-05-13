@@ -3,12 +3,20 @@ from __future__ import annotations
 
 import unittest
 
-from api_testlib import (
-    LiveEmuApiTestCase,
-    confirmation_map,
-    output_map,
-    safe_emu_payload,
-)
+try:  # pragma: no cover - depends on unittest invocation style
+    from .api_testlib import (
+        LiveEmuApiTestCase,
+        confirmation_map,
+        output_map,
+        safe_emu_payload,
+    )
+except ImportError:  # pragma: no cover
+    from api_testlib import (  # type: ignore
+        LiveEmuApiTestCase,
+        confirmation_map,
+        output_map,
+        safe_emu_payload,
+    )
 
 
 class EmuConfirmationModeTests(LiveEmuApiTestCase):

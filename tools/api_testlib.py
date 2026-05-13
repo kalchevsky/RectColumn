@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 import unittest
 import urllib.error
@@ -92,6 +93,31 @@ def confirmation_map(state: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {item["id"]: item for item in state.get("confirmations", [])}
 
 
+def runtime_output_map(outputs: Any) -> dict[str, dict[str, Any]]:
+    if isinstance(outputs, list):
+        return {item.get("id", ""): item for item in outputs if isinstance(item, dict) and item.get("id")}
+    return {}
+
+
+def output_config_payload_from_state(state: dict[str, Any]) -> dict[str, Any]:
+    outputs = state.get("outputs", [])
+    payload_outputs = []
+    for output in outputs:
+        output_id = output.get("id")
+        if output_id not in ("CH1", "CH2", "CH3"):
+            continue
+        payload_outputs.append({
+            "id": output_id,
+            "mode": output.get("mode", "heat"),
+        })
+    return {
+        "outputs": payload_outputs,
+        "ch4Enabled": state.get("ch4Enabled", True),
+        "ch5Enabled": state.get("ch5Enabled", True),
+        "soundMuted": state.get("muted", False),
+    }
+
+
 def safe_emu_payload(**overrides: Any) -> dict[str, Any]:
     payload = {
         "T1": 75.0,
@@ -132,46 +158,55 @@ class LiveEmuApiTestCase(unittest.TestCase):
         return {
             "state": state,
             "output_config": self.api.get_json("/api/v1/output/config"),
+            "output_config_payload": output_config_payload_from_state(state),
         }
 
     def restore_snapshot(self, snapshot: dict[str, Any]) -> None:
-        state = snapshot["state"]
-        for sensor in state.get("sensors", []):
-            self.api.post_json(
-                f"/api/v1/sensor/{sensor['id']}/config",
-                {
-                    "enabled": sensor.get("enabled", True),
-                    "periodMs": sensor.get("periodMs", 1000),
-                    "alarmDelayMs": sensor.get("alarmDelayMs", 0),
-                    "ctrlDelayMs": sensor.get("ctrlDelayMs", 0),
-                },
-            )
-            for idx, alarm in enumerate(sensor.get("alarms", [])):
+        state = snapshot.get("state", {})
+        try:
+            for sensor in state.get("sensors", []):
                 self.api.post_json(
-                    f"/api/v1/sensor/{sensor['id']}/alarm",
+                    f"/api/v1/sensor/{sensor['id']}/config",
                     {
-                        "idx": idx,
-                        "enabled": alarm.get("enabled", False),
-                        "threshold": alarm.get("threshold", 0),
-                        "isMax": alarm.get("isMax", True),
+                        "enabled": sensor.get("enabled", True),
+                        "periodMs": sensor.get("periodMs", 1000),
+                        "alarmDelayMs": sensor.get("alarmDelayMs", 0),
+                        "ctrlDelayMs": sensor.get("ctrlDelayMs", 0),
                     },
                 )
-            for ctrl in sensor.get("ctrl", []):
-                self.api.post_json(
-                    f"/api/v1/sensor/{sensor['id']}/ctrl",
-                    {
-                        "outIdx": ctrl.get("outIdx", 0),
-                        "enabled": ctrl.get("enabled", False),
-                        "logic": ctrl.get("logic", "heat"),
-                        "min": ctrl.get("min", 0),
-                        "max": ctrl.get("max", 100),
-                    },
-                )
+                for idx, alarm in enumerate(sensor.get("alarms", [])):
+                    self.api.post_json(
+                        f"/api/v1/sensor/{sensor['id']}/alarm",
+                        {
+                            "idx": idx,
+                            "enabled": alarm.get("enabled", False),
+                            "threshold": alarm.get("threshold", 0),
+                            "isMax": alarm.get("isMax", True),
+                        },
+                    )
+                for ctrl in sensor.get("ctrl", []):
+                    self.api.post_json(
+                        f"/api/v1/sensor/{sensor['id']}/ctrl",
+                        {
+                            "outIdx": ctrl.get("outIdx", 0),
+                            "enabled": ctrl.get("enabled", False),
+                            "logic": ctrl.get("logic", "heat"),
+                            "min": ctrl.get("min", 0),
+                            "max": ctrl.get("max", 100),
+                        },
+                    )
 
-        output_config = snapshot["output_config"]
-        self.api.post_json("/api/v1/output/config", output_config)
-        self.api.post_json("/api/v1/safety/reset", {})
-        self.api.post_json("/api/v1/stop?release=1", {})
+            output_config_payload = snapshot.get("output_config_payload") or output_config_payload_from_state(state)
+            self.api.post_json("/api/v1/output/config", output_config_payload)
+            self.api.post_json("/api/v1/safety/reset", {})
+            self.api.post_json("/api/v1/stop?release=1", {})
+        except Exception as exc:  # pragma: no cover - cleanup path
+            sys.stderr.write(f"[cleanup-warning] restore_snapshot failed: {exc}\n")
+            try:
+                self.api.request_json("/api/v1/safety/reset", method="POST", payload={}, ok_statuses=(200, 400, 404))
+                self.api.request_json("/api/v1/stop?release=1", method="POST", payload={}, ok_statuses=(200, 400, 404))
+            except Exception as inner_exc:
+                sys.stderr.write(f"[cleanup-warning] fallback reset failed: {inner_exc}\n")
 
     def isolate_ch1_t1_rule(self) -> None:
         snap = self.snapshot_config()

@@ -153,6 +153,18 @@ def test_flow_requires_output_on():
     assert_seq("Flow gate ON", cmd_on, -1)
 
 
+def test_flow_is_channel_local():
+    ch1 = normalize_lf(CtrlRule(True, OUT_CH1, LOGIC_HEAT, 0.0, 100.0), OUT_CH1)
+    ch2 = normalize_lf(CtrlRule(False, OUT_CH2, LOGIC_HEAT, 0.0, 100.0), OUT_CH2)
+    ch3 = normalize_lf(CtrlRule(False, OUT_CH3, LOGIC_HEAT, 0.0, 100.0), OUT_CH3)
+    cmd_ch1 = eval_ctrl(0.0, True, False, ch1, OUT_CH1, elapsed_ms=6000, delay_ms=5000, control_gate=True)
+    cmd_ch2 = eval_ctrl(0.0, True, False, ch2, OUT_CH2, elapsed_ms=6000, delay_ms=5000, control_gate=True)
+    cmd_ch3 = eval_ctrl(0.0, True, False, ch3, OUT_CH3, elapsed_ms=6000, delay_ms=5000, control_gate=True)
+    assert_seq("Flow CH1 local", cmd_ch1, -1)
+    assert_seq("Flow CH2 disabled", cmd_ch2, 0)
+    assert_seq("Flow CH3 disabled", cmd_ch3, 0)
+
+
 def test_lf_mode_isolation():
     lf = normalize_lf(CtrlRule(True, OUT_CH1, LOGIC_HEAT, 0.0, 100.0), OUT_CH1)
     for channel_logic in (LOGIC_HEAT, LOGIC_COOL, LOGIC_HEAT):
@@ -217,6 +229,7 @@ def main():
     _check_digital("Digital L")
     _check_digital("Digital F")
     test_flow_requires_output_on()
+    test_flow_is_channel_local()
     test_lf_mode_isolation()
     test_storage_migration()
     test_manual_command()

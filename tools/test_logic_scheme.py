@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import math
 import re
+from itertools import combinations
 import unittest
 from dataclasses import dataclass, field
 from enum import Enum, auto
@@ -62,6 +63,37 @@ SAFETY_SOUND = 35
 
 GPIO35_MODE_V_SENSOR = 0
 GPIO35_MODE_WER_CH2 = 1
+
+MAIN_CHANNELS = (OUT_CH1, OUT_CH2, OUT_CH3)
+CONTROL_SENSOR_INDICES = (SEN_T1, SEN_T2, SEN_T3, SEN_P, SEN_L, SEN_F)
+NON_CONTROL_SENSOR_INDICES = (SEN_DT, SEN_C, SEN_V)
+
+CHANNEL_NAMES = {
+    OUT_CH1: "CH1",
+    OUT_CH2: "CH2",
+    OUT_CH3: "CH3",
+}
+
+SENSOR_NAMES = {
+    SEN_T1: "T1",
+    SEN_T2: "T2",
+    SEN_T3: "T3",
+    SEN_DT: "dT",
+    SEN_P: "P",
+    SEN_L: "L",
+    SEN_F: "F",
+    SEN_C: "C",
+    SEN_V: "V",
+}
+
+CONTROL_DELAY_MS = {
+    SEN_T1: 0,
+    SEN_T2: 0,
+    SEN_T3: 0,
+    SEN_P: 0,
+    SEN_L: 5 * 60 * 1000,
+    SEN_F: 5000,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -290,6 +322,86 @@ def sound_required(sensor_alarm_active: bool, safety_fault_active: bool, muted: 
     return (sensor_alarm_active or safety_fault_active) and not muted
 
 
+def control_delay_ms(sensor_idx: int) -> int:
+    return CONTROL_DELAY_MS[sensor_idx]
+
+
+def make_channel_rule(sensor_idx: int, out_idx: int, enabled: bool) -> CtrlRule:
+    delay_ms = control_delay_ms(sensor_idx)
+    if sensor_idx in (SEN_L, SEN_F):
+        return normalize_lf_off_only(
+            CtrlRule(enabled=enabled, out_idx=out_idx, off_delay_ms=delay_ms),
+            out_idx,
+        )
+    return CtrlRule(
+        enabled=enabled,
+        out_idx=out_idx,
+        logic=LOGIC_HEAT,
+        min_val=20.0,
+        max_val=80.0,
+        fail_safe=FailSafeMode.NEUTRAL,
+        off_delay_ms=delay_ms,
+    )
+
+
+def build_control_sensor(sensor_idx: int,
+                         enabled_channels: Tuple[int, ...] = (),
+                         fault: bool = False) -> Sensor:
+    if sensor_idx in (SEN_L, SEN_F):
+        sensor = Sensor(value=0.0 if fault else 1.0)
+    else:
+        sensor = Sensor(value=90.0 if fault else 50.0)
+    for out_idx in MAIN_CHANNELS:
+        sensor.ctrl[out_idx] = make_channel_rule(sensor_idx, out_idx, out_idx in enabled_channels)
+    return sensor
+
+
+def eval_ctrl_timed(sensor_idx: int, sensor: Sensor, out_idx: int,
+                    elapsed_ms: int, prev_output_on: bool = True) -> int:
+    gate = prev_output_on if sensor_idx == SEN_F else True
+    cmd = sensor.eval_ctrl(out_idx, control_gate=gate)
+    rule = sensor.ctrl.get(out_idx)
+    if not rule:
+        return cmd
+    if cmd == 1 and elapsed_ms < rule.on_delay_ms:
+        return 0
+    if cmd == -1 and elapsed_ms < rule.off_delay_ms:
+        return 0
+    return cmd
+
+
+def aggregate_rules_timed(sensors: Dict[int, Sensor], out_idx: int,
+                          elapsed_ms, prev_output_on: bool = True) -> Tuple[int, int]:
+    forbid = 0
+    want = 0
+    for sensor_idx, sensor in sensors.items():
+        sensor_elapsed = elapsed_ms.get(sensor_idx, 0) if isinstance(elapsed_ms, dict) else elapsed_ms
+        cmd = eval_ctrl_timed(sensor_idx, sensor, out_idx, sensor_elapsed, prev_output_on=prev_output_on)
+        if cmd == -1:
+            forbid |= 1 << sensor_idx
+        elif cmd == 1:
+            want |= 1 << sensor_idx
+    return forbid, want
+
+
+def simulate_main_channel_states(sensors: Dict[int, Sensor], elapsed_ms,
+                                 initial_on: bool = True,
+                                 extra_forbid_masks: Optional[Dict[int, int]] = None) -> Dict[int, bool]:
+    extra_forbid_masks = extra_forbid_masks or {}
+    states: Dict[int, bool] = {}
+    for out_idx in MAIN_CHANNELS:
+        out = ArbiterOutput(actual_on=initial_on, requested_on=initial_on)
+        forbid, want = aggregate_rules_timed(sensors, out_idx, elapsed_ms, prev_output_on=initial_on)
+        forbid |= extra_forbid_masks.get(out_idx, 0)
+        out.apply(forbid, want)
+        states[out_idx] = out.actual_on
+    return states
+
+
+def state_tuple(states: Dict[int, bool]) -> Tuple[bool, bool, bool]:
+    return tuple(states[out_idx] for out_idx in MAIN_CHANNELS)
+
+
 def validate_sensor_config_update(current: Sensor, patch: Dict[str, object]) -> Sensor:
     # Model of desired API behavior: validate a copy, then commit atomically.
     candidate = Sensor(**{field.name: getattr(current, field.name) for field in current.__dataclass_fields__.values()})
@@ -379,6 +491,154 @@ class DigitalLFTests(unittest.TestCase):
         self.assertEqual(flow.eval_ctrl(OUT_CH1, control_gate=False), 0)
         self.assertEqual(flow.eval_ctrl(OUT_CH1, control_gate=True), -1)
 
+    def test_flow_rule_is_channel_local(self):
+        flow = Sensor(value=0.0)
+        flow.ctrl[OUT_CH1] = normalize_lf_off_only(CtrlRule(enabled=True), OUT_CH1)
+        flow.ctrl[OUT_CH2] = normalize_lf_off_only(CtrlRule(enabled=False), OUT_CH2)
+        flow.ctrl[OUT_CH3] = normalize_lf_off_only(CtrlRule(enabled=False), OUT_CH3)
+
+        self.assertEqual(aggregate_rules({SEN_F: flow}, OUT_CH1), (1 << SEN_F, 0))
+        self.assertEqual(aggregate_rules({SEN_F: flow}, OUT_CH2), (0, 0))
+        self.assertEqual(aggregate_rules({SEN_F: flow}, OUT_CH3), (0, 0))
+
+
+class ChannelSensorMatrixTests(unittest.TestCase):
+    def assertChannelStateTuple(self, states: Dict[int, bool], expected: Tuple[bool, bool, bool]) -> None:
+        self.assertEqual(state_tuple(states), expected)
+
+    def test_faulty_sensor_does_not_turn_off_channels_when_rule_disabled(self):
+        for out_idx in MAIN_CHANNELS:
+            for sensor_idx in CONTROL_SENSOR_INDICES:
+                with self.subTest(channel=CHANNEL_NAMES[out_idx], sensor=SENSOR_NAMES[sensor_idx]):
+                    sensors = {
+                        sensor_idx: build_control_sensor(sensor_idx, enabled_channels=(), fault=True),
+                    }
+                    states = simulate_main_channel_states(sensors, elapsed_ms=control_delay_ms(sensor_idx))
+                    self.assertChannelStateTuple(states, (True, True, True))
+
+    def test_enabled_sensor_in_normal_state_keeps_target_channel_on(self):
+        for out_idx in MAIN_CHANNELS:
+            for sensor_idx in CONTROL_SENSOR_INDICES:
+                with self.subTest(channel=CHANNEL_NAMES[out_idx], sensor=SENSOR_NAMES[sensor_idx]):
+                    sensors = {
+                        sensor_idx: build_control_sensor(sensor_idx, enabled_channels=(out_idx,), fault=False),
+                    }
+                    states = simulate_main_channel_states(sensors, elapsed_ms=control_delay_ms(sensor_idx))
+                    self.assertChannelStateTuple(states, (True, True, True))
+
+    def test_fault_before_timeout_keeps_enabled_channel_on_when_sensor_has_delay(self):
+        for out_idx in MAIN_CHANNELS:
+            for sensor_idx in CONTROL_SENSOR_INDICES:
+                delay_ms = control_delay_ms(sensor_idx)
+                with self.subTest(channel=CHANNEL_NAMES[out_idx], sensor=SENSOR_NAMES[sensor_idx]):
+                    if delay_ms == 0:
+                        self.assertEqual(delay_ms, 0)
+                        continue
+                    sensors = {
+                        sensor_idx: build_control_sensor(sensor_idx, enabled_channels=(out_idx,), fault=True),
+                    }
+                    states = simulate_main_channel_states(sensors, elapsed_ms=delay_ms - 1)
+                    self.assertChannelStateTuple(states, (True, True, True))
+
+    def test_fault_after_timeout_turns_off_only_the_enabled_channel(self):
+        for out_idx in MAIN_CHANNELS:
+            for sensor_idx in CONTROL_SENSOR_INDICES:
+                with self.subTest(channel=CHANNEL_NAMES[out_idx], sensor=SENSOR_NAMES[sensor_idx]):
+                    sensors = {
+                        sensor_idx: build_control_sensor(sensor_idx, enabled_channels=(out_idx,), fault=True),
+                    }
+                    states = simulate_main_channel_states(sensors, elapsed_ms=control_delay_ms(sensor_idx))
+                    expected = []
+                    for current_idx in MAIN_CHANNELS:
+                        expected.append(current_idx != out_idx)
+                    self.assertChannelStateTuple(states, tuple(expected))
+
+    def test_fault_turns_off_exactly_channels_where_same_sensor_is_enabled(self):
+        channel_groups = tuple(combinations(MAIN_CHANNELS, 2)) + (MAIN_CHANNELS,)
+        for sensor_idx in CONTROL_SENSOR_INDICES:
+            for enabled_channels in channel_groups:
+                with self.subTest(sensor=SENSOR_NAMES[sensor_idx],
+                                  enabled=[CHANNEL_NAMES[idx] for idx in enabled_channels]):
+                    sensors = {
+                        sensor_idx: build_control_sensor(sensor_idx, enabled_channels=enabled_channels, fault=True),
+                    }
+                    states = simulate_main_channel_states(sensors, elapsed_ms=control_delay_ms(sensor_idx))
+                    expected = tuple(out_idx not in enabled_channels for out_idx in MAIN_CHANNELS)
+                    self.assertChannelStateTuple(states, expected)
+
+    def test_fault_on_one_enabled_channel_does_not_turn_off_other_enabled_channels(self):
+        for sensor_idx in CONTROL_SENSOR_INDICES:
+            for protected_idx in MAIN_CHANNELS:
+                with self.subTest(sensor=SENSOR_NAMES[sensor_idx], enabled=CHANNEL_NAMES[protected_idx]):
+                    sensors = {
+                        sensor_idx: build_control_sensor(sensor_idx, enabled_channels=(protected_idx,), fault=True),
+                    }
+                    states = simulate_main_channel_states(sensors, elapsed_ms=control_delay_ms(sensor_idx))
+                    expected = tuple(out_idx != protected_idx for out_idx in MAIN_CHANNELS)
+                    self.assertChannelStateTuple(states, expected)
+
+    def test_faulty_disabled_sensor_does_not_override_other_sensor_configuration(self):
+        for out_idx in MAIN_CHANNELS:
+            for enabled_sensor_idx in CONTROL_SENSOR_INDICES:
+                for disabled_sensor_idx in CONTROL_SENSOR_INDICES:
+                    if enabled_sensor_idx == disabled_sensor_idx:
+                        continue
+                    with self.subTest(channel=CHANNEL_NAMES[out_idx],
+                                      enabled_sensor=SENSOR_NAMES[enabled_sensor_idx],
+                                      disabled_sensor=SENSOR_NAMES[disabled_sensor_idx]):
+                        sensors = {
+                            enabled_sensor_idx: build_control_sensor(enabled_sensor_idx,
+                                                                     enabled_channels=(out_idx,),
+                                                                     fault=False),
+                            disabled_sensor_idx: build_control_sensor(disabled_sensor_idx,
+                                                                      enabled_channels=(),
+                                                                      fault=True),
+                        }
+                        elapsed_ms = {
+                            enabled_sensor_idx: control_delay_ms(enabled_sensor_idx),
+                            disabled_sensor_idx: control_delay_ms(disabled_sensor_idx),
+                        }
+                        states = simulate_main_channel_states(sensors, elapsed_ms=elapsed_ms)
+                        self.assertChannelStateTuple(states, (True, True, True))
+
+    def test_global_stop_turns_off_all_main_channels(self):
+        states = simulate_main_channel_states(
+            sensors={},
+            elapsed_ms=0,
+            extra_forbid_masks={out_idx: 1 << SAFETY_STOP for out_idx in MAIN_CHANNELS},
+        )
+        self.assertChannelStateTuple(states, (False, False, False))
+
+    def test_all_channels_stay_on_when_all_sensors_are_normal(self):
+        sensors = {
+            sensor_idx: build_control_sensor(sensor_idx, enabled_channels=MAIN_CHANNELS, fault=False)
+            for sensor_idx in CONTROL_SENSOR_INDICES
+        }
+        elapsed_ms = {sensor_idx: control_delay_ms(sensor_idx) for sensor_idx in CONTROL_SENSOR_INDICES}
+        states = simulate_main_channel_states(sensors, elapsed_ms=elapsed_ms)
+        self.assertChannelStateTuple(states, (True, True, True))
+
+    def test_multiple_faults_turn_off_only_channels_with_matching_enabled_rules(self):
+        for first_sensor_idx, second_sensor_idx in combinations(CONTROL_SENSOR_INDICES, 2):
+            with self.subTest(first=SENSOR_NAMES[first_sensor_idx], second=SENSOR_NAMES[second_sensor_idx]):
+                sensors = {
+                    first_sensor_idx: build_control_sensor(first_sensor_idx, enabled_channels=(OUT_CH1,), fault=True),
+                    second_sensor_idx: build_control_sensor(second_sensor_idx, enabled_channels=(OUT_CH2,), fault=True),
+                }
+                elapsed_ms = {
+                    first_sensor_idx: control_delay_ms(first_sensor_idx),
+                    second_sensor_idx: control_delay_ms(second_sensor_idx),
+                }
+                states = simulate_main_channel_states(sensors, elapsed_ms=elapsed_ms)
+                self.assertChannelStateTuple(states, (False, False, True))
+
+    def test_regression_flow_fault_turns_off_ch1_but_not_ch2_when_ch2_flow_control_is_disabled(self):
+        sensors = {
+            SEN_F: build_control_sensor(SEN_F, enabled_channels=(OUT_CH1,), fault=True),
+        }
+        states = simulate_main_channel_states(sensors, elapsed_ms=control_delay_ms(SEN_F))
+        self.assertChannelStateTuple(states, (False, True, True))
+
 
 class SensorFaultAndAlarmTests(unittest.TestCase):
     def test_analog_control_sensor_error_is_neutral(self):
@@ -450,6 +710,7 @@ class SourceGuardTests(unittest.TestCase):
     def setUpClass(cls):
         cls.root = Path(__file__).resolve().parents[1]
         cls.config_h = (cls.root / "config.h").read_text(encoding="utf-8", errors="ignore")
+        cls.sensor_manager_h = (cls.root / "SensorManager.h").read_text(encoding="utf-8", errors="ignore")
         cls.sensors_h = (cls.root / "Sensors.h").read_text(encoding="utf-8", errors="ignore")
         cls.confirm_h = (cls.root / "ConfirmationManager.h").read_text(encoding="utf-8", errors="ignore")
         cls.process_h = (cls.root / "ProcessSafety.h").read_text(encoding="utf-8", errors="ignore")
@@ -500,10 +761,25 @@ class SourceGuardTests(unittest.TestCase):
         self.assertLess(primary, nan_branch,
                         "sensor error alarm must be handled before generic NAN clearing")
 
-    def test_flow_emergency_timer_starts_from_ch2_demand(self):
-        self.assertIn("_flowDemandStartedMs", self.process_h)
-        self.assertIn("valveDemandActive", self.process_h)
-        self.assertRegex(self.process_h, r"now\s*-\s*_flowDemandStartedMs\s*>=\s*ctrlDelayMs")
+    def test_flow_loss_does_not_use_global_ch2_demand_interlock(self):
+        self.assertNotIn("_flowDemandStartedMs", self.process_h)
+        self.assertNotIn("valveDemandActive", self.process_h)
+        self.assertNotIn("_applyFlowSafetyInterlock", self.process_h)
+        self.assertNotIn("_flowEmergencyLatched", self.process_h)
+
+    def test_main_channel_control_sensor_set_matches_sensor_manager(self):
+        self.assertIn("return sensorIdx == SEN_T1 || sensorIdx == SEN_T2 ||", self.sensor_manager_h)
+        self.assertIn("sensorIdx == SEN_T3 || sensorIdx == SEN_P;", self.sensor_manager_h)
+        self.assertIn("sensorIdx == SEN_L || sensorIdx == SEN_F;", self.sensor_manager_h)
+        self.assertIn("if (!isRuleAllowedForOutput(si, oi)) r.enabled = false;", self.sensor_manager_h)
+        self.assertNotIn("sensorIdx == SEN_DT", self.sensor_manager_h)
+        self.assertNotIn("sensorIdx == SEN_C", self.sensor_manager_h)
+        self.assertNotIn("sensorIdx == SEN_V", self.sensor_manager_h)
+
+    def test_main_channel_control_delays_match_matrix_assumptions(self):
+        self.assertIn("l->ctrlDelayMs  = SAFETY_LEVEL_SHUTDOWN_MS;", self.sensor_manager_h)
+        self.assertIn("f->ctrlDelayMs  = 5000UL;", self.sensor_manager_h)
+        self.assertIn("#define SAFETY_LEVEL_SHUTDOWN_MS   (5UL * 60UL * 1000UL)", self.config_h)
 
     def test_sensor_stop_mode_is_configurable(self):
         self.assertRegex(self.config_h, r"#define\s+SAFETY_MODE_SENSOR_STOP\s+(false|true|0|1)")

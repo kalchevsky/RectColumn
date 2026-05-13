@@ -1,0 +1,575 @@
+"""
+Extended host-side coverage for RectColumn channel/sensor logic.
+
+Run from the project root:
+    python -m unittest -v tools.test_logic_scheme
+    python -m unittest -v tools.test_logic_full_matrix
+
+Live EMU API tests:
+    set RECTCOLUMN_BASE_URL=http://192.168.4.1
+    python -m unittest -v tools.test_api_emu_channel_sensor_matrix
+
+Linux/macOS:
+    RECTCOLUMN_BASE_URL=http://192.168.4.1 python -m unittest -v tools.test_api_emu_channel_sensor_matrix
+"""
+
+from __future__ import annotations
+
+import math
+import unittest
+from dataclasses import dataclass
+from pathlib import Path
+
+try:  # pragma: no cover - import style depends on how unittest is launched
+    from . import test_logic_scheme as scheme
+except ImportError:  # pragma: no cover
+    import test_logic_scheme as scheme
+
+
+ANALOG_SENSOR_INDICES = (scheme.SEN_T1, scheme.SEN_T2, scheme.SEN_T3, scheme.SEN_P)
+DIGITAL_SENSOR_INDICES = (scheme.SEN_L, scheme.SEN_F)
+MAIN_CHANNELS = scheme.MAIN_CHANNELS
+CONTROL_SENSOR_INDICES = scheme.CONTROL_SENSOR_INDICES
+NON_CONTROL_SENSOR_INDICES = scheme.NON_CONTROL_SENSOR_INDICES
+
+
+def analog_rule(out_idx: int, *, logic: int, enabled: bool = True) -> scheme.CtrlRule:
+    return scheme.CtrlRule(
+        enabled=enabled,
+        out_idx=out_idx,
+        logic=logic,
+        min_val=70.0,
+        max_val=80.0,
+        fail_safe=scheme.FailSafeMode.NEUTRAL,
+    )
+
+
+def analog_sensor(value: float,
+                  *,
+                  enabled: bool = True,
+                  present: bool = True,
+                  error: bool = False) -> scheme.Sensor:
+    return scheme.Sensor(enabled=enabled, present=present, error=error, value=value)
+
+
+@dataclass
+class HoldOutputModel:
+    enabled: bool = True
+    actual_on: bool = False
+    requested_on: bool = False
+    manual_want: bool = False
+    forbid_mask: int = 0
+    want_on_mask: int = 0
+
+    def apply_resolved_hold(self, forbid_mask: int, want_on_mask: int) -> bool:
+        self.forbid_mask = forbid_mask
+        self.want_on_mask = want_on_mask
+        if not self.enabled:
+            self.manual_want = False
+            self.requested_on = False
+        elif self.forbid_mask != 0:
+            self.manual_want = False
+            self.requested_on = False
+        elif self.want_on_mask != 0:
+            self.requested_on = True
+        else:
+            self.requested_on = self.actual_on
+        self.actual_on = self.requested_on
+        return self.actual_on
+
+    def set_manual_hold(self, on: bool) -> bool:
+        if on and (self.forbid_mask != 0 or not self.enabled):
+            return False
+        self.manual_want = on
+        if not on and self.enabled and self.forbid_mask == 0 and self.want_on_mask != 0:
+            self.requested_on = True
+        else:
+            self.requested_on = self.enabled and (self.forbid_mask == 0) and on
+            if not on:
+                self.requested_on = False
+        self.actual_on = self.requested_on
+        return (not on) or (self.forbid_mask == 0 and self.enabled)
+
+
+@dataclass
+class LevelOutputModel:
+    enabled: bool = True
+    actual_on: bool = False
+    requested_on: bool = False
+    manual_want: bool = False
+    forbid_mask: int = 0
+    want_on_mask: int = 0
+
+    def apply_resolved(self, forbid_mask: int, want_on_mask: int) -> bool:
+        self.forbid_mask = forbid_mask
+        self.want_on_mask = want_on_mask
+        can_be_on = self.enabled and self.forbid_mask == 0
+        wants_on = (self.want_on_mask != 0) or self.manual_want
+        self.requested_on = can_be_on and wants_on
+        self.actual_on = self.requested_on
+        return self.actual_on
+
+    def set_manual(self, on: bool) -> bool:
+        if on and ((self.forbid_mask != 0) or not self.enabled) and not self.manual_want:
+            return False
+        self.manual_want = on
+        return self.apply_resolved(self.forbid_mask, self.want_on_mask)
+
+
+class StopControllerModel:
+    def __init__(self) -> None:
+        self.main_stop_latched = False
+        self.main_outputs = {out_idx: HoldOutputModel(actual_on=True, requested_on=True, manual_want=True)
+                             for out_idx in MAIN_CHANNELS}
+        self.aux_outputs = {
+            scheme.OUT_CH4: LevelOutputModel(actual_on=True, requested_on=True, manual_want=True),
+            scheme.OUT_CH5: LevelOutputModel(actual_on=True, requested_on=True, manual_want=True),
+        }
+        self.last_forbid = {out_idx: 1 for out_idx in range(scheme.OUT_COUNT)}
+        self.last_want = {out_idx: 1 for out_idx in range(scheme.OUT_COUNT)}
+
+    def apply_global_stop(self) -> None:
+        self.main_stop_latched = True
+        for out_idx, output in self.main_outputs.items():
+            self.last_forbid[out_idx] = 0
+            self.last_want[out_idx] = 0
+            output.manual_want = False
+            output.apply_resolved_hold(1 << scheme.SAFETY_STOP, 0)
+        for out_idx, output in self.aux_outputs.items():
+            self.last_forbid[out_idx] = 0
+            self.last_want[out_idx] = 0
+            output.manual_want = False
+            output.apply_resolved(0, 0)
+
+    def release_stop(self) -> None:
+        self.main_stop_latched = False
+        for output in self.main_outputs.values():
+            output.apply_resolved_hold(0, 0)
+
+    def manual_on(self, out_idx: int) -> bool:
+        if out_idx in self.main_outputs and self.main_stop_latched:
+            return False
+        if out_idx in self.main_outputs:
+            return self.main_outputs[out_idx].set_manual_hold(True)
+        return self.aux_outputs[out_idx].set_manual(True)
+
+
+class AnalogSchemeMatrixTests(unittest.TestCase):
+    def test_heat_mode_matrix_for_t1_t2_t3_p(self):
+        for sensor_idx in ANALOG_SENSOR_INDICES:
+            for out_idx in MAIN_CHANNELS:
+                with self.subTest(sensor=scheme.SENSOR_NAMES[sensor_idx],
+                                  channel=scheme.CHANNEL_NAMES[out_idx],
+                                  logic="heat"):
+                    low = analog_sensor(69.0)
+                    low.ctrl[out_idx] = analog_rule(out_idx, logic=scheme.LOGIC_HEAT)
+                    self.assertEqual(low.eval_ctrl(out_idx), 1)
+                    self.assertEqual(scheme.aggregate_rules({sensor_idx: low}, out_idx), (0, 1 << sensor_idx))
+
+                    neutral = analog_sensor(75.0)
+                    neutral.ctrl[out_idx] = analog_rule(out_idx, logic=scheme.LOGIC_HEAT)
+                    self.assertEqual(neutral.eval_ctrl(out_idx), 0)
+                    self.assertEqual(scheme.aggregate_rules({sensor_idx: neutral}, out_idx), (0, 0))
+
+                    high = analog_sensor(81.0)
+                    high.ctrl[out_idx] = analog_rule(out_idx, logic=scheme.LOGIC_HEAT)
+                    self.assertEqual(high.eval_ctrl(out_idx), -1)
+                    self.assertEqual(scheme.aggregate_rules({sensor_idx: high}, out_idx), (1 << sensor_idx, 0))
+
+    def test_cool_mode_matrix_for_t1_t2_t3_p(self):
+        for sensor_idx in ANALOG_SENSOR_INDICES:
+            for out_idx in MAIN_CHANNELS:
+                with self.subTest(sensor=scheme.SENSOR_NAMES[sensor_idx],
+                                  channel=scheme.CHANNEL_NAMES[out_idx],
+                                  logic="cool"):
+                    high = analog_sensor(81.0)
+                    high.ctrl[out_idx] = analog_rule(out_idx, logic=scheme.LOGIC_COOL)
+                    self.assertEqual(high.eval_ctrl(out_idx), 1)
+                    self.assertEqual(scheme.aggregate_rules({sensor_idx: high}, out_idx), (0, 1 << sensor_idx))
+
+                    neutral = analog_sensor(75.0)
+                    neutral.ctrl[out_idx] = analog_rule(out_idx, logic=scheme.LOGIC_COOL)
+                    self.assertEqual(neutral.eval_ctrl(out_idx), 0)
+                    self.assertEqual(scheme.aggregate_rules({sensor_idx: neutral}, out_idx), (0, 0))
+
+                    low = analog_sensor(69.0)
+                    low.ctrl[out_idx] = analog_rule(out_idx, logic=scheme.LOGIC_COOL)
+                    self.assertEqual(low.eval_ctrl(out_idx), -1)
+                    self.assertEqual(scheme.aggregate_rules({sensor_idx: low}, out_idx), (1 << sensor_idx, 0))
+
+    def test_analog_rule_and_sensor_invalid_states_are_neutral_for_main_channels(self):
+        for sensor_idx in ANALOG_SENSOR_INDICES:
+            for out_idx in MAIN_CHANNELS:
+                with self.subTest(sensor=scheme.SENSOR_NAMES[sensor_idx],
+                                  channel=scheme.CHANNEL_NAMES[out_idx]):
+                    disabled_rule_sensor = analog_sensor(85.0)
+                    disabled_rule_sensor.ctrl[out_idx] = analog_rule(out_idx, logic=scheme.LOGIC_HEAT, enabled=False)
+                    self.assertEqual(disabled_rule_sensor.eval_ctrl(out_idx), 0)
+
+                    disabled_sensor = analog_sensor(85.0, enabled=False)
+                    disabled_sensor.ctrl[out_idx] = analog_rule(out_idx, logic=scheme.LOGIC_HEAT)
+                    self.assertEqual(disabled_sensor.eval_ctrl(out_idx), 0)
+
+                    missing_sensor = analog_sensor(75.0, present=False)
+                    missing_sensor.ctrl[out_idx] = analog_rule(out_idx, logic=scheme.LOGIC_HEAT)
+                    self.assertEqual(missing_sensor.eval_ctrl(out_idx), 0)
+
+                    error_sensor = analog_sensor(75.0, error=True)
+                    error_sensor.ctrl[out_idx] = analog_rule(out_idx, logic=scheme.LOGIC_HEAT)
+                    self.assertEqual(error_sensor.eval_ctrl(out_idx), 0)
+
+                    nan_sensor = analog_sensor(math.nan)
+                    nan_sensor.ctrl[out_idx] = analog_rule(out_idx, logic=scheme.LOGIC_HEAT)
+                    self.assertEqual(nan_sensor.eval_ctrl(out_idx), 0)
+
+
+class DigitalSchemeMatrixTests(unittest.TestCase):
+    def test_l_matrix_for_main_channels(self):
+        for out_idx in MAIN_CHANNELS:
+            with self.subTest(channel=scheme.CHANNEL_NAMES[out_idx]):
+                disabled_rule = scheme.build_control_sensor(scheme.SEN_L, enabled_channels=(), fault=True)
+                self.assertEqual(
+                    scheme.eval_ctrl_timed(scheme.SEN_L, disabled_rule, out_idx, scheme.control_delay_ms(scheme.SEN_L)),
+                    0,
+                )
+
+                neutral = scheme.build_control_sensor(scheme.SEN_L, enabled_channels=(out_idx,), fault=False)
+                self.assertEqual(
+                    scheme.eval_ctrl_timed(scheme.SEN_L, neutral, out_idx, scheme.control_delay_ms(scheme.SEN_L)),
+                    0,
+                )
+
+                before_delay = scheme.build_control_sensor(scheme.SEN_L, enabled_channels=(out_idx,), fault=True)
+                self.assertEqual(
+                    scheme.eval_ctrl_timed(scheme.SEN_L, before_delay, out_idx, scheme.control_delay_ms(scheme.SEN_L) - 1),
+                    0,
+                )
+
+                after_delay = scheme.build_control_sensor(scheme.SEN_L, enabled_channels=(out_idx,), fault=True)
+                self.assertEqual(
+                    scheme.eval_ctrl_timed(scheme.SEN_L, after_delay, out_idx, scheme.control_delay_ms(scheme.SEN_L)),
+                    -1,
+                )
+                self.assertEqual(
+                    scheme.aggregate_rules_timed({scheme.SEN_L: after_delay}, out_idx, scheme.control_delay_ms(scheme.SEN_L)),
+                    (1 << scheme.SEN_L, 0),
+                )
+
+                disabled_sensor = scheme.build_control_sensor(scheme.SEN_L, enabled_channels=(out_idx,), fault=True)
+                disabled_sensor.enabled = False
+                self.assertEqual(
+                    scheme.eval_ctrl_timed(scheme.SEN_L, disabled_sensor, out_idx, scheme.control_delay_ms(scheme.SEN_L)),
+                    0,
+                )
+
+                for present, error, value in ((False, False, 0.0), (True, True, 0.0), (True, False, math.nan)):
+                    invalid = scheme.build_control_sensor(scheme.SEN_L, enabled_channels=(out_idx,), fault=False)
+                    invalid.present = present
+                    invalid.error = error
+                    invalid.value = value
+                    self.assertEqual(
+                        scheme.eval_ctrl_timed(scheme.SEN_L, invalid, out_idx, scheme.control_delay_ms(scheme.SEN_L)),
+                        0,
+                    )
+
+    def test_f_matrix_for_main_channels(self):
+        for out_idx in MAIN_CHANNELS:
+            with self.subTest(channel=scheme.CHANNEL_NAMES[out_idx]):
+                disabled_rule = scheme.build_control_sensor(scheme.SEN_F, enabled_channels=(), fault=True)
+                self.assertEqual(
+                    scheme.eval_ctrl_timed(scheme.SEN_F, disabled_rule, out_idx, scheme.control_delay_ms(scheme.SEN_F), prev_output_on=True),
+                    0,
+                )
+
+                neutral = scheme.build_control_sensor(scheme.SEN_F, enabled_channels=(out_idx,), fault=False)
+                self.assertEqual(
+                    scheme.eval_ctrl_timed(scheme.SEN_F, neutral, out_idx, scheme.control_delay_ms(scheme.SEN_F), prev_output_on=True),
+                    0,
+                )
+
+                gated_off = scheme.build_control_sensor(scheme.SEN_F, enabled_channels=(out_idx,), fault=True)
+                self.assertEqual(
+                    scheme.eval_ctrl_timed(scheme.SEN_F, gated_off, out_idx, scheme.control_delay_ms(scheme.SEN_F), prev_output_on=False),
+                    0,
+                )
+
+                before_delay = scheme.build_control_sensor(scheme.SEN_F, enabled_channels=(out_idx,), fault=True)
+                self.assertEqual(
+                    scheme.eval_ctrl_timed(scheme.SEN_F, before_delay, out_idx, scheme.control_delay_ms(scheme.SEN_F) - 1, prev_output_on=True),
+                    0,
+                )
+
+                after_delay = scheme.build_control_sensor(scheme.SEN_F, enabled_channels=(out_idx,), fault=True)
+                self.assertEqual(
+                    scheme.eval_ctrl_timed(scheme.SEN_F, after_delay, out_idx, scheme.control_delay_ms(scheme.SEN_F), prev_output_on=True),
+                    -1,
+                )
+
+                disabled_sensor = scheme.build_control_sensor(scheme.SEN_F, enabled_channels=(out_idx,), fault=True)
+                disabled_sensor.enabled = False
+                self.assertEqual(
+                    scheme.eval_ctrl_timed(scheme.SEN_F, disabled_sensor, out_idx, scheme.control_delay_ms(scheme.SEN_F), prev_output_on=True),
+                    0,
+                )
+
+                for present, error, value in ((False, False, 0.0), (True, True, 0.0), (True, False, math.nan)):
+                    invalid = scheme.build_control_sensor(scheme.SEN_F, enabled_channels=(out_idx,), fault=False)
+                    invalid.present = present
+                    invalid.error = error
+                    invalid.value = value
+                    self.assertEqual(
+                        scheme.eval_ctrl_timed(scheme.SEN_F, invalid, out_idx, scheme.control_delay_ms(scheme.SEN_F), prev_output_on=True),
+                        0,
+                    )
+
+    def test_f_isolation_combinations(self):
+        combinations = (
+            (),
+            (scheme.OUT_CH1,),
+            (scheme.OUT_CH2,),
+            (scheme.OUT_CH3,),
+            (scheme.OUT_CH1, scheme.OUT_CH2),
+            (scheme.OUT_CH1, scheme.OUT_CH3),
+            (scheme.OUT_CH2, scheme.OUT_CH3),
+            MAIN_CHANNELS,
+        )
+        for enabled_channels in combinations:
+            with self.subTest(enabled=tuple(scheme.CHANNEL_NAMES[idx] for idx in enabled_channels)):
+                sensors = {
+                    scheme.SEN_F: scheme.build_control_sensor(scheme.SEN_F, enabled_channels=enabled_channels, fault=True),
+                }
+                states = scheme.simulate_main_channel_states(
+                    sensors,
+                    elapsed_ms=scheme.control_delay_ms(scheme.SEN_F),
+                    initial_on=True,
+                )
+                expected = tuple(out_idx not in enabled_channels for out_idx in MAIN_CHANNELS)
+                self.assertEqual(scheme.state_tuple(states), expected)
+
+
+class MainOutputPriorityTests(unittest.TestCase):
+    def test_off_has_priority_over_on(self):
+        out = HoldOutputModel(actual_on=True, requested_on=True)
+        self.assertFalse(out.apply_resolved_hold(1, 1))
+
+    def test_auto_on_has_priority_over_manual_off(self):
+        out = HoldOutputModel(actual_on=True, requested_on=True)
+        out.apply_resolved_hold(0, 1)
+        self.assertTrue(out.actual_on)
+        self.assertTrue(out.set_manual_hold(False))
+        self.assertTrue(out.actual_on)
+
+    def test_manual_on_is_applied_in_neutral_zone(self):
+        out = HoldOutputModel(actual_on=False, requested_on=False)
+        self.assertTrue(out.set_manual_hold(True))
+        self.assertTrue(out.actual_on)
+
+    def test_auto_off_clears_manual_want(self):
+        out = HoldOutputModel(actual_on=False, requested_on=False)
+        out.set_manual_hold(True)
+        self.assertTrue(out.manual_want)
+        out.apply_resolved_hold(1, 0)
+        self.assertFalse(out.actual_on)
+        self.assertFalse(out.manual_want)
+
+    def test_clearing_forbid_does_not_replay_old_manual_on(self):
+        out = HoldOutputModel(actual_on=False, requested_on=False)
+        out.set_manual_hold(True)
+        out.apply_resolved_hold(1, 0)
+        out.apply_resolved_hold(0, 0)
+        self.assertFalse(out.actual_on)
+        self.assertFalse(out.manual_want)
+
+
+class StopAndIsolationTests(unittest.TestCase):
+    def test_global_stop_turns_off_all_outputs_and_clears_pending_masks(self):
+        ctrl = StopControllerModel()
+        ctrl.apply_global_stop()
+
+        self.assertTrue(ctrl.main_stop_latched)
+        for out in ctrl.main_outputs.values():
+            self.assertFalse(out.actual_on)
+            self.assertFalse(out.manual_want)
+        for out in ctrl.aux_outputs.values():
+            self.assertFalse(out.actual_on)
+            self.assertFalse(out.manual_want)
+        for out_idx in range(scheme.OUT_COUNT):
+            self.assertEqual(ctrl.last_forbid[out_idx], 0)
+            self.assertEqual(ctrl.last_want[out_idx], 0)
+
+    def test_manual_on_for_main_outputs_is_blocked_while_stop_is_active(self):
+        ctrl = StopControllerModel()
+        ctrl.apply_global_stop()
+        for out_idx in MAIN_CHANNELS:
+            self.assertFalse(ctrl.manual_on(out_idx))
+
+    def test_release_stop_does_not_restore_old_manual_main_requests(self):
+        ctrl = StopControllerModel()
+        ctrl.apply_global_stop()
+        ctrl.release_stop()
+        self.assertFalse(ctrl.main_stop_latched)
+        for out in ctrl.main_outputs.values():
+            self.assertFalse(out.actual_on)
+            self.assertFalse(out.manual_want)
+
+    def test_sensor_isolation_for_all_control_sensors(self):
+        combinations = (
+            (),
+            (scheme.OUT_CH1,),
+            (scheme.OUT_CH2,),
+            (scheme.OUT_CH3,),
+            (scheme.OUT_CH1, scheme.OUT_CH2),
+            (scheme.OUT_CH1, scheme.OUT_CH3),
+            (scheme.OUT_CH2, scheme.OUT_CH3),
+            MAIN_CHANNELS,
+        )
+        for sensor_idx in CONTROL_SENSOR_INDICES:
+            for enabled_channels in combinations:
+                with self.subTest(sensor=scheme.SENSOR_NAMES[sensor_idx],
+                                  enabled=tuple(scheme.CHANNEL_NAMES[idx] for idx in enabled_channels)):
+                    sensors = {
+                        sensor_idx: scheme.build_control_sensor(sensor_idx, enabled_channels=enabled_channels, fault=True),
+                    }
+                    states = scheme.simulate_main_channel_states(
+                        sensors,
+                        elapsed_ms=scheme.control_delay_ms(sensor_idx),
+                        initial_on=True,
+                    )
+                    expected = tuple(out_idx not in enabled_channels for out_idx in MAIN_CHANNELS)
+                    self.assertEqual(scheme.state_tuple(states), expected)
+
+
+class ExtendedSensorsAndAuxOutputsTests(unittest.TestCase):
+    def test_dt_c_v_can_drive_ch4_and_ch5_with_level_resolver(self):
+        for sensor_idx in NON_CONTROL_SENSOR_INDICES:
+            for out_idx in (scheme.OUT_CH4, scheme.OUT_CH5):
+                with self.subTest(sensor=scheme.SENSOR_NAMES[sensor_idx], channel=out_idx):
+                    sensor = analog_sensor(10.0)
+                    sensor.ctrl[out_idx] = scheme.CtrlRule(
+                        enabled=True,
+                        out_idx=out_idx,
+                        logic=scheme.LOGIC_HEAT,
+                        min_val=20.0,
+                        max_val=80.0,
+                        fail_safe=scheme.FailSafeMode.NEUTRAL,
+                    )
+                    cmd = sensor.eval_ctrl(out_idx)
+                    self.assertEqual(cmd, 1)
+
+                    out = LevelOutputModel(actual_on=False, requested_on=False)
+                    want = (1 << sensor_idx) if cmd == 1 else 0
+                    forbid = (1 << sensor_idx) if cmd == -1 else 0
+                    self.assertTrue(out.apply_resolved(forbid, want))
+
+    def test_ch4_ch5_level_resolver_turns_on_and_off_from_masks(self):
+        out = LevelOutputModel(actual_on=False, requested_on=False)
+        self.assertTrue(out.apply_resolved(0, 1))
+        self.assertFalse(out.apply_resolved(0, 0))
+        self.assertFalse(out.apply_resolved(1, 1))
+        self.assertFalse(out.set_manual(True))
+
+    def test_aux_output_activity_does_not_change_main_channel_state(self):
+        ch1 = HoldOutputModel(actual_on=True, requested_on=True)
+        ch4 = LevelOutputModel(actual_on=False, requested_on=False)
+        ch5 = LevelOutputModel(actual_on=False, requested_on=False)
+        ch4.apply_resolved(0, 1)
+        ch5.apply_resolved(0, 1)
+        self.assertTrue(ch1.actual_on)
+        self.assertTrue(ch4.actual_on)
+        self.assertTrue(ch5.actual_on)
+
+
+class ConfirmationAndSafetyModelTests(unittest.TestCase):
+    def test_reset_clears_fault_but_persistent_bad_feedback_recreates_it(self):
+        fsm = scheme.ConfirmationFSM()
+        fsm.begin_on(now_ms=0, feedback_on=True)
+        self.assertEqual(fsm.state, scheme.RelayState.FAULT_STUCK_HIGH_BEFORE_ON)
+        self.assertTrue(fsm.reset(feedback_on=False))
+        fsm.begin_on(now_ms=100, feedback_on=True)
+        self.assertEqual(fsm.state, scheme.RelayState.FAULT_STUCK_HIGH_BEFORE_ON)
+
+    def test_no_on_confirm_and_stuck_on_faults_are_channel_local_in_model(self):
+        ch1 = scheme.ConfirmationFSM(timeout_ms=1000)
+        ch2 = scheme.ConfirmationFSM(timeout_ms=1000)
+        ch1.begin_on(now_ms=0, feedback_on=False)
+        ch2.begin_on(now_ms=0, feedback_on=False)
+        self.assertEqual(ch1.loop(now_ms=1000, feedback_on=False), scheme.RelayState.FAULT_NO_CONFIRM)
+        self.assertEqual(ch2.loop(now_ms=500, feedback_on=True), scheme.RelayState.ON)
+
+        ch4 = scheme.ConfirmationFSM(state=scheme.RelayState.ON, timeout_ms=1000)
+        ch4.begin_off(now_ms=0)
+        self.assertEqual(ch4.loop(now_ms=1001, feedback_on=True), scheme.RelayState.FAULT_STUCK_ON)
+
+
+class FullMatrixSourceGuardTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.root = Path(__file__).resolve().parents[1]
+        cls.sensor_manager_h = (cls.root / "SensorManager.h").read_text(encoding="utf-8", errors="ignore")
+        cls.webapi_h = (cls.root / "WebAPI.h").read_text(encoding="utf-8", errors="ignore")
+        cls.storage_h = (cls.root / "Storage.h").read_text(encoding="utf-8", errors="ignore")
+        cls.output_h = (cls.root / "Output.h").read_text(encoding="utf-8", errors="ignore")
+        cls.output_manager_h = (cls.root / "OutputManager.h").read_text(encoding="utf-8", errors="ignore")
+        cls.process_h = (cls.root / "ProcessSafety.h").read_text(encoding="utf-8", errors="ignore")
+        cls.confirm_h = (cls.root / "ConfirmationManager.h").read_text(encoding="utf-8", errors="ignore")
+        cls.config_h = (cls.root / "config.h").read_text(encoding="utf-8", errors="ignore")
+
+    def test_digital_off_only_normalization_is_fixed_for_l_and_f(self):
+        self.assertIn("r.logic  = LOGIC_COOL;", self.sensor_manager_h)
+        self.assertIn("r.minVal = 0.5f;", self.sensor_manager_h)
+        self.assertIn("r.maxVal = 2.0f;", self.sensor_manager_h)
+        self.assertIn("const bool keepEnabled = r.enabled;", self.sensor_manager_h)
+        self.assertIn("r.enabled = keepEnabled;", self.sensor_manager_h)
+
+    def test_dt_c_v_are_not_allowed_to_control_ch1_ch3(self):
+        self.assertIn("if (!isMainOutputIndex(outIdx)) return true;", self.sensor_manager_h)
+        self.assertIn("return isSchemeControlSensorIndex(sensorIdx);", self.sensor_manager_h)
+        self.assertNotIn("sensorIdx == SEN_DT", self.sensor_manager_h)
+        self.assertNotIn("sensorIdx == SEN_C", self.sensor_manager_h)
+        self.assertNotIn("sensorIdx == SEN_V", self.sensor_manager_h)
+
+    def test_web_api_rejects_enabling_extended_sensor_rules_for_main_outputs(self):
+        self.assertIn("sensor is not allowed to control CH1..CH3 in scheme mode", self.webapi_h)
+        self.assertIn("_sm->normalizeSchemeControlRules();", self.webapi_h)
+
+    def test_storage_sanitize_disables_restored_extended_rules_for_main_outputs(self):
+        self.assertIn("if (!SensorManager::isRuleAllowedForOutput((uint8_t)si, (uint8_t)oi)) {", self.storage_h)
+        self.assertIn("r.enabled = false;", self.storage_h)
+        self.assertIn("sm.normalizeDigitalOffOnlyRules();", self.storage_h)
+        self.assertIn("sm.normalizeSchemeControlRules();", self.storage_h)
+
+    def test_main_outputs_use_hold_resolver_and_aux_outputs_use_level_resolver(self):
+        self.assertIn("void applyResolved(uint32_t forbidMask, uint32_t wantOnMask)", self.output_h)
+        self.assertIn("void applyResolvedHold(uint32_t forbidMask, uint32_t wantOnMask)", self.output_h)
+        self.assertIn("out[outIdx]->applyResolvedHold(_effectiveForbidMask(outIdx), _lastWant[outIdx]);", self.output_manager_h)
+        self.assertIn("out[outIdx]->applyResolved(_effectiveForbidMask(outIdx), _lastWant[outIdx]);", self.output_manager_h)
+
+    def test_mute_clears_sound_outputs_without_touching_main_channels(self):
+        self.assertIn("out[OUT_CH4]->setBellPatternActive(false);", self.output_manager_h)
+        self.assertIn("out[OUT_CH5]->applyResolved(_effectiveForbidMask(OUT_CH5), want);", self.output_manager_h)
+
+    def test_flow_loss_is_not_a_global_stop_or_global_flow_forbid(self):
+        self.assertNotIn("_applyFlowSafetyInterlock", self.process_h)
+        self.assertNotIn("_flowEmergencyLatched", self.process_h)
+        self.assertNotIn("_flowDemandStartedMs", self.process_h)
+        self.assertNotIn("setMainStopLatched(true);", self.process_h[self.process_h.find("void _handleFlowLoss"):self.process_h.find("void _handlePressureHigh")])
+
+    def test_level_sensor_stop_is_optional_and_pressure_is_ch1_only(self):
+        self.assertIn("if (!SAFETY_MODE_SENSOR_STOP) return;", self.process_h)
+        self.assertIn("_om->setSafetyForbid(OUT_CH1, RULEIDX_SAFETY_PRESSURE, true);", self.process_h)
+        self.assertNotIn("_om->setSafetyForbid(OUT_CH2, RULEIDX_SAFETY_PRESSURE, true);", self.process_h)
+        self.assertNotIn("_om->setSafetyForbid(OUT_CH3, RULEIDX_SAFETY_PRESSURE, true);", self.process_h)
+
+    def test_wer_fault_blocks_only_corresponding_main_channel(self):
+        self.assertIn("(c.outputIdx == OUT_CH1 || c.outputIdx == OUT_CH2 || c.outputIdx == OUT_CH3) &&", self.process_h)
+        self.assertIn("_om->setSafetyForbid(c.outputIdx, RULEIDX_SAFETY_WER, true);", self.process_h)
+        self.assertIn("_ch[3].id = \"WER_CH4\"; _ch[3].outputId = \"CH4\"; _ch[3].outputIdx = OUT_CH4;", self.confirm_h)
+
+    def test_l_and_f_default_timeouts_match_current_sources(self):
+        self.assertIn("l->ctrlDelayMs  = SAFETY_LEVEL_SHUTDOWN_MS;", self.sensor_manager_h)
+        self.assertIn("f->ctrlDelayMs  = 5000UL;", self.sensor_manager_h)
+        self.assertIn("#define SAFETY_LEVEL_SHUTDOWN_MS   (5UL * 60UL * 1000UL)", self.config_h)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

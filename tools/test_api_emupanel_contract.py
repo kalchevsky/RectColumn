@@ -4,7 +4,10 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
-from api_testlib import LiveEmuApiTestCase
+try:  # pragma: no cover - depends on unittest invocation style
+    from .api_testlib import LiveEmuApiTestCase
+except ImportError:  # pragma: no cover
+    from api_testlib import LiveEmuApiTestCase  # type: ignore
 
 
 class EmuPanelStaticContractTests(unittest.TestCase):

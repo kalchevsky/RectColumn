@@ -38,7 +38,7 @@ public:
 
     bool safetyAlarmActive() const {
         if (_levelAlarmLatched || _levelShutdownCh1Done || _flowAlarmLatched ||
-            _flowEmergencyLatched || _pressureEmergencyLatched) {
+            _pressureEmergencyLatched) {
             return true;
         }
         for (uint8_t i = 0; i < 4; i++) {
@@ -71,30 +71,13 @@ private:
 
     bool _flowConditionLatched = false;
     bool _flowAlarmLatched = false;
-    bool _flowEmergencyLatched = false;
     uint32_t _flowStartedMs = 0;
-    bool _flowDemandLatched = false;
-    uint32_t _flowDemandStartedMs = 0;
 
     bool _pressureEmergencyLatched = false;
     bool _werFaultLatched[4] = { false, false, false, false };
 
     void _alarm(const String& msg) {
         _log->add(msg, _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
-    }
-
-    void _applyFlowSafetyInterlock(const String& why) {
-        // Flow safety remains an interlock even when sensor-driven STOP is
-        // disabled. STOP itself is now optional and controlled from config.
-        for (uint8_t oi = OUT_CH1; oi <= OUT_CH3; oi++) {
-            _om->setSafetyForbid(oi, RULEIDX_SAFETY_FLOW, true);
-        }
-        if (SAFETY_MODE_SENSOR_STOP) {
-            _om->setMainStopLatched(true);
-            _alarm(why + ". STOP защёлкнут safety-режимом, ручное включение CH1-CH3 заблокировано до снятия STOP.");
-        } else {
-            _alarm(why + ". Каналы CH1-CH3 заблокированы safety-слоем до исчезновения причины аварии.");
-        }
     }
 
     void _applySensorStopIfEnabled(const String& why) {
@@ -180,13 +163,8 @@ private:
         fs->externalAlarmMaskBits = 0;
         for (uint8_t ai = 1; ai < N_ALARMS; ai++) fs->alarm[ai].triggered = false;
 
-        const ConfirmationChannel& ch2 = _cm->get(1);
-        const bool valveConfirmed = ch2.available ? ch2.actual : _om->out[OUT_CH2]->actualOn();
-        const bool valveRequested = _om->out[OUT_CH2]->requestedOn() || _om->out[OUT_CH2]->actualOn();
-        const bool valveDemandActive = (valveConfirmed || valveRequested);
         const bool flowFault = fs->enabled && !_sm->flowActive();
         const uint32_t alarmDelayMs = fs->alarmDelayMs;
-        const uint32_t ctrlDelayMs = SAFETY_FLOW_LOSS_MS;
         bool alarmActive = false;
 
         if (flowFault) {
@@ -194,9 +172,6 @@ private:
                 _flowConditionLatched = true;
                 _flowStartedMs = now;
                 _flowAlarmLatched = false;
-                _flowEmergencyLatched = false;
-                _flowDemandLatched = false;
-                _flowDemandStartedMs = 0;
             }
 
             alarmActive = (now - _flowStartedMs >= alarmDelayMs);
@@ -212,26 +187,10 @@ private:
                 _flowAlarmLatched = true;
                 _alarm("Авария потока: цепь F разомкнута / нет потока");
             }
-
-            if (valveDemandActive) {
-                if (!_flowDemandLatched) {
-                    _flowDemandLatched = true;
-                    _flowDemandStartedMs = now;
-                }
-            } else {
-                _flowDemandLatched = false;
-                _flowDemandStartedMs = 0;
-            }
-
-            if (alarmActive && valveDemandActive && !_flowEmergencyLatched &&
-                _flowDemandLatched && (now - _flowDemandStartedMs >= ctrlDelayMs)) {
-                _flowEmergencyLatched = true;
-                _applyFlowSafetyInterlock("Поток отсутствует дольше допустимой задержки safety-слоя");
-            }
             return;
         }
 
-        if (_flowConditionLatched || _flowAlarmLatched || _flowEmergencyLatched) {
+        if (_flowConditionLatched || _flowAlarmLatched) {
             _alarm("Поток восстановлен");
         }
         for (uint8_t oi = OUT_CH1; oi <= OUT_CH3; oi++) {
@@ -240,10 +199,7 @@ private:
         fs->alarm[0].triggered = false;
         _flowConditionLatched = false;
         _flowAlarmLatched = false;
-        _flowEmergencyLatched = false;
         _flowStartedMs = 0;
-        _flowDemandLatched = false;
-        _flowDemandStartedMs = 0;
     }
 
     void _handlePressureHigh() {
