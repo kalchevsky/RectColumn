@@ -76,49 +76,7 @@ public:
         uint32_t changed = 0;
         bool prevState[OUT_COUNT];
         for (int i = 0; i < OUT_COUNT; i++) prevState[i] = out[i]->isOn();
-
-        uint32_t newForbid[OUT_COUNT] = {};
-        uint32_t newWant[OUT_COUNT]   = {};
-
-        sm.normalizeDigitalOffOnlyRules();
-
-        out[OUT_CH4]->enabled = ch4Enabled;
-        out[OUT_CH5]->enabled = ch5Enabled;
-
-        for (int si = 0; si < SEN_COUNT; si++) {
-            SensorBase* sen = sm.s[si];
-            if (!sen || !sen->enabled) continue;
-
-            for (int oi = 0; oi < OUT_COUNT; oi++) {
-                // STOP is a top-level short-circuit only for the technological
-                // channels CH1..CH3. Auxiliary outputs keep their own logic.
-                if (_mainStopLatched && _isMainOutput((uint8_t)oi)) continue;
-
-                const int cmd = _sensorCommandForOutput(sm, prevState, (uint8_t)si, (uint8_t)oi);
-                if (cmd == 1) newWant[oi] |= (1u << si);
-                else if (cmd == -1) newForbid[oi] |= (1u << si);
-            }
-        }
-
-        const bool anyUnackedAlarm = hasUnackedAlarms(sm);
-        const bool soundRequired = anyUnackedAlarm || _safetyAlarmActive;
-
-        if (ch5Enabled && !soundMuted && soundRequired) {
-            newWant[OUT_CH5] |= (1u << RULEIDX_SOUND);
-        }
-
-        if (_mainStopLatched) {
-            _applyGlobalStop();
-        }
-
-        for (int oi = 0; oi < OUT_COUNT; oi++) {
-            if (_mainStopLatched && _isMainOutput((uint8_t)oi)) continue;
-            _lastForbid[oi] = newForbid[oi];
-            _lastWant[oi]   = newWant[oi];
-            _applyCurrent((uint8_t)oi);
-        }
-
-        out[OUT_CH4]->setBellPatternActive(ch4Enabled && !soundMuted && soundRequired);
+        _syncRuntimeState(sm, prevState);
 
         for (int i = 0; i < OUT_COUNT; i++) {
             if (out[i]->loop()) changed |= (1u << i);
@@ -128,6 +86,12 @@ public:
             if (out[i]->isOn() != prevState[i]) changed |= (1u << i);
         }
         return changed;
+    }
+
+    void syncRuntimeState(SensorManager& sm) {
+        bool prevState[OUT_COUNT];
+        for (int i = 0; i < OUT_COUNT; i++) prevState[i] = out[i]->isOn();
+        _syncRuntimeState(sm, prevState);
     }
 
     void beepAcceptedCommand(uint32_t durationMs = CMD_BEEP_MS) {
@@ -167,6 +131,10 @@ public:
             result.reason = "invalid_command";
             result.detail = "invalid_command";
             return result;
+        }
+
+        if (sm) {
+            syncRuntimeState(*sm);
         }
 
         const bool werRequired = requiresWerConfirmation(outIdx);
@@ -370,6 +338,25 @@ public:
 
     uint32_t effectiveForbidMask(uint8_t outIdx) const {
         return (outIdx < OUT_COUNT) ? _effectiveForbidMask(outIdx) : 0;
+    }
+
+    bool autoOffActive(uint8_t outIdx) const {
+        return (outIdx < OUT_COUNT) ? (_lastForbid[outIdx] != 0) : false;
+    }
+
+    bool safetyBlocked(uint8_t outIdx) const {
+        return (outIdx < OUT_COUNT) ? ((_operatorForbidMask(outIdx) | _safetyForbid[outIdx]) != 0) : false;
+    }
+
+    bool controlSensorAutoOff(uint8_t outIdx, uint8_t sensorIdx) const {
+        if (outIdx >= OUT_COUNT || sensorIdx >= SEN_COUNT) return false;
+        return (_lastForbid[outIdx] & (1u << sensorIdx)) != 0;
+    }
+
+    bool manualRequestOn(uint8_t outIdx) const {
+        if (outIdx >= OUT_COUNT || !out[outIdx]) return false;
+        return out[outIdx]->manualWant() ||
+               (out[outIdx]->commandPending() && out[outIdx]->command() == CMD_ON);
     }
 
     String relayBlockDetailText(uint8_t outIdx, const char* reason) const {
@@ -589,6 +576,7 @@ private:
 
             if (!_begun) continue;
 
+            out[oi]->setFinalOnAllowed(_effectiveForbidMask(oi) == 0);
             out[oi]->applyResolvedHold(_effectiveForbidMask(oi), 0);
         }
 
@@ -705,6 +693,7 @@ private:
             _applyCurrentMain(outIdx);
             return;
         }
+        out[outIdx]->setFinalOnAllowed(true);
         const bool prevManual = out[outIdx]->manualWant();
         out[outIdx]->applyResolved(_effectiveForbidMask(outIdx), _lastWant[outIdx]);
         if (out[outIdx]->manualWant() != prevManual) _manualStateDirty = true;
@@ -715,8 +704,15 @@ private:
         const bool prevHoldOff = _operatorHoldOff[outIdx];
         const uint32_t forbidMask = _effectiveForbidMask(outIdx);
         const uint32_t wantMask = _lastWant[outIdx];
+        out[outIdx]->setFinalOnAllowed(forbidMask == 0);
 
         if (forbidMask != 0) {
+            if (out[outIdx]->commandPending()) {
+                out[outIdx]->clearCommand();
+                _lastCmdError[outIdx] = RELAY_CMDERR_NONE;
+                _lastCmdErrorMs[outIdx] = 0;
+                _lastCmdDetail[outIdx] = "";
+            }
             _operatorHoldOff[outIdx] = false;
             if (out[outIdx]->manualWant()) out[outIdx]->restoreManualWant(false);
             out[outIdx]->applyResolvedHold(forbidMask, wantMask);
@@ -740,6 +736,51 @@ private:
         if (out[outIdx]->manualWant() != prevManual || _operatorHoldOff[outIdx] != prevHoldOff) {
             _manualStateDirty = true;
         }
+    }
+
+    void _syncRuntimeState(SensorManager& sm, const bool prevState[OUT_COUNT]) {
+        uint32_t newForbid[OUT_COUNT] = {};
+        uint32_t newWant[OUT_COUNT]   = {};
+
+        sm.normalizeDigitalOffOnlyRules();
+
+        out[OUT_CH4]->enabled = ch4Enabled;
+        out[OUT_CH5]->enabled = ch5Enabled;
+
+        for (int si = 0; si < SEN_COUNT; si++) {
+            SensorBase* sen = sm.s[si];
+            if (!sen || !sen->enabled) continue;
+
+            for (int oi = 0; oi < OUT_COUNT; oi++) {
+                // STOP is a top-level short-circuit only for the technological
+                // channels CH1..CH3. Auxiliary outputs keep their own logic.
+                if (_mainStopLatched && _isMainOutput((uint8_t)oi)) continue;
+
+                const int cmd = _sensorCommandForOutput(sm, prevState, (uint8_t)si, (uint8_t)oi);
+                if (cmd == 1) newWant[oi] |= (1u << si);
+                else if (cmd == -1) newForbid[oi] |= (1u << si);
+            }
+        }
+
+        const bool anyUnackedAlarm = hasUnackedAlarms(sm);
+        const bool soundRequired = anyUnackedAlarm || _safetyAlarmActive;
+
+        if (ch5Enabled && !soundMuted && soundRequired) {
+            newWant[OUT_CH5] |= (1u << RULEIDX_SOUND);
+        }
+
+        if (_mainStopLatched) {
+            _applyGlobalStop();
+        }
+
+        for (int oi = 0; oi < OUT_COUNT; oi++) {
+            if (_mainStopLatched && _isMainOutput((uint8_t)oi)) continue;
+            _lastForbid[oi] = newForbid[oi];
+            _lastWant[oi]   = newWant[oi];
+            _applyCurrent((uint8_t)oi);
+        }
+
+        out[OUT_CH4]->setBellPatternActive(ch4Enabled && !soundMuted && soundRequired);
     }
 
     void _logRelayCommand(EventLog* log, SensorManager* sm, uint8_t outIdx,
