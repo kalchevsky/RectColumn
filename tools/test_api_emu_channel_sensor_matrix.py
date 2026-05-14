@@ -288,6 +288,104 @@ class EmuChannelSensorMatrixTests(LiveEmuApiTestCase):
         self.assertNotIn("F", outputs["CH2"].get("forbidReasons", []), msg=json.dumps(debug_dump, ensure_ascii=False, indent=2))
         self.assertNotIn("F", outputs["CH3"].get("forbidReasons", []), msg=json.dumps(debug_dump, ensure_ascii=False, indent=2))
 
+    def test_stop_global_block_clears_main_outputs_without_replaying_manual_on(self):
+        self._reset_runtime()
+        self._disable_all_main_rules()
+        self._turn_on_outputs(("CH1", "CH2", "CH3"))
+
+        self._post_json_logged("/api/v1/stop", {})
+        stopped = self._wait_outputs_idle({"CH1": False, "CH2": False, "CH3": False}, timeout=5.0)
+        stopped_outputs = output_map(stopped)
+        self.assertTrue(stopped.get("stopLatched", False))
+        for output_id in ("CH1", "CH2", "CH3"):
+            self.assertFalse(stopped_outputs[output_id].get("manualWant", False))
+            self.assertFalse(stopped_outputs[output_id].get("operatorHoldOff", False))
+
+        self._post_json_logged("/api/v1/stop?release=1", {})
+        released = self._wait_outputs_idle({"CH1": False, "CH2": False, "CH3": False}, timeout=5.0)
+        self.assertFalse(released.get("stopLatched", True))
+        released_outputs = output_map(released)
+        for output_id in ("CH1", "CH2", "CH3"):
+            self.assertFalse(released_outputs[output_id]["actual"])
+            self.assertFalse(released_outputs[output_id].get("manualWant", False))
+            self.assertFalse(released_outputs[output_id].get("operatorHoldOff", False))
+
+    def test_auto_off_priority_over_auto_on_for_same_channel(self):
+        self._reset_runtime()
+        self._set_sensor_config("T1", enabled=True, ctrl_delay_ms=0)
+        self._set_sensor_config("P", enabled=True, ctrl_delay_ms=0)
+        self._set_sensor_rule("T1", 0, enabled=True, logic="heat", min_v=70.0, max_v=80.0)
+        self._set_sensor_rule("P", 0, enabled=True, logic="heat", min_v=70.0, max_v=100.0)
+        self._post_json_logged("/api/v1/emu/set", safe_emu_payload(T1=65.0, P=90.0))
+        self._wait_outputs({"CH1": True}, timeout=4.0)
+
+        self._post_json_logged("/api/v1/emu/set", safe_emu_payload(T1=65.0, P=110.0))
+
+        state = self._wait_outputs({"CH1": False, "CH2": False, "CH3": False}, timeout=4.0)
+        ch1 = output_map(state)["CH1"]
+        self.assertFalse(ch1["actual"])
+        self.assertTrue(
+            "P" in ch1.get("forbidReasons", []) or "SAFETY_PRESSURE" in ch1.get("forbidReasons", []),
+            msg=json.dumps(self._debug_snapshot("auto_off_priority_conflict"), ensure_ascii=False, indent=2),
+        )
+        self.assertGreater(ch1.get("wantOnMask", 0), 0)
+
+    def test_manual_commands_execute_once_when_auto_is_neutral(self):
+        self._reset_runtime()
+        self._disable_all_main_rules()
+
+        response_on = self._post_json_logged("/api/v1/output/CH1/manual", {"state": True}, ok_statuses=(200,))
+        self.assertTrue(response_on["accepted"])
+        state_on = self._wait_outputs_idle({"CH1": True}, timeout=5.0)
+        ch1_on = output_map(state_on)["CH1"]
+        self.assertTrue(ch1_on["actual"])
+        self.assertFalse(ch1_on.get("manualWant", False))
+        self.assertFalse(ch1_on.get("operatorHoldOff", False))
+
+        time.sleep(0.6)
+        hold_state = self.api.get_json("/api/v1/state")
+        self.assertTrue(output_map(hold_state)["CH1"]["actual"])
+
+        response_off = self._post_json_logged("/api/v1/output/CH1/manual", {"state": False}, ok_statuses=(200,))
+        self.assertTrue(response_off["accepted"])
+        state_off = self._wait_outputs_idle({"CH1": False}, timeout=5.0)
+        ch1_off = output_map(state_off)["CH1"]
+        self.assertFalse(ch1_off["actual"])
+        self.assertFalse(ch1_off.get("manualWant", False))
+        self.assertFalse(ch1_off.get("operatorHoldOff", False))
+
+    def test_l_delay_turns_off_after_timeout(self):
+        self._prepare_single_rule("L", "CH1", 0)
+        self._turn_on_outputs(("CH1",))
+        self._post_json_logged("/api/v1/emu/set", safe_emu_payload(L=False))
+        time.sleep(0.2)
+        early = self.api.get_json("/api/v1/state")
+        self.assertTrue(output_map(early)["CH1"]["actual"])
+
+        state = self._wait_outputs({"CH1": False}, timeout=4.0)
+        ch1 = output_map(state)["CH1"]
+        self.assertFalse(ch1["actual"])
+        self.assertIn("L", ch1.get("forbidReasons", []))
+
+    def test_f_depends_on_ch2_for_ch1(self):
+        self._reset_runtime()
+        self._set_sensor_config("F", enabled=True, ctrl_delay_ms=500)
+        self._set_sensor_rule("F", 0, enabled=True)
+        self._post_json_logged("/api/v1/emu/set", safe_emu_payload(F=False))
+
+        self._turn_on_outputs(("CH1",))
+        time.sleep(0.8)
+        with_ch2_off = self.api.get_json("/api/v1/state")
+        ch1_before = output_map(with_ch2_off)["CH1"]
+        self.assertTrue(ch1_before["actual"])
+        self.assertNotIn("F", ch1_before.get("forbidReasons", []))
+
+        self._turn_on_outputs(("CH2",))
+        state = self._wait_outputs({"CH1": False, "CH2": True}, timeout=4.0)
+        ch1_after = output_map(state)["CH1"]
+        self.assertFalse(ch1_after["actual"])
+        self.assertIn("F", ch1_after.get("forbidReasons", []))
+
     def _assert_off_condition_turns_off_only_target_main_channel(self, sensor_id: str,
                                                                  output_id: str,
                                                                  out_idx: int) -> None:

@@ -1031,7 +1031,7 @@ private:
         _om->setMainStopLatched(true);
         _stor->saveOutputs(*_om);
 
-        _log->add("STOP активирован: все выходы выключены, логика CH1-CH3 пропущена до снятия STOP",
+        _log->add("STOP активирован: CH1-CH3 выключены и их логика пропущена до снятия STOP; CH4/CH5 не затрагиваются автоматически",
                   _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
 
         DynamicJsonDocument resp(448);

@@ -85,35 +85,40 @@ public:
         out[OUT_CH4]->enabled = ch4Enabled;
         out[OUT_CH5]->enabled = ch5Enabled;
 
-        if (_mainStopLatched) {
-            _applyGlobalStop();
-        } else {
-            for (int si = 0; si < SEN_COUNT; si++) {
-                SensorBase* sen = sm.s[si];
-                if (!sen || !sen->enabled) continue;
-
-                for (int oi = 0; oi < OUT_COUNT; oi++) {
-                    const int cmd = _sensorCommandForOutput(sm, prevState, (uint8_t)si, (uint8_t)oi);
-                    if (cmd == 1) newWant[oi] |= (1u << si);
-                    else if (cmd == -1) newForbid[oi] |= (1u << si);
-                }
-            }
-
-            const bool anyUnackedAlarm = hasUnackedAlarms(sm);
-            const bool soundRequired = anyUnackedAlarm || _safetyAlarmActive;
-
-            if (ch5Enabled && !soundMuted && soundRequired) {
-                newWant[OUT_CH5] |= (1u << RULEIDX_SOUND);
-            }
+        for (int si = 0; si < SEN_COUNT; si++) {
+            SensorBase* sen = sm.s[si];
+            if (!sen || !sen->enabled) continue;
 
             for (int oi = 0; oi < OUT_COUNT; oi++) {
-                _lastForbid[oi] = newForbid[oi];
-                _lastWant[oi]   = newWant[oi];
-                _applyCurrent((uint8_t)oi);
-            }
+                // STOP is a top-level short-circuit only for the technological
+                // channels CH1..CH3. Auxiliary outputs keep their own logic.
+                if (_mainStopLatched && _isMainOutput((uint8_t)oi)) continue;
 
-            out[OUT_CH4]->setBellPatternActive(ch4Enabled && !soundMuted && soundRequired);
+                const int cmd = _sensorCommandForOutput(sm, prevState, (uint8_t)si, (uint8_t)oi);
+                if (cmd == 1) newWant[oi] |= (1u << si);
+                else if (cmd == -1) newForbid[oi] |= (1u << si);
+            }
         }
+
+        const bool anyUnackedAlarm = hasUnackedAlarms(sm);
+        const bool soundRequired = anyUnackedAlarm || _safetyAlarmActive;
+
+        if (ch5Enabled && !soundMuted && soundRequired) {
+            newWant[OUT_CH5] |= (1u << RULEIDX_SOUND);
+        }
+
+        if (_mainStopLatched) {
+            _applyGlobalStop();
+        }
+
+        for (int oi = 0; oi < OUT_COUNT; oi++) {
+            if (_mainStopLatched && _isMainOutput((uint8_t)oi)) continue;
+            _lastForbid[oi] = newForbid[oi];
+            _lastWant[oi]   = newWant[oi];
+            _applyCurrent((uint8_t)oi);
+        }
+
+        out[OUT_CH4]->setBellPatternActive(ch4Enabled && !soundMuted && soundRequired);
 
         for (int i = 0; i < OUT_COUNT; i++) {
             if (out[i]->loop()) changed |= (1u << i);
@@ -133,10 +138,15 @@ public:
         out[OUT_CH5]->requestPulse(durationMs);
     }
 
-    // Low-level manual request: preserves the historic behavior where manual ON
-    // is OR'ed with automation, and manual OFF only removes that manual request.
+    // Low-level manual request. For CH1..CH3 it is routed through the same
+    // one-shot relay command path as the API, so the flowchart priorities are
+    // enforced независимо от источника команды.
     bool setManual(uint8_t outIdx, bool on) {
         if (outIdx >= OUT_COUNT || !out[outIdx]) return false;
+        if (_isMainOutput(outIdx)) {
+            RelayCommandResult r = handleRelayCommand(outIdx, on ? CMD_ON : CMD_OFF);
+            return r.accepted;
+        }
         const bool prevManual = out[outIdx]->manualWant();
         const bool accepted = _setManualForOutput(outIdx, on);
         if (out[outIdx]->manualWant() != prevManual) {
@@ -511,17 +521,30 @@ private:
         if (_isMainOutput(outIdx) && SensorManager::isSchemeControlSensorIndex(sensorIdx)) {
             invalidMeansOff = false;
             if (sensorIdx == SEN_F) {
-                controlGate = prevState[outIdx];
+                controlGate = _flowControlGate(prevState, outIdx);
             }
         }
 
         return sen->evalCtrl(outIdx, invalidMeansOff, controlGate);
     }
 
+    bool _flowControlGate(const bool prevState[OUT_COUNT], uint8_t outIdx) const {
+        if (outIdx == OUT_CH1) {
+            // Source scheme explicitly says CH1 flow loss is relevant only when
+            // the linked relay CH2 (valve) is already ON.
+            return prevState[OUT_CH2];
+        }
+
+        // CH2/CH3 have no explicit linked-relay mapping in the source scheme.
+        // Keep the current per-channel gate until the project gains a dedicated
+        // configuration for their flow dependency.
+        return prevState[outIdx];
+    }
+
     void _applyGlobalStop() {
         bool dirty = false;
 
-        for (uint8_t oi = 0; oi < OUT_COUNT; oi++) {
+        for (uint8_t oi = OUT_CH1; oi <= OUT_CH3; oi++) {
             _lastForbid[oi] = 0;
             _lastWant[oi] = 0;
 
@@ -543,11 +566,7 @@ private:
 
             if (!_begun) continue;
 
-            if (_isMainOutput(oi)) {
-                out[oi]->applyResolvedHold(_effectiveForbidMask(oi), 0);
-            } else {
-                out[oi]->applyResolved(0, 0);
-            }
+            out[oi]->applyResolvedHold(_effectiveForbidMask(oi), 0);
         }
 
         if (dirty) _manualStateDirty = true;
@@ -580,6 +599,29 @@ private:
     }
 
     void _applyRelayCommand(uint8_t outIdx, bool targetOn) {
+        if (_isMainOutput(outIdx)) {
+            bool dirty = false;
+
+            const bool prevManual = out[outIdx]->manualWant();
+            const bool prevHoldOff = _operatorHoldOff[outIdx];
+
+            if (targetOn) {
+                _operatorHoldOff[outIdx] = false;
+                out[outIdx]->restoreManualWant(true);
+            } else {
+                out[outIdx]->restoreManualWant(false);
+                _operatorHoldOff[outIdx] = true;
+            }
+
+            _applyCurrent(outIdx);
+
+            if (out[outIdx]->manualWant() != prevManual || _operatorHoldOff[outIdx] != prevHoldOff) {
+                dirty = true;
+            }
+            if (dirty) _manualStateDirty = true;
+            return;
+        }
+
         bool dirty = false;
 
         if (targetOn) {
@@ -636,13 +678,45 @@ private:
 
     void _applyCurrent(uint8_t outIdx) {
         if (!_begun || outIdx >= OUT_COUNT || !out[outIdx]) return;
-        const bool prevManual = out[outIdx]->manualWant();
         if (_isMainOutput(outIdx)) {
-            out[outIdx]->applyResolvedHold(_effectiveForbidMask(outIdx), _lastWant[outIdx]);
-        } else {
-            out[outIdx]->applyResolved(_effectiveForbidMask(outIdx), _lastWant[outIdx]);
+            _applyCurrentMain(outIdx);
+            return;
         }
+        const bool prevManual = out[outIdx]->manualWant();
+        out[outIdx]->applyResolved(_effectiveForbidMask(outIdx), _lastWant[outIdx]);
         if (out[outIdx]->manualWant() != prevManual) _manualStateDirty = true;
+    }
+
+    void _applyCurrentMain(uint8_t outIdx) {
+        const bool prevManual = out[outIdx]->manualWant();
+        const bool prevHoldOff = _operatorHoldOff[outIdx];
+        const uint32_t forbidMask = _effectiveForbidMask(outIdx);
+        const uint32_t wantMask = _lastWant[outIdx];
+
+        if (forbidMask != 0) {
+            _operatorHoldOff[outIdx] = false;
+            if (out[outIdx]->manualWant()) out[outIdx]->restoreManualWant(false);
+            out[outIdx]->applyResolvedHold(forbidMask, wantMask);
+        } else if (wantMask != 0) {
+            _operatorHoldOff[outIdx] = false;
+            if (out[outIdx]->manualWant()) out[outIdx]->restoreManualWant(false);
+            out[outIdx]->applyResolvedHold(0, wantMask);
+        } else if (_operatorHoldOff[outIdx]) {
+            _operatorHoldOff[outIdx] = false;
+            if (out[outIdx]->manualWant()) out[outIdx]->restoreManualWant(false);
+            out[outIdx]->forceOff(true);
+            out[outIdx]->applyResolvedHold(0, 0);
+        } else if (out[outIdx]->manualWant()) {
+            out[outIdx]->setManualHold(true);
+            out[outIdx]->restoreManualWant(false);
+            out[outIdx]->applyResolvedHold(0, 0);
+        } else {
+            out[outIdx]->applyResolvedHold(0, 0);
+        }
+
+        if (out[outIdx]->manualWant() != prevManual || _operatorHoldOff[outIdx] != prevHoldOff) {
+            _manualStateDirty = true;
+        }
     }
 
     void _logRelayCommand(EventLog* log, SensorManager* sm, uint8_t outIdx,

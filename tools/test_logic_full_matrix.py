@@ -58,6 +58,7 @@ class HoldOutputModel:
     actual_on: bool = False
     requested_on: bool = False
     manual_want: bool = False
+    operator_hold_off: bool = False
     forbid_mask: int = 0
     want_on_mask: int = 0
 
@@ -66,11 +67,22 @@ class HoldOutputModel:
         self.want_on_mask = want_on_mask
         if not self.enabled:
             self.manual_want = False
+            self.operator_hold_off = False
             self.requested_on = False
         elif self.forbid_mask != 0:
             self.manual_want = False
+            self.operator_hold_off = False
             self.requested_on = False
         elif self.want_on_mask != 0:
+            self.manual_want = False
+            self.operator_hold_off = False
+            self.requested_on = True
+        elif self.operator_hold_off:
+            self.manual_want = False
+            self.operator_hold_off = False
+            self.requested_on = False
+        elif self.manual_want:
+            self.manual_want = False
             self.requested_on = True
         else:
             self.requested_on = self.actual_on
@@ -80,14 +92,9 @@ class HoldOutputModel:
     def set_manual_hold(self, on: bool) -> bool:
         if on and (self.forbid_mask != 0 or not self.enabled):
             return False
-        self.manual_want = on
-        if not on and self.enabled and self.forbid_mask == 0 and self.want_on_mask != 0:
-            self.requested_on = True
-        else:
-            self.requested_on = self.enabled and (self.forbid_mask == 0) and on
-            if not on:
-                self.requested_on = False
-        self.actual_on = self.requested_on
+        self.manual_want = bool(on)
+        self.operator_hold_off = not on
+        self.apply_resolved_hold(self.forbid_mask, self.want_on_mask)
         return (not on) or (self.forbid_mask == 0 and self.enabled)
 
 
@@ -134,12 +141,8 @@ class StopControllerModel:
             self.last_forbid[out_idx] = 0
             self.last_want[out_idx] = 0
             output.manual_want = False
+            output.operator_hold_off = False
             output.apply_resolved_hold(1 << scheme.SAFETY_STOP, 0)
-        for out_idx, output in self.aux_outputs.items():
-            self.last_forbid[out_idx] = 0
-            self.last_want[out_idx] = 0
-            output.manual_want = False
-            output.apply_resolved(0, 0)
 
     def release_stop(self) -> None:
         self.main_stop_latched = False
@@ -322,6 +325,30 @@ class DigitalSchemeMatrixTests(unittest.TestCase):
                         0,
                     )
 
+    def test_f_loss_with_ch2_on_after_delay_turns_off_ch1(self):
+        flow = scheme.build_control_sensor(scheme.SEN_F, enabled_channels=(scheme.OUT_CH1,), fault=True)
+        delay = scheme.control_delay_ms(scheme.SEN_F)
+        self.assertEqual(
+            scheme.eval_ctrl_timed(scheme.SEN_F, flow, scheme.OUT_CH1, delay, linked_output_on=True),
+            -1,
+        )
+        self.assertEqual(
+            scheme.aggregate_rules_timed({scheme.SEN_F: flow}, scheme.OUT_CH1, delay, linked_output_on=True),
+            (1 << scheme.SEN_F, 0),
+        )
+
+    def test_f_loss_with_ch2_off_is_neutral_for_ch1(self):
+        flow = scheme.build_control_sensor(scheme.SEN_F, enabled_channels=(scheme.OUT_CH1,), fault=True)
+        delay = scheme.control_delay_ms(scheme.SEN_F)
+        self.assertEqual(
+            scheme.eval_ctrl_timed(scheme.SEN_F, flow, scheme.OUT_CH1, delay, linked_output_on=False),
+            0,
+        )
+        self.assertEqual(
+            scheme.aggregate_rules_timed({scheme.SEN_F: flow}, scheme.OUT_CH1, delay, linked_output_on=False),
+            (0, 0),
+        )
+
     def test_f_isolation_combinations(self):
         combinations = (
             (),
@@ -348,33 +375,61 @@ class DigitalSchemeMatrixTests(unittest.TestCase):
 
 
 class MainOutputPriorityTests(unittest.TestCase):
-    def test_off_has_priority_over_on(self):
+    def test_auto_off_priority_over_auto_on(self):
         out = HoldOutputModel(actual_on=True, requested_on=True)
         self.assertFalse(out.apply_resolved_hold(1, 1))
+        self.assertFalse(out.manual_want)
+        self.assertFalse(out.operator_hold_off)
 
-    def test_auto_on_has_priority_over_manual_off(self):
+    def test_auto_off_priority_over_manual_on(self):
+        out = HoldOutputModel(actual_on=True, requested_on=True, manual_want=True)
+        self.assertFalse(out.apply_resolved_hold(1, 0))
+        self.assertFalse(out.manual_want)
+
+    def test_auto_on_priority_over_manual_off(self):
+        out = HoldOutputModel(actual_on=True, requested_on=True, operator_hold_off=True)
+        self.assertTrue(out.apply_resolved_hold(0, 1))
+        self.assertFalse(out.operator_hold_off)
+
+    def test_manual_off_when_auto_neutral(self):
         out = HoldOutputModel(actual_on=True, requested_on=True)
-        out.apply_resolved_hold(0, 1)
-        self.assertTrue(out.actual_on)
         self.assertTrue(out.set_manual_hold(False))
-        self.assertTrue(out.actual_on)
+        self.assertFalse(out.actual_on)
+        self.assertFalse(out.operator_hold_off)
 
     def test_manual_on_is_applied_in_neutral_zone(self):
         out = HoldOutputModel(actual_on=False, requested_on=False)
         self.assertTrue(out.set_manual_hold(True))
         self.assertTrue(out.actual_on)
+        self.assertFalse(out.manual_want)
 
-    def test_auto_off_clears_manual_want(self):
+    def test_manual_hold_when_command_is_neutral(self):
+        for initial in (False, True):
+            with self.subTest(initial=initial):
+                out = HoldOutputModel(actual_on=initial, requested_on=initial)
+                self.assertEqual(out.apply_resolved_hold(0, 0), initial)
+
+    def test_auto_off_clears_manual_state(self):
         out = HoldOutputModel(actual_on=False, requested_on=False)
-        out.set_manual_hold(True)
-        self.assertTrue(out.manual_want)
+        out.manual_want = True
+        out.operator_hold_off = True
         out.apply_resolved_hold(1, 0)
         self.assertFalse(out.actual_on)
         self.assertFalse(out.manual_want)
+        self.assertFalse(out.operator_hold_off)
+
+    def test_auto_on_clears_manual_state(self):
+        out = HoldOutputModel(actual_on=False, requested_on=False)
+        out.manual_want = True
+        out.operator_hold_off = True
+        out.apply_resolved_hold(0, 1)
+        self.assertTrue(out.actual_on)
+        self.assertFalse(out.manual_want)
+        self.assertFalse(out.operator_hold_off)
 
     def test_clearing_forbid_does_not_replay_old_manual_on(self):
         out = HoldOutputModel(actual_on=False, requested_on=False)
-        out.set_manual_hold(True)
+        out.manual_want = True
         out.apply_resolved_hold(1, 0)
         out.apply_resolved_hold(0, 0)
         self.assertFalse(out.actual_on)
@@ -382,7 +437,7 @@ class MainOutputPriorityTests(unittest.TestCase):
 
 
 class StopAndIsolationTests(unittest.TestCase):
-    def test_global_stop_turns_off_all_outputs_and_clears_pending_masks(self):
+    def test_global_stop_turns_off_only_main_outputs_and_clears_main_masks(self):
         ctrl = StopControllerModel()
         ctrl.apply_global_stop()
 
@@ -390,18 +445,34 @@ class StopAndIsolationTests(unittest.TestCase):
         for out in ctrl.main_outputs.values():
             self.assertFalse(out.actual_on)
             self.assertFalse(out.manual_want)
-        for out in ctrl.aux_outputs.values():
-            self.assertFalse(out.actual_on)
-            self.assertFalse(out.manual_want)
-        for out_idx in range(scheme.OUT_COUNT):
+            self.assertFalse(out.operator_hold_off)
+        self.assertTrue(ctrl.aux_outputs[scheme.OUT_CH4].actual_on)
+        self.assertTrue(ctrl.aux_outputs[scheme.OUT_CH5].actual_on)
+        for out_idx in MAIN_CHANNELS:
             self.assertEqual(ctrl.last_forbid[out_idx], 0)
             self.assertEqual(ctrl.last_want[out_idx], 0)
+
+    def test_stop_clears_pending_manual_for_main_outputs(self):
+        ctrl = StopControllerModel()
+        for out in ctrl.main_outputs.values():
+            out.manual_want = True
+            out.operator_hold_off = True
+        ctrl.apply_global_stop()
+        for out in ctrl.main_outputs.values():
+            self.assertFalse(out.manual_want)
+            self.assertFalse(out.operator_hold_off)
 
     def test_manual_on_for_main_outputs_is_blocked_while_stop_is_active(self):
         ctrl = StopControllerModel()
         ctrl.apply_global_stop()
         for out_idx in MAIN_CHANNELS:
             self.assertFalse(ctrl.manual_on(out_idx))
+
+    def test_aux_outputs_are_not_implicitly_blocked_by_main_stop(self):
+        ctrl = StopControllerModel()
+        ctrl.apply_global_stop()
+        self.assertTrue(ctrl.manual_on(scheme.OUT_CH4))
+        self.assertTrue(ctrl.manual_on(scheme.OUT_CH5))
 
     def test_release_stop_does_not_restore_old_manual_main_requests(self):
         ctrl = StopControllerModel()
@@ -541,8 +612,19 @@ class FullMatrixSourceGuardTests(unittest.TestCase):
     def test_main_outputs_use_hold_resolver_and_aux_outputs_use_level_resolver(self):
         self.assertIn("void applyResolved(uint32_t forbidMask, uint32_t wantOnMask)", self.output_h)
         self.assertIn("void applyResolvedHold(uint32_t forbidMask, uint32_t wantOnMask)", self.output_h)
-        self.assertIn("out[outIdx]->applyResolvedHold(_effectiveForbidMask(outIdx), _lastWant[outIdx]);", self.output_manager_h)
+        self.assertIn("void _applyCurrentMain(uint8_t outIdx)", self.output_manager_h)
+        self.assertIn("out[outIdx]->applyResolvedHold(forbidMask, wantMask);", self.output_manager_h)
+        self.assertIn("out[outIdx]->setManualHold(true);", self.output_manager_h)
+        self.assertIn("out[outIdx]->forceOff(true);", self.output_manager_h)
         self.assertIn("out[outIdx]->applyResolved(_effectiveForbidMask(outIdx), _lastWant[outIdx]);", self.output_manager_h)
+
+    def test_global_stop_loop_is_limited_to_main_channels(self):
+        self.assertIn("for (uint8_t oi = OUT_CH1; oi <= OUT_CH3; oi++)", self.output_manager_h)
+
+    def test_flow_gate_uses_ch2_for_ch1_and_keeps_local_gate_for_other_channels(self):
+        self.assertIn("controlGate = _flowControlGate(prevState, outIdx);", self.output_manager_h)
+        self.assertIn("return prevState[OUT_CH2];", self.output_manager_h)
+        self.assertIn("return prevState[outIdx];", self.output_manager_h)
 
     def test_mute_clears_sound_outputs_without_touching_main_channels(self):
         self.assertIn("out[OUT_CH4]->setBellPatternActive(false);", self.output_manager_h)

@@ -226,25 +226,36 @@ class ArbiterOutput:
     actual_on: bool = False
     requested_on: bool = False
     manual_want: bool = False
+    operator_hold_off: bool = False
 
     def apply(self, forbid_mask: int, want_mask: int) -> bool:
-        # Flowchart priority: OFF > ON > manual/hold.
+        # Flowchart priority: OFF > ON > manual OFF > manual ON > hold.
         if forbid_mask:
             self.manual_want = False
+            self.operator_hold_off = False
             self.requested_on = False
         elif want_mask:
+            self.manual_want = False
+            self.operator_hold_off = False
+            self.requested_on = True
+        elif self.operator_hold_off:
+            self.manual_want = False
+            self.operator_hold_off = False
+            self.requested_on = False
+        elif self.manual_want:
+            self.manual_want = False
             self.requested_on = True
         else:
             self.requested_on = self.actual_on
         self.actual_on = self.requested_on
         return self.actual_on
 
-    def manual(self, on: bool, forbid_mask: int = 0) -> bool:
+    def manual(self, on: bool, forbid_mask: int = 0, want_mask: int = 0) -> bool:
         if on and forbid_mask:
             return False
-        self.manual_want = on
-        self.requested_on = bool(on and not forbid_mask)
-        self.actual_on = self.requested_on
+        self.manual_want = bool(on)
+        self.operator_hold_off = not on
+        self.apply(forbid_mask, want_mask)
         return True
 
 
@@ -357,8 +368,11 @@ def build_control_sensor(sensor_idx: int,
 
 
 def eval_ctrl_timed(sensor_idx: int, sensor: Sensor, out_idx: int,
-                    elapsed_ms: int, prev_output_on: bool = True) -> int:
-    gate = prev_output_on if sensor_idx == SEN_F else True
+                    elapsed_ms: int, prev_output_on: bool = True,
+                    linked_output_on: Optional[bool] = None) -> int:
+    gate = True
+    if sensor_idx == SEN_F:
+        gate = linked_output_on if linked_output_on is not None else prev_output_on
     cmd = sensor.eval_ctrl(out_idx, control_gate=gate)
     rule = sensor.ctrl.get(out_idx)
     if not rule:
@@ -371,12 +385,15 @@ def eval_ctrl_timed(sensor_idx: int, sensor: Sensor, out_idx: int,
 
 
 def aggregate_rules_timed(sensors: Dict[int, Sensor], out_idx: int,
-                          elapsed_ms, prev_output_on: bool = True) -> Tuple[int, int]:
+                          elapsed_ms, prev_output_on: bool = True,
+                          linked_output_on: Optional[bool] = None) -> Tuple[int, int]:
     forbid = 0
     want = 0
     for sensor_idx, sensor in sensors.items():
         sensor_elapsed = elapsed_ms.get(sensor_idx, 0) if isinstance(elapsed_ms, dict) else elapsed_ms
-        cmd = eval_ctrl_timed(sensor_idx, sensor, out_idx, sensor_elapsed, prev_output_on=prev_output_on)
+        cmd = eval_ctrl_timed(sensor_idx, sensor, out_idx, sensor_elapsed,
+                              prev_output_on=prev_output_on,
+                              linked_output_on=linked_output_on)
         if cmd == -1:
             forbid |= 1 << sensor_idx
         elif cmd == 1:
@@ -490,6 +507,18 @@ class DigitalLFTests(unittest.TestCase):
         flow.ctrl[OUT_CH1] = rule
         self.assertEqual(flow.eval_ctrl(OUT_CH1, control_gate=False), 0)
         self.assertEqual(flow.eval_ctrl(OUT_CH1, control_gate=True), -1)
+
+    def test_flow_rule_for_ch1_depends_on_ch2_state_in_scheme(self):
+        flow = build_control_sensor(SEN_F, enabled_channels=(OUT_CH1,), fault=True)
+        delay = control_delay_ms(SEN_F)
+        self.assertEqual(
+            eval_ctrl_timed(SEN_F, flow, OUT_CH1, delay, linked_output_on=False),
+            0,
+        )
+        self.assertEqual(
+            eval_ctrl_timed(SEN_F, flow, OUT_CH1, delay, linked_output_on=True),
+            -1,
+        )
 
     def test_flow_rule_is_channel_local(self):
         flow = Sensor(value=0.0)
@@ -790,9 +819,12 @@ class SourceGuardTests(unittest.TestCase):
         self.assertIn("if (_mainStopLatched)", self.output_mgr_h)
         self.assertIn("_applyGlobalStop();", self.output_mgr_h)
         self.assertIn("invalidMeansOff = false;", self.output_mgr_h)
+        self.assertIn("for (uint8_t oi = OUT_CH1; oi <= OUT_CH3; oi++)", self.output_mgr_h)
 
-    def test_flow_rule_is_gated_by_previous_output_state(self):
-        self.assertIn("controlGate = prevState[outIdx];", self.output_mgr_h)
+    def test_flow_rule_for_ch1_depends_on_ch2_and_other_channels_keep_local_gate(self):
+        self.assertIn("controlGate = _flowControlGate(prevState, outIdx);", self.output_mgr_h)
+        self.assertIn("return prevState[OUT_CH2];", self.output_mgr_h)
+        self.assertIn("return prevState[outIdx];", self.output_mgr_h)
 
     def test_main_loop_skips_confirmation_and_safety_while_stop_is_active(self):
         self.assertIn("if (!outputMgr.mainStopLatched())", self.main_ino)
