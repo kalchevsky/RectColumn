@@ -140,31 +140,40 @@ class EmuChannelSensorMatrixTests(LiveEmuApiTestCase):
         return trace
 
     def _reset_runtime(self) -> None:
-        self._post_json_logged("/api/v1/mute", {"muted": True})
-        self._post_json_logged("/api/v1/emu/set", safe_emu_payload())
-        self._disable_all_main_rules()
-        self._post_json_logged("/api/v1/output/CH4/manual", {"state": False}, ok_statuses=(200, 409))
-        self._post_json_logged("/api/v1/output/CH5/manual", {"state": False}, ok_statuses=(200, 409))
-        self._post_json_logged("/api/v1/stop", {})
-        self._post_json_logged("/api/v1/stop?release=1", {})
-        self._post_json_logged("/api/v1/safety/reset", {})
-        self._post_json_logged("/api/v1/emu/set", safe_emu_payload())
-        self._turn_off_all_main_outputs()
-        self.api.wait_for_state(
-            lambda current: (
-                not current.get("stopLatched", False)
-                and not current.get("safetyAlarmActive", False)
-                and all(
-                    not output_map(current)[output_id]["actual"]
-                    and not output_map(current)[output_id].get("pending", False)
-                    and not output_map(current)[output_id].get("relayPending", False)
-                    for output_id, _ in MAIN_OUTPUTS
+        last_error: AssertionError | None = None
+        for attempt in range(3):
+            self._post_json_logged("/api/v1/mute", {"muted": True})
+            self._post_json_logged("/api/v1/emu/set", safe_emu_payload())
+            self._disable_all_main_rules()
+            self._post_json_logged("/api/v1/output/CH4/manual", {"state": False}, ok_statuses=(200, 409))
+            self._post_json_logged("/api/v1/output/CH5/manual", {"state": False}, ok_statuses=(200, 409))
+            self._post_json_logged("/api/v1/stop", {})
+            self._post_json_logged("/api/v1/stop?release=1", {})
+            self._post_json_logged("/api/v1/safety/reset", {})
+            self._post_json_logged("/api/v1/emu/set", safe_emu_payload())
+            self._turn_off_all_main_outputs()
+            try:
+                self.api.wait_for_state(
+                    lambda current: (
+                        not current.get("stopLatched", False)
+                        and not current.get("safetyAlarmActive", False)
+                        and all(
+                            not output_map(current)[output_id]["actual"]
+                            and not output_map(current)[output_id].get("pending", False)
+                            and not output_map(current)[output_id].get("relayPending", False)
+                            for output_id, _ in MAIN_OUTPUTS
+                        )
+                        and output_map(current)["CH4"]["actual"] is False
+                        and output_map(current)["CH5"]["actual"] is False
+                    ),
+                    timeout=8.0 if attempt == 0 else 5.0,
                 )
-                and output_map(current)["CH4"]["actual"] is False
-                and output_map(current)["CH5"]["actual"] is False
-            ),
-            timeout=5.0,
-        )
+                return
+            except AssertionError as exc:
+                last_error = exc
+                time.sleep(0.8)
+        if last_error is not None:
+            raise last_error
 
     def _disable_all_main_rules(self) -> None:
         for sensor_id in ALL_SENSORS:
@@ -257,6 +266,30 @@ class EmuChannelSensorMatrixTests(LiveEmuApiTestCase):
             ),
             timeout=3.0,
         )
+
+    def _assert_enabled_sensor_error_blocks_manual_on(self, sensor_id: str, output_id: str, out_idx: int) -> None:
+        self._prepare_single_rule(sensor_id, output_id, out_idx)
+        self._post_json_logged("/api/v1/emu/set", safe_emu_payload(**{f"{sensor_id}err": True}))
+
+        state = self.api.wait_for_state(
+            lambda current: (
+                sensor_map(current)[sensor_id]["error"] is True
+                and output_map(current)[output_id]["forbidden"] is True
+            ),
+            timeout=4.0,
+        )
+        self.assertIn(sensor_id, output_map(state)[output_id].get("forbidReasons", []))
+
+        status, response = self.api.request_json(
+            f"/api/v1/output/{output_id}/manual",
+            method="POST",
+            payload={"state": True},
+            ok_statuses=(409,),
+        )
+        self.assertEqual(status, 409)
+        self.assertFalse(response["accepted"])
+        self.assertEqual(response["detail"], "forbidden")
+        self.assertIn(sensor_id, response.get("userMessage", ""))
 
     def test_flow_regression_only_ch1_turns_off_when_ch2_flow_rule_is_disabled(self):
         self._reset_runtime()
@@ -400,6 +433,70 @@ class EmuChannelSensorMatrixTests(LiveEmuApiTestCase):
         self.assertFalse(ch1["actual"])
         self.assertFalse(ch1.get("manualWant", False))
         self.assertFalse(ch1.get("operatorHoldOff", False))
+
+    def test_enabled_t1_error_blocks_manual_on_for_affected_channel(self):
+        self._assert_enabled_sensor_error_blocks_manual_on("T1", "CH1", 0)
+
+    def test_enabled_t2_error_blocks_manual_on_for_affected_channel(self):
+        self._assert_enabled_sensor_error_blocks_manual_on("T2", "CH2", 1)
+
+    def test_enabled_t3_error_blocks_manual_on_for_affected_channel(self):
+        self._assert_enabled_sensor_error_blocks_manual_on("T3", "CH3", 2)
+
+    def test_active_sensor_error_turns_already_enabled_channel_off(self):
+        self._prepare_single_rule("T1", "CH1", 0)
+        self._turn_on_outputs(("CH1",))
+        self._post_json_logged("/api/v1/emu/set", safe_emu_payload(T1err=True))
+
+        state = self._wait_outputs_idle({"CH1": False}, timeout=5.0)
+        ch1 = output_map(state)["CH1"]
+        self.assertTrue(sensor_map(state)["T1"]["error"])
+        self.assertIn("T1", ch1.get("forbidReasons", []))
+        self.assertFalse(ch1.get("manualWant", False))
+
+    def test_manual_on_during_active_sensor_error_is_consumed_and_not_replayed_after_clearing_error(self):
+        self._prepare_single_rule("T1", "CH1", 0)
+        self._post_json_logged("/api/v1/emu/set", safe_emu_payload(T1err=True))
+        self.api.wait_for_state(
+            lambda current: (
+                sensor_map(current)["T1"]["error"] is True
+                and output_map(current)["CH1"]["forbidden"] is True
+            ),
+            timeout=4.0,
+        )
+
+        status, response = self.api.request_json(
+            "/api/v1/output/CH1/manual",
+            method="POST",
+            payload={"state": True},
+            ok_statuses=(409,),
+        )
+        self.assertEqual(status, 409)
+        self.assertFalse(response["accepted"])
+
+        self._post_json_logged("/api/v1/emu/set", safe_emu_payload(T1=75.0, T1err=False))
+        cleared = self._wait_outputs_idle({"CH1": False}, timeout=5.0)
+        ch1 = output_map(cleared)["CH1"]
+        self.assertFalse(sensor_map(cleared)["T1"]["error"])
+        self.assertFalse(ch1["actual"])
+        self.assertFalse(ch1.get("manualWant", False))
+        self.assertFalse(ch1.get("operatorHoldOff", False))
+
+    def test_manual_off_remains_allowed_during_sensor_error_auto_off(self):
+        self._prepare_single_rule("T1", "CH1", 0)
+        self._turn_on_outputs(("CH1",))
+        self._post_json_logged("/api/v1/emu/set", safe_emu_payload(T1err=True))
+        self.api.wait_for_state(
+            lambda current: (
+                sensor_map(current)["T1"]["error"] is True
+                and output_map(current)["CH1"]["actual"] is False
+                and output_map(current)["CH1"]["forbidden"] is True
+            ),
+            timeout=5.0,
+        )
+
+        response = self._post_json_logged("/api/v1/output/CH1/manual", {"state": False}, ok_statuses=(200,))
+        self.assertTrue(response["accepted"])
 
     def test_l_delay_turns_off_after_timeout(self):
         self._prepare_single_rule("L", "CH1", 0)

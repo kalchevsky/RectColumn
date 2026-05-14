@@ -207,11 +207,11 @@ def test_manual_command():
     print("OK manual command")
 
 
-def test_control_sensor_failure_is_neutral():
+def test_control_sensor_failure_is_auto_off():
     r = CtrlRule(True, OUT_CH1, LOGIC_HEAT, 70.0, 80.0)
-    assert_seq("sensor NAN neutral", eval_ctrl(None, True, False, r, OUT_CH1, invalid_means_off=False), 0)
-    assert_seq("sensor absent neutral", eval_ctrl(75.0, False, False, r, OUT_CH1, invalid_means_off=False), 0)
-    assert_seq("sensor error neutral", eval_ctrl(75.0, True, True, r, OUT_CH1, invalid_means_off=False), 0)
+    assert_seq("sensor NAN auto off", eval_ctrl(None, True, False, r, OUT_CH1, invalid_means_off=True), -1)
+    assert_seq("sensor absent auto off", eval_ctrl(75.0, False, False, r, OUT_CH1, invalid_means_off=True), -1)
+    assert_seq("sensor error auto off", eval_ctrl(75.0, True, True, r, OUT_CH1, invalid_means_off=True), -1)
 
 
 def test_scheme_excludes_extended_sensors():
@@ -233,7 +233,7 @@ def main():
     test_lf_mode_isolation()
     test_storage_migration()
     test_manual_command()
-    test_control_sensor_failure_is_neutral()
+    test_control_sensor_failure_is_auto_off()
     test_scheme_excludes_extended_sensors()
 
 

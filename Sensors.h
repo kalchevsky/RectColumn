@@ -176,6 +176,12 @@ public:
             return 0;
         }
 
+        if (!enabled) {
+            _ctrlCandidateCmd[outIdx] = 0;
+            _ctrlCandidateSinceMs[outIdx] = 0;
+            return 0;
+        }
+
         if (!hasUsableValue()) {
             _ctrlCandidateCmd[outIdx] = 0;
             _ctrlCandidateSinceMs[outIdx] = 0;

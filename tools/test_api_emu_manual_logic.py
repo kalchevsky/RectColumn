@@ -38,23 +38,47 @@ class EmuManualLogicTests(LiveEmuApiTestCase):
         self.assertIn("запрещено текущими условиями автоматики", response["userMessage"])
         self.assertIn("T1", response["userMessage"])
 
-    def test_manual_on_allowed_when_control_sensor_is_in_error(self):
+    def test_manual_on_blocked_when_control_sensor_is_in_error(self):
         self.isolate_ch1_t1_rule()
         self.api.post_json("/api/v1/emu/set", safe_emu_payload(T1err=True))
 
         state = self.api.wait_for_state(
             lambda current: sensor_map(current)["T1"]["error"] is True
+            and output_map(current)["CH1"]["forbidden"] is True
         )
-        self.assertFalse(output_map(state)["CH1"]["forbidden"])
+        self.assertIn("T1", output_map(state)["CH1"].get("forbidReasons", []))
 
-        _, response = self.api.request_json(
+        status, response = self.api.request_json(
             "/api/v1/output/CH1/manual",
             method="POST",
             payload={"state": True},
+            ok_statuses=(409,),
+        )
+        self.assertEqual(status, 409)
+        self.assertFalse(response["accepted"])
+        self.assertEqual(response["detail"], "forbidden")
+        self.assertIn("T1", response["userMessage"])
+
+    def test_manual_off_remains_allowed_when_control_sensor_is_in_error(self):
+        self.isolate_ch1_t1_rule()
+        self.api.post_json("/api/v1/emu/set", safe_emu_payload(T1=75.0))
+        response_on = self.api.post_json("/api/v1/output/CH1/manual", {"state": True}, ok_statuses=(200,))
+        self.assertTrue(response_on["accepted"])
+        self.api.wait_for_state(lambda current: output_map(current)["CH1"]["actual"] is True)
+
+        self.api.post_json("/api/v1/emu/set", safe_emu_payload(T1err=True))
+        self.api.wait_for_state(
+            lambda current: sensor_map(current)["T1"]["error"] is True
+            and output_map(current)["CH1"]["actual"] is False
+        )
+
+        _, response_off = self.api.request_json(
+            "/api/v1/output/CH1/manual",
+            method="POST",
+            payload={"state": False},
             ok_statuses=(200,),
         )
-        self.assertTrue(response["accepted"])
-        self.assertEqual(response["detail"], "")
+        self.assertTrue(response_off["accepted"])
 
     def test_manual_on_blocked_by_stop(self):
         self.isolate_ch1_t1_rule()

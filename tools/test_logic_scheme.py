@@ -186,6 +186,9 @@ class Sensor:
         if not control_gate:
             return 0
 
+        if not self.enabled:
+            return 0
+
         if not self.usable():
             if rule.fail_safe in (FailSafeMode.FORCE_OFF, FailSafeMode.LATCH_FAULT):
                 return -1
@@ -215,7 +218,7 @@ def normalize_lf_off_only(rule: CtrlRule, out_idx: int) -> CtrlRule:
         logic=LOGIC_COOL,
         min_val=0.5,
         max_val=2.0,
-        fail_safe=FailSafeMode.NEUTRAL,
+        fail_safe=FailSafeMode.FORCE_OFF,
         on_delay_ms=0,
         off_delay_ms=rule.off_delay_ms,
     )
@@ -354,7 +357,7 @@ def make_channel_rule(sensor_idx: int, out_idx: int, enabled: bool) -> CtrlRule:
         logic=LOGIC_HEAT,
         min_val=20.0,
         max_val=80.0,
-        fail_safe=FailSafeMode.NEUTRAL,
+        fail_safe=FailSafeMode.FORCE_OFF,
         off_delay_ms=delay_ms,
     )
 
@@ -499,11 +502,11 @@ class DigitalLFTests(unittest.TestCase):
         self.assertEqual(low.eval_ctrl(OUT_CH1), -1)
         self.assertEqual(high.eval_ctrl(OUT_CH1), 0)
 
-    def test_lf_missing_sensor_is_neutral(self):
+    def test_lf_missing_sensor_forms_auto_off(self):
         rule = normalize_lf_off_only(CtrlRule(enabled=True), OUT_CH1)
         lost = Sensor(present=False, value=math.nan)
         lost.ctrl[OUT_CH1] = rule
-        self.assertEqual(lost.eval_ctrl(OUT_CH1), 0)
+        self.assertEqual(lost.eval_ctrl(OUT_CH1), -1)
 
     def test_flow_rule_is_ignored_while_output_is_off(self):
         rule = normalize_lf_off_only(CtrlRule(enabled=True), OUT_CH1)
@@ -674,10 +677,16 @@ class ChannelSensorMatrixTests(unittest.TestCase):
 
 
 class SensorFaultAndAlarmTests(unittest.TestCase):
-    def test_analog_control_sensor_error_is_neutral(self):
+    def test_enabled_analog_control_sensor_error_forms_auto_off(self):
         t1 = Sensor(present=False, error=True, value=math.nan)
         t1.ctrl[OUT_CH1] = CtrlRule(True, OUT_CH1, LOGIC_HEAT, 70, 80,
-                                    fail_safe=FailSafeMode.NEUTRAL)
+                                    fail_safe=FailSafeMode.FORCE_OFF)
+        self.assertEqual(t1.eval_ctrl(OUT_CH1), -1)
+
+    def test_disabled_analog_control_sensor_error_is_excluded(self):
+        t1 = Sensor(enabled=False, present=False, error=True, value=math.nan)
+        t1.ctrl[OUT_CH1] = CtrlRule(True, OUT_CH1, LOGIC_HEAT, 70, 80,
+                                    fail_safe=FailSafeMode.FORCE_OFF)
         self.assertEqual(t1.eval_ctrl(OUT_CH1), 0)
 
     def test_nan_error_raises_first_enabled_alarm_slot(self):
@@ -755,8 +764,10 @@ class SourceGuardTests(unittest.TestCase):
         cls.confirm_h = (cls.root / "ConfirmationManager.h").read_text(encoding="utf-8", errors="ignore")
         cls.process_h = (cls.root / "ProcessSafety.h").read_text(encoding="utf-8", errors="ignore")
         cls.output_mgr_h = (cls.root / "OutputManager.h").read_text(encoding="utf-8", errors="ignore")
+        cls.webapi_h = (cls.root / "WebAPI.h").read_text(encoding="utf-8", errors="ignore")
         cls.wifi_mgr_h = (cls.root / "WiFiMgr.h").read_text(encoding="utf-8", errors="ignore")
         cls.main_ino = (cls.root / "RectColumn.ino").read_text(encoding="utf-8", errors="ignore")
+        cls.emu_panel = (cls.root / "emupanel-v3.html").read_text(encoding="utf-8", errors="ignore")
 
     def define_int(self, name: str) -> int:
         m = re.search(rf"^\s*#define\s+{name}\s+(-?\d+)(?:[uUlL]*)\b", self.config_h, re.MULTILINE)
@@ -829,8 +840,12 @@ class SourceGuardTests(unittest.TestCase):
     def test_output_manager_has_global_stop_short_circuit(self):
         self.assertIn("if (_mainStopLatched)", self.output_mgr_h)
         self.assertIn("_applyGlobalStop();", self.output_mgr_h)
-        self.assertIn("invalidMeansOff = false;", self.output_mgr_h)
+        self.assertIn("invalidMeansOff = true;", self.output_mgr_h)
         self.assertIn("for (uint8_t oi = OUT_CH1; oi <= OUT_CH3; oi++)", self.output_mgr_h)
+
+    def test_disabled_sensor_is_explicitly_excluded_from_eval_ctrl(self):
+        self.assertIn("if (!enabled) {", self.sensors_h)
+        self.assertIn("return 0;", self.sensors_h)
 
     def test_flow_rule_for_ch1_depends_on_ch2_and_other_channels_keep_local_gate(self):
         self.assertIn("controlGate = _flowControlGate(prevState, outIdx);", self.output_mgr_h)
@@ -848,6 +863,19 @@ class SourceGuardTests(unittest.TestCase):
         self.assertIn("if (!requiresWerConfirmation(oi)) {", self.output_mgr_h)
         self.assertIn("requiresWerConfirmation(c.outputIdx)", self.process_h)
         self.assertIn("requiresWerConfirmation(c.outputIdx)", self.main_ino)
+
+    def test_emupanel_error_toggles_use_same_emu_set_fields_as_runtime(self):
+        self.assertIn("payload.T1err = $('emu_T1err').checked;", self.emu_panel)
+        self.assertIn("payload.T2err = $('emu_T2err').checked;", self.emu_panel)
+        self.assertIn("payload.T3err = $('emu_T3err').checked;", self.emu_panel)
+        self.assertIn("await requestJSON('/api/v1/emu/set'", self.emu_panel)
+        self.assertIn("if (doc.containsKey(\"T1err\")) _emu->val.T1err = doc[\"T1err\"];", self.webapi_h)
+        self.assertIn("if (doc.containsKey(\"T2err\")) _emu->val.T2err = doc[\"T2err\"];", self.webapi_h)
+        self.assertIn("if (doc.containsKey(\"T3err\")) _emu->val.T3err = doc[\"T3err\"];", self.webapi_h)
+
+    def test_manual_endpoint_uses_output_manager_runtime_path(self):
+        self.assertIn("const String route = String(\"/api/v1/output/\") + _outputName(oi) + \"/manual\";", self.webapi_h)
+        self.assertIn("RelayCommandResult r = _om->handleRelayCommand((uint8_t)oi, cmd, _log, _sm);", self.webapi_h)
 
     def test_wifi_scan_pauses_reconnect_and_breaks_connect_loop(self):
         self.assertIn("_pauseStaReconnect(WIFI_SCAN_RECONNECT_PAUSE_MS);", self.wifi_mgr_h)

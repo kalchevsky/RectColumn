@@ -540,7 +540,9 @@ private:
         bool invalidMeansOff = true;
         bool controlGate = true;
         if (_isMainOutput(outIdx) && SensorManager::isSchemeControlSensorIndex(sensorIdx)) {
-            invalidMeansOff = false;
+            // For CH1..CH3 an enabled control sensor in error/absent/NAN state
+            // must form AUTO OFF and block manual ON until the fault clears.
+            invalidMeansOff = true;
             if (sensorIdx == SEN_F) {
                 controlGate = _flowControlGate(prevState, outIdx);
             }
