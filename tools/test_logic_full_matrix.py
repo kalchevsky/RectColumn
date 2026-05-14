@@ -701,8 +701,12 @@ class FullMatrixSourceGuardTests(unittest.TestCase):
     def test_main_outputs_use_hold_resolver_and_aux_outputs_use_level_resolver(self):
         self.assertIn("void applyResolved(uint32_t forbidMask, uint32_t wantOnMask)", self.output_h)
         self.assertIn("void applyResolvedHold(uint32_t forbidMask, uint32_t wantOnMask)", self.output_h)
+        self.assertIn("void setFinalOnAllowed(bool allowed)", self.output_h)
+        self.assertIn("bool finalRequestedOn() const { return _resolvePhysicalRequest(_requestedOn); }", self.output_h)
+        self.assertIn("_applyPhysical(_resolvePhysicalRequest(_requestedOn));", self.output_h)
         self.assertIn("void _applyCurrentMain(uint8_t outIdx)", self.output_manager_h)
         self.assertIn("out[outIdx]->applyResolvedHold(forbidMask, wantMask);", self.output_manager_h)
+        self.assertIn("out[outIdx]->setFinalOnAllowed(forbidMask == 0);", self.output_manager_h)
         self.assertIn("out[outIdx]->setManualHold(true);", self.output_manager_h)
         self.assertIn("out[outIdx]->forceOff(true);", self.output_manager_h)
         self.assertIn("out[outIdx]->applyResolved(_effectiveForbidMask(outIdx), _lastWant[outIdx]);", self.output_manager_h)
@@ -741,6 +745,13 @@ class FullMatrixSourceGuardTests(unittest.TestCase):
         self.assertIn("if (!requiresWerConfirmation(_ch[idx].outputIdx)) {", self.confirm_h)
         self.assertIn("if (!requiresWerConfirmation(oi)) {", self.output_manager_h)
         self.assertIn("return requiresWerConfirmation(outIdx);", self.output_manager_h)
+
+    def test_web_runtime_syncs_emu_inputs_and_manual_commands_before_final_gate(self):
+        self.assertIn("_applyEmuInputsToRuntimeNow();", self.webapi_h)
+        self.assertIn("_emu->injectAll(*_sm);", self.webapi_h)
+        self.assertIn("_om->syncRuntimeState(*_sm);", self.webapi_h)
+        self.assertIn("if (sm) {", self.output_manager_h)
+        self.assertIn("syncRuntimeState(*sm);", self.output_manager_h)
 
     def test_l_and_f_default_timeouts_match_current_sources(self):
         self.assertIn("l->ctrlDelayMs  = SAFETY_LEVEL_SHUTDOWN_MS;", self.sensor_manager_h)
