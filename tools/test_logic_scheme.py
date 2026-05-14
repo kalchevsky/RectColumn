@@ -763,6 +763,7 @@ class SourceGuardTests(unittest.TestCase):
         cls.sensors_h = (cls.root / "Sensors.h").read_text(encoding="utf-8", errors="ignore")
         cls.confirm_h = (cls.root / "ConfirmationManager.h").read_text(encoding="utf-8", errors="ignore")
         cls.process_h = (cls.root / "ProcessSafety.h").read_text(encoding="utf-8", errors="ignore")
+        cls.output_h = (cls.root / "Output.h").read_text(encoding="utf-8", errors="ignore")
         cls.output_mgr_h = (cls.root / "OutputManager.h").read_text(encoding="utf-8", errors="ignore")
         cls.webapi_h = (cls.root / "WebAPI.h").read_text(encoding="utf-8", errors="ignore")
         cls.wifi_mgr_h = (cls.root / "WiFiMgr.h").read_text(encoding="utf-8", errors="ignore")
@@ -876,6 +877,21 @@ class SourceGuardTests(unittest.TestCase):
     def test_manual_endpoint_uses_output_manager_runtime_path(self):
         self.assertIn("const String route = String(\"/api/v1/output/\") + _outputName(oi) + \"/manual\";", self.webapi_h)
         self.assertIn("RelayCommandResult r = _om->handleRelayCommand((uint8_t)oi, cmd, _log, _sm);", self.webapi_h)
+
+    def test_manual_runtime_recomputes_live_forbid_state_before_accepting_command(self):
+        self.assertIn("if (sm) {", self.output_mgr_h)
+        self.assertIn("syncRuntimeState(*sm);", self.output_mgr_h)
+
+    def test_emu_set_applies_inputs_to_runtime_immediately(self):
+        self.assertIn("_applyEmuInputsToRuntimeNow();", self.webapi_h)
+        self.assertIn("_emu->injectAll(*_sm);", self.webapi_h)
+        self.assertIn("_om->syncRuntimeState(*_sm);", self.webapi_h)
+
+    def test_final_safety_gate_clamps_physical_on_at_output_layer(self):
+        self.assertIn("void setFinalOnAllowed(bool allowed)", self.output_h)
+        self.assertIn("bool finalRequestedOn() const { return _resolvePhysicalRequest(_requestedOn); }", self.output_h)
+        self.assertIn("_applyPhysical(_resolvePhysicalRequest(_requestedOn));", self.output_h)
+        self.assertIn("out[outIdx]->setFinalOnAllowed(forbidMask == 0);", self.output_mgr_h)
 
     def test_wifi_scan_pauses_reconnect_and_breaks_connect_loop(self):
         self.assertIn("_pauseStaReconnect(WIFI_SCAN_RECONNECT_PAUSE_MS);", self.wifi_mgr_h)
