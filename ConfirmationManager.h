@@ -295,6 +295,7 @@ private:
     }
 
     uint32_t _timeoutForOutput(uint8_t outIdx) const {
+        if (!requiresWerConfirmation(outIdx)) return 0;
         switch (outIdx) {
             case OUT_CH1: return RELAY_CONFIRM_TIMEOUT_CH1_MS;
             case OUT_CH2: return RELAY_CONFIRM_TIMEOUT_CH2_MS;
@@ -305,6 +306,7 @@ private:
     }
 
     bool _isAvailable(uint8_t idx) const {
+        if (!requiresWerConfirmation(_ch[idx].outputIdx)) return false;
     #if EMU_MODE
         return true;
     #else
@@ -314,6 +316,9 @@ private:
     }
 
     const char* _noteFor(uint8_t idx) const {
+        if (!requiresWerConfirmation(_ch[idx].outputIdx)) {
+            return "Канал сигнализации не использует WER-подтверждение";
+        }
     #if EMU_MODE
         if (idx == 1 && GPIO35_MODE != GPIO35_MODE_WER_CH2) {
             return "Эмуляция активна; в реальном режиме WER_CH2 недоступен при GPIO35_MODE_V_SENSOR";

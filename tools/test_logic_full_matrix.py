@@ -435,6 +435,52 @@ class MainOutputPriorityTests(unittest.TestCase):
         self.assertFalse(out.actual_on)
         self.assertFalse(out.manual_want)
 
+    def test_disabled_sensor_does_not_block_manual_on(self):
+        sensor = scheme.build_control_sensor(scheme.SEN_L, enabled_channels=(scheme.OUT_CH1,), fault=True)
+        sensor.enabled = False
+        forbid, want = scheme.aggregate_rules_timed(
+            {scheme.SEN_L: sensor},
+            scheme.OUT_CH1,
+            scheme.control_delay_ms(scheme.SEN_L),
+        )
+        self.assertEqual((forbid, want), (0, 0))
+
+        out = HoldOutputModel(actual_on=False, requested_on=False)
+        out.apply_resolved_hold(forbid, want)
+        self.assertTrue(out.set_manual_hold(True))
+        self.assertTrue(out.actual_on)
+
+    def test_enabled_sensor_with_active_auto_off_blocks_manual_on(self):
+        sensor = scheme.build_control_sensor(scheme.SEN_L, enabled_channels=(scheme.OUT_CH1,), fault=True)
+        forbid, want = scheme.aggregate_rules_timed(
+            {scheme.SEN_L: sensor},
+            scheme.OUT_CH1,
+            scheme.control_delay_ms(scheme.SEN_L),
+        )
+        self.assertNotEqual(forbid, 0)
+        self.assertEqual(want, 0)
+
+        out = HoldOutputModel(actual_on=False, requested_on=False)
+        out.apply_resolved_hold(forbid, want)
+        self.assertFalse(out.set_manual_hold(True))
+        self.assertFalse(out.actual_on)
+        self.assertFalse(out.manual_want)
+
+    def test_manual_on_during_auto_off_is_consumed_and_not_replayed(self):
+        sensor = scheme.build_control_sensor(scheme.SEN_L, enabled_channels=(scheme.OUT_CH1,), fault=True)
+        forbid, want = scheme.aggregate_rules_timed(
+            {scheme.SEN_L: sensor},
+            scheme.OUT_CH1,
+            scheme.control_delay_ms(scheme.SEN_L),
+        )
+
+        out = HoldOutputModel(actual_on=False, requested_on=False)
+        out.apply_resolved_hold(forbid, want)
+        self.assertFalse(out.set_manual_hold(True))
+        out.apply_resolved_hold(0, 0)
+        self.assertFalse(out.actual_on)
+        self.assertFalse(out.manual_want)
+
 
 class StopAndIsolationTests(unittest.TestCase):
     def test_global_stop_turns_off_only_main_outputs_and_clears_main_masks(self):
@@ -511,6 +557,10 @@ class StopAndIsolationTests(unittest.TestCase):
 
 
 class ExtendedSensorsAndAuxOutputsTests(unittest.TestCase):
+    def test_aux_outputs_do_not_require_wer_confirmation(self):
+        self.assertFalse(scheme.requires_wer_confirmation(scheme.OUT_CH4))
+        self.assertFalse(scheme.requires_wer_confirmation(scheme.OUT_CH5))
+
     def test_dt_c_v_can_drive_ch4_and_ch5_with_level_resolver(self):
         for sensor_idx in NON_CONTROL_SENSOR_INDICES:
             for out_idx in (scheme.OUT_CH4, scheme.OUT_CH5):
@@ -559,17 +609,13 @@ class ConfirmationAndSafetyModelTests(unittest.TestCase):
         fsm.begin_on(now_ms=100, feedback_on=True)
         self.assertEqual(fsm.state, scheme.RelayState.FAULT_STUCK_HIGH_BEFORE_ON)
 
-    def test_no_on_confirm_and_stuck_on_faults_are_channel_local_in_model(self):
+    def test_no_on_confirm_fault_is_channel_local_for_main_outputs(self):
         ch1 = scheme.ConfirmationFSM(timeout_ms=1000)
         ch2 = scheme.ConfirmationFSM(timeout_ms=1000)
         ch1.begin_on(now_ms=0, feedback_on=False)
         ch2.begin_on(now_ms=0, feedback_on=False)
         self.assertEqual(ch1.loop(now_ms=1000, feedback_on=False), scheme.RelayState.FAULT_NO_CONFIRM)
         self.assertEqual(ch2.loop(now_ms=500, feedback_on=True), scheme.RelayState.ON)
-
-        ch4 = scheme.ConfirmationFSM(state=scheme.RelayState.ON, timeout_ms=1000)
-        ch4.begin_off(now_ms=0)
-        self.assertEqual(ch4.loop(now_ms=1001, feedback_on=True), scheme.RelayState.FAULT_STUCK_ON)
 
 
 class FullMatrixSourceGuardTests(unittest.TestCase):
@@ -643,9 +689,15 @@ class FullMatrixSourceGuardTests(unittest.TestCase):
         self.assertNotIn("_om->setSafetyForbid(OUT_CH3, RULEIDX_SAFETY_PRESSURE, true);", self.process_h)
 
     def test_wer_fault_blocks_only_corresponding_main_channel(self):
-        self.assertIn("(c.outputIdx == OUT_CH1 || c.outputIdx == OUT_CH2 || c.outputIdx == OUT_CH3) &&", self.process_h)
+        self.assertIn("requiresWerConfirmation(c.outputIdx) && c.faultLatched", self.process_h)
         self.assertIn("_om->setSafetyForbid(c.outputIdx, RULEIDX_SAFETY_WER, true);", self.process_h)
-        self.assertIn("_ch[3].id = \"WER_CH4\"; _ch[3].outputId = \"CH4\"; _ch[3].outputIdx = OUT_CH4;", self.confirm_h)
+        self.assertIn("if (!requiresWerConfirmation(_ch[idx].outputIdx)) return false;", self.confirm_h)
+
+    def test_aux_outputs_skip_wer_confirmation_and_timeout_path(self):
+        self.assertIn("static inline constexpr bool requiresWerConfirmation(uint8_t outIdx)", self.config_h)
+        self.assertIn("if (!requiresWerConfirmation(_ch[idx].outputIdx)) {", self.confirm_h)
+        self.assertIn("if (!requiresWerConfirmation(oi)) {", self.output_manager_h)
+        self.assertIn("return requiresWerConfirmation(outIdx);", self.output_manager_h)
 
     def test_l_and_f_default_timeouts_match_current_sources(self):
         self.assertIn("l->ctrlDelayMs  = SAFETY_LEVEL_SHUTDOWN_MS;", self.sensor_manager_h)

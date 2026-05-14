@@ -169,23 +169,25 @@ public:
             return result;
         }
 
-        if (out[outIdx]->commandPending()) {
+        const bool werRequired = requiresWerConfirmation(outIdx);
+        if (!werRequired && out[outIdx]->commandPending()) {
+            out[outIdx]->clearCommand();
+        }
+
+        if (werRequired && out[outIdx]->commandPending()) {
             result.reason = (out[outIdx]->command() == cmd) ? "duplicate" : "busy";
             result.detail = result.reason;
             return result;
         }
 
         const bool targetOn = (cmd == CMD_ON);
-        _cmdPrevManual[outIdx] = out[outIdx]->manualWant();
-        _cmdPrevHoldOff[outIdx] = _operatorHoldOff[outIdx];
-        out[outIdx]->beginCommand(cmd);
         _lastCmdError[outIdx] = RELAY_CMDERR_NONE;
         _lastCmdErrorMs[outIdx] = 0;
         _lastCmdDetail[outIdx] = "";
 
         const char* blockReason = nullptr;
         if (!_relayCommandAllowed(outIdx, targetOn, blockReason)) {
-            out[outIdx]->clearCommand();
+            if (werRequired) out[outIdx]->clearCommand();
             _lastCmdError[outIdx] = RELAY_CMDERR_BLOCKED;
             _lastCmdErrorMs[outIdx] = millis();
             result.reason = "blocked";
@@ -193,6 +195,14 @@ public:
             _lastCmdDetail[outIdx] = result.detail;
             if (log) _logRelayCommand(log, sm, outIdx, cmd, false, result.detail);
             return result;
+        }
+
+        if (werRequired) {
+            _cmdPrevManual[outIdx] = out[outIdx]->manualWant();
+            _cmdPrevHoldOff[outIdx] = _operatorHoldOff[outIdx];
+            out[outIdx]->beginCommand(cmd);
+        } else if (out[outIdx]->commandPending()) {
+            out[outIdx]->clearCommand();
         }
 
         _applyRelayCommand(outIdx, targetOn);
@@ -215,6 +225,13 @@ public:
         const uint32_t now = millis();
         for (uint8_t oi = 0; oi < OUT_COUNT; oi++) {
             if (!out[oi] || !out[oi]->commandPending()) continue;
+            if (!requiresWerConfirmation(oi)) {
+                out[oi]->clearCommand();
+                _lastCmdError[oi] = RELAY_CMDERR_NONE;
+                _lastCmdErrorMs[oi] = 0;
+                _lastCmdDetail[oi] = "";
+                continue;
+            }
 
             const RelayCommand cmd = out[oi]->command();
             const bool targetOn = (cmd == CMD_ON);
@@ -393,6 +410,10 @@ public:
 
     String relayTimeoutDetailText(uint8_t outIdx) const {
         if (outIdx >= OUT_COUNT || !out[outIdx]) return "таймаут подтверждения реле";
+        if (!requiresWerConfirmation(outIdx)) {
+            return String("канал ") + out[outIdx]->name +
+                   " не использует WER-подтверждение";
+        }
         return String("таймаут подтверждения реле ") + out[outIdx]->name +
                ": ожидается сигнал " + _confirmationId(outIdx);
     }
@@ -507,7 +528,7 @@ public:
 
 private:
     static bool _isMainOutput(uint8_t outIdx) {
-        return outIdx == OUT_CH1 || outIdx == OUT_CH2 || outIdx == OUT_CH3;
+        return requiresWerConfirmation(outIdx);
     }
 
     int _sensorCommandForOutput(const SensorManager& sm, const bool prevState[OUT_COUNT],
@@ -752,17 +773,16 @@ private:
             case OUT_CH1: return "WER_CH1";
             case OUT_CH2: return "WER_CH2";
             case OUT_CH3: return "WER_CH3";
-            case OUT_CH4: return "WER_CH4";
             default:      return "WER";
         }
     }
 
     static uint32_t _relayConfirmTimeoutMs(uint8_t outIdx) {
+        if (!requiresWerConfirmation(outIdx)) return 0;
         switch (outIdx) {
             case OUT_CH1: return RELAY_CONFIRM_TIMEOUT_CH1_MS;
             case OUT_CH2: return RELAY_CONFIRM_TIMEOUT_CH2_MS;
             case OUT_CH3: return RELAY_CONFIRM_TIMEOUT_CH3_MS;
-            case OUT_CH4: return RELAY_CONFIRM_TIMEOUT_CH4_MS;
             default:      return RELAY_CONFIRM_TIMEOUT_MS;
         }
     }

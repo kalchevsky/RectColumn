@@ -232,9 +232,7 @@ private:
     void _handleWerTimeout() {
         for (uint8_t i = 0; i < 4; i++) {
             const ConfirmationChannel& c = _cm->get(i);
-            const bool faultedMain =
-                (c.outputIdx == OUT_CH1 || c.outputIdx == OUT_CH2 || c.outputIdx == OUT_CH3) &&
-                c.faultLatched;
+            const bool faultedMain = requiresWerConfirmation(c.outputIdx) && c.faultLatched;
 
             if (faultedMain && !_werFaultLatched[i]) {
                 _werFaultLatched[i] = true;

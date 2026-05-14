@@ -250,7 +250,7 @@ void loop() {
         bool relayFeedbackAvailable[OUT_COUNT] = {};
         for (uint8_t i = 0; i < 4; i++) {
             const ConfirmationChannel& c = confirmMgr.get(i);
-            if (c.outputIdx < OUT_COUNT) {
+            if (c.outputIdx < OUT_COUNT && requiresWerConfirmation(c.outputIdx)) {
                 relayFeedbackAvailable[c.outputIdx] = c.available;
                 relayFeedbackOn[c.outputIdx] = c.actual;
             }

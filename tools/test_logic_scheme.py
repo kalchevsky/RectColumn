@@ -337,6 +337,10 @@ def control_delay_ms(sensor_idx: int) -> int:
     return CONTROL_DELAY_MS[sensor_idx]
 
 
+def requires_wer_confirmation(out_idx: int) -> bool:
+    return out_idx in MAIN_CHANNELS
+
+
 def make_channel_rule(sensor_idx: int, out_idx: int, enabled: bool) -> CtrlRule:
     delay_ms = control_delay_ms(sensor_idx)
     if sensor_idx in (SEN_L, SEN_F):
@@ -690,6 +694,13 @@ class SensorFaultAndAlarmTests(unittest.TestCase):
 
 
 class ConfirmationFsmTests(unittest.TestCase):
+    def test_wer_confirmation_applies_only_to_main_channels(self):
+        self.assertTrue(requires_wer_confirmation(OUT_CH1))
+        self.assertTrue(requires_wer_confirmation(OUT_CH2))
+        self.assertTrue(requires_wer_confirmation(OUT_CH3))
+        self.assertFalse(requires_wer_confirmation(OUT_CH4))
+        self.assertFalse(requires_wer_confirmation(OUT_CH5))
+
     def test_on_command_requires_feedback_transition_not_stuck_high(self):
         fsm = ConfirmationFSM()
         fsm.begin_on(now_ms=0, feedback_on=True)
@@ -829,6 +840,14 @@ class SourceGuardTests(unittest.TestCase):
     def test_main_loop_skips_confirmation_and_safety_while_stop_is_active(self):
         self.assertIn("if (!outputMgr.mainStopLatched())", self.main_ino)
         self.assertIn("outputMgr.setSafetyAlarmActive(false);", self.main_ino)
+
+    def test_wer_confirmation_is_explicitly_limited_to_ch1_ch3(self):
+        self.assertIn("static inline constexpr bool requiresWerConfirmation(uint8_t outIdx)", self.config_h)
+        self.assertIn("return outIdx == OUT_CH1 || outIdx == OUT_CH2 || outIdx == OUT_CH3;", self.config_h)
+        self.assertIn("if (!requiresWerConfirmation(_ch[idx].outputIdx)) return false;", self.confirm_h)
+        self.assertIn("if (!requiresWerConfirmation(oi)) {", self.output_mgr_h)
+        self.assertIn("requiresWerConfirmation(c.outputIdx)", self.process_h)
+        self.assertIn("requiresWerConfirmation(c.outputIdx)", self.main_ino)
 
     def test_wifi_scan_pauses_reconnect_and_breaks_connect_loop(self):
         self.assertIn("_pauseStaReconnect(WIFI_SCAN_RECONNECT_PAUSE_MS);", self.wifi_mgr_h)

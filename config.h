@@ -16,7 +16,7 @@
 #define SERIAL_DEBUG_SENSOR_SNAPSHOT  0
 
 // ─── Версия прошивки / API ───────────────────────────────────────
-#define FW_VERSION      "1.6.25"
+#define FW_VERSION      "1.6.26"
 #define API_VERSION     "v1"
 #define AP_SSID_DEF     "Control_System"
 #define DEVICE_NAME     "RectColumn"
@@ -70,13 +70,15 @@
 #define PIN_WER_CH1       27   // подтверждение CH1 / реле 220
 #define PIN_WER_CH2       35   // подтверждение CH2 / клапан 2
 #define PIN_WER_CH3       34   // подтверждение CH3 / клапан 1
-#define PIN_WER_CH4       36   // подтверждение CH4 / внешний звонок
+#define PIN_WER_CH4       36   // legacy-вход CH4, не участвует в WER-таймаутах релейной логики
 
 // ------------------------------------------------------------
 // Профиль подтверждений / звука
 // ------------------------------------------------------------
+// CH4/CH5 являются каналами сигнализации и не участвуют
+// в логике обязательного WER-подтверждения.
 // Отдельного входа "WER_BELL" в этом профиле нет.
-// Подтверждение внешнего звонка используется как WER_CH4.
+// PIN_WER_CH4 сохранён только для обратной совместимости API/диагностики.
 // CH5 остаётся отдельным встроенным буззером на GPIO13.
 #define RECT_HW_HAS_WER_BELL   0
 #define PIN_WER_BELL          -1
@@ -121,7 +123,7 @@ static_assert(PIN_V != PIN_WER_CH4, "PIN_V conflicts with WER_CH4");
 #define RELAY_CONFIRM_TIMEOUT_CH1_MS 1000UL
 #define RELAY_CONFIRM_TIMEOUT_CH2_MS 5000UL   // клапан 2: подтверждение приходит заметно медленнее реле CH1
 #define RELAY_CONFIRM_TIMEOUT_CH3_MS 5000UL   // клапан 1: подтверждение приходит заметно медленнее реле CH1
-#define RELAY_CONFIRM_TIMEOUT_CH4_MS 1000UL
+#define RELAY_CONFIRM_TIMEOUT_CH4_MS 1000UL   // legacy: для CH4 не используется, пока requiresWerConfirmation()==false
 #define WER_CONFIRM_TIMEOUT_MS     RELAY_CONFIRM_TIMEOUT_MS
 
 // ─── Жёсткие таймеры safety-слоя ────────────────────────────────
@@ -181,6 +183,10 @@ static_assert(PIN_V != PIN_WER_CH4, "PIN_V conflicts with WER_CH4");
 #define OUT_CH4   3
 #define OUT_CH5   4
 #define OUT_COUNT 5
+
+static inline constexpr bool requiresWerConfirmation(uint8_t outIdx) {
+    return outIdx == OUT_CH1 || outIdx == OUT_CH2 || outIdx == OUT_CH3;
+}
 
 // Дополнительные биты правил,
 // используемые внутри OutputManager.
