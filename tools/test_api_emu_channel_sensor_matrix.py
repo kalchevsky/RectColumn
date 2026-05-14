@@ -291,6 +291,42 @@ class EmuChannelSensorMatrixTests(LiveEmuApiTestCase):
         self.assertEqual(response["detail"], "forbidden")
         self.assertIn(sensor_id, response.get("userMessage", ""))
 
+    def _assert_emupanel_error_blocks_immediate_manual_on(self, sensor_id: str,
+                                                          output_id: str,
+                                                          out_idx: int) -> None:
+        self._prepare_single_rule(sensor_id, output_id, out_idx)
+        self._post_json_logged("/api/v1/emu/set", safe_emu_payload(**{f"{sensor_id}err": True}))
+
+        status, response = self.api.request_json(
+            f"/api/v1/output/{output_id}/manual",
+            method="POST",
+            payload={"state": True},
+            ok_statuses=(409,),
+        )
+        self.assertEqual(status, 409)
+        self.assertFalse(response["accepted"])
+        self.assertEqual(response["detail"], "forbidden")
+
+        state = self._wait_outputs_idle({output_id: False}, timeout=4.0)
+        sensor_state = sensor_map(state)[sensor_id]
+        output_state = output_map(state)[output_id]
+        debug = output_state.get("debug", {})
+        debug_sensors = {
+            item["id"]: item
+            for item in debug.get("controlSensors", [])
+            if isinstance(item, dict) and item.get("id")
+        }
+        self.assertTrue(sensor_state["error"])
+        self.assertTrue(output_state["forbidden"])
+        self.assertTrue(output_state.get("autoOff", False))
+        self.assertFalse(output_state.get("manualRequest", True))
+        self.assertFalse(output_state.get("finalRelayState", True))
+        self.assertFalse(output_state.get("physicalRelayState", True))
+        self.assertEqual(output_state.get("blockReason"), output_state.get("forbidReasonText"))
+        self.assertIn(sensor_id, debug_sensors)
+        self.assertTrue(debug_sensors[sensor_id].get("sensorError", False))
+        self.assertTrue(debug_sensors[sensor_id].get("autoOff", False))
+
     def test_flow_regression_only_ch1_turns_off_when_ch2_flow_rule_is_disabled(self):
         self._reset_runtime()
         self._set_sensor_config("F", enabled=True, ctrl_delay_ms=500)
@@ -392,18 +428,30 @@ class EmuChannelSensorMatrixTests(LiveEmuApiTestCase):
         self.assertFalse(ch1_off.get("operatorHoldOff", False))
 
     def test_disabled_sensor_does_not_block_manual_on_on_real_api(self):
-        self._reset_runtime()
-        self._set_sensor_config("T1", enabled=False, ctrl_delay_ms=0)
-        self._set_sensor_rule("T1", 0, enabled=True, logic="heat", min_v=70.0, max_v=80.0)
-        self._post_json_logged("/api/v1/emu/set", safe_emu_payload(T1=85.0))
+        for sensor_id, output_id, out_idx in (("T1", "CH1", 0), ("T2", "CH2", 1), ("T3", "CH3", 2)):
+            with self.subTest(sensor=sensor_id, output=output_id):
+                self._reset_runtime()
+                self._set_sensor_config(sensor_id, enabled=False, ctrl_delay_ms=0)
+                self._set_sensor_rule(sensor_id, out_idx, enabled=True, logic="heat", min_v=70.0, max_v=80.0)
+                self._post_json_logged("/api/v1/emu/set", safe_emu_payload(**{f"{sensor_id}err": True}))
 
-        response = self._post_json_logged("/api/v1/output/CH1/manual", {"state": True}, ok_statuses=(200,))
-        self.assertTrue(response["accepted"])
+                response = self._post_json_logged(f"/api/v1/output/{output_id}/manual", {"state": True}, ok_statuses=(200,))
+                self.assertTrue(response["accepted"])
 
-        state = self._wait_outputs_idle({"CH1": True}, timeout=5.0)
-        ch1 = output_map(state)["CH1"]
-        self.assertFalse(ch1["forbidden"])
-        self.assertNotIn("T1", ch1.get("forbidReasons", []))
+                state = self._wait_outputs_idle({output_id: True}, timeout=5.0)
+                output_state = output_map(state)[output_id]
+                debug = output_state.get("debug", {})
+                debug_sensors = {
+                    item["id"]: item
+                    for item in debug.get("controlSensors", [])
+                    if isinstance(item, dict) and item.get("id")
+                }
+                self.assertFalse(output_state["forbidden"])
+                self.assertFalse(output_state.get("autoOff", False))
+                self.assertNotIn(sensor_id, output_state.get("forbidReasons", []))
+                self.assertIn(sensor_id, debug_sensors)
+                self.assertFalse(debug_sensors[sensor_id].get("sensorEnabled", True))
+                self.assertFalse(debug_sensors[sensor_id].get("autoOff", True))
 
     def test_active_auto_off_blocks_manual_on_and_does_not_replay_later_on_real_api(self):
         self._reset_runtime()
@@ -442,6 +490,15 @@ class EmuChannelSensorMatrixTests(LiveEmuApiTestCase):
 
     def test_enabled_t3_error_blocks_manual_on_for_affected_channel(self):
         self._assert_enabled_sensor_error_blocks_manual_on("T3", "CH3", 2)
+
+    def test_emupanel_t1_error_then_manual_on_keeps_ch1_off(self):
+        self._assert_emupanel_error_blocks_immediate_manual_on("T1", "CH1", 0)
+
+    def test_emupanel_t2_error_then_manual_on_keeps_ch2_off(self):
+        self._assert_emupanel_error_blocks_immediate_manual_on("T2", "CH2", 1)
+
+    def test_emupanel_t3_error_then_manual_on_keeps_ch3_off(self):
+        self._assert_emupanel_error_blocks_immediate_manual_on("T3", "CH3", 2)
 
     def test_active_sensor_error_turns_already_enabled_channel_off(self):
         self._prepare_single_rule("T1", "CH1", 0)
