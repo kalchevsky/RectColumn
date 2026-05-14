@@ -204,7 +204,7 @@ private:
 
     void _registerCoreRoutes() {
         _server.on("/api/v1/state", HTTP_GET, [this](AsyncWebServerRequest* req) {
-            DynamicJsonDocument doc(16384);
+            DynamicJsonDocument doc(24576);
             JsonObject root = doc.to<JsonObject>();
             _buildState(root);
             _sendDoc(req, 200, doc);
@@ -218,7 +218,7 @@ private:
         });
 
         _server.on("/api/v1/output", HTTP_GET, [this](AsyncWebServerRequest* req) {
-            DynamicJsonDocument doc(6144);
+            DynamicJsonDocument doc(12288);
             JsonArray arr = doc.to<JsonArray>();
             _buildOutputs(arr);
             _sendDoc(req, 200, doc);
@@ -505,6 +505,7 @@ private:
                 _om->mute(nextSoundMuted);
 
                 _om->applyConfig();
+                _syncRuntimeStateNow();
                 _stor->saveOutputConfig(*_om);
                 _stor->saveSensors(*_sm);
                 _om->beepAcceptedCommand();
@@ -746,6 +747,7 @@ private:
                 if (doc.containsKey("W3_mode")) _cm->setEmuMode(2, _parseEmuConfirmMode(doc["W3_mode"]));
                 if (doc.containsKey("W4_mode")) _cm->setEmuMode(3, _parseEmuConfirmMode(doc["W4_mode"]));
 
+                _applyEmuInputsToRuntimeNow();
                 _sendOk(req);
             #else
                 _sendError(req, 403, "forbidden", "Режим эмуляции отключён");
@@ -872,6 +874,7 @@ private:
         s->alarmDelayMs = nextAlarmDelayMs;
         s->ctrlDelayMs = nextCtrlDelayMs;
 
+        _syncRuntimeStateNow();
         _stor->saveSensors(*_sm);
         _om->beepAcceptedCommand();
         _log->add("Настройка датчика: " + s->name + " " + String(s->enabled ? "включён" : "отключён"),
@@ -899,6 +902,7 @@ private:
         if (doc.containsKey("threshold")) s->alarm[ai].threshold = doc["threshold"].as<float>();
         if (doc.containsKey("isMax"))     s->alarm[ai].isMax = doc["isMax"];
 
+        _syncRuntimeStateNow();
         _stor->saveSensors(*_sm);
         _om->beepAcceptedCommand();
         _log->add("Настройка тревоги: " + s->name + " #" + String(ai),
@@ -937,6 +941,7 @@ private:
             next.outIdx = oi;
             r = next;
             _sm->normalizeSchemeControlRules();
+            _syncRuntimeStateNow();
             _stor->saveSensors(*_sm);
             _om->beepAcceptedCommand();
             _sendOk(req);
@@ -953,6 +958,7 @@ private:
             r = next;
             _sm->normalizeDigitalOffOnlyRules();
             _sm->normalizeSchemeControlRules();
+            _syncRuntimeStateNow();
             _stor->saveSensors(*_sm);
             _om->beepAcceptedCommand();
             _log->add("Настройка управления: " + s->name + " -> " + _outputName(oi),
@@ -987,6 +993,7 @@ private:
         }
         _sm->normalizeDigitalOffOnlyRules();
         _sm->normalizeSchemeControlRules();
+        _syncRuntimeStateNow();
         _stor->saveSensors(*_sm);
         _om->beepAcceptedCommand();
 
@@ -1047,9 +1054,10 @@ private:
 
     void _handleReleaseStopMainOutputs(AsyncWebServerRequest* req) {
         _om->setMainStopLatched(false);
+        _syncRuntimeStateNow();
         _stor->saveOutputs(*_om);
 
-        _log->add("STOP снят: логика CH1-CH3 будет заново рассчитана в следующем цикле",
+        _log->add("STOP снят: логика CH1-CH3 пересчитана и готова к следующему решению",
                   _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
 
         DynamicJsonDocument resp(384);
@@ -1063,6 +1071,20 @@ private:
 
     void _handleOutputManual(AsyncWebServerRequest* req, int oi, uint8_t* data, size_t len) {
         _handleRelayCommand(req, oi, data, len, true);
+    }
+
+    void _syncRuntimeStateNow() {
+        if (!_sm || !_om) return;
+        _om->syncRuntimeState(*_sm);
+    }
+
+    void _applyEmuInputsToRuntimeNow() {
+    #if EMU_MODE
+        if (!_emu || !_sm || !_om) return;
+        _emu->injectAll(*_sm);
+        _sm->loop();
+        _om->syncRuntimeState(*_sm);
+    #endif
     }
 
     bool _parseRelayCommandDoc(AsyncWebServerRequest* req, uint8_t* data, size_t len,
@@ -1158,7 +1180,7 @@ private:
             _sendError(req, 404, "not_found", "output not found");
             return;
         }
-        DynamicJsonDocument doc(512);
+        DynamicJsonDocument doc(2048);
         JsonObject root = doc.to<JsonObject>();
         _buildRelayStateObject(root, oi);
         _sendDoc(req, 200, doc);
@@ -1167,6 +1189,8 @@ private:
     void _buildRelayStateObject(JsonObject root, int oi) {
         Output* o = _om->out[oi];
         const bool actualOn = o->actualOn();
+        const uint32_t effectiveForbidMask = _om->effectiveForbidMask((uint8_t)oi);
+        const bool stopOverridesConfirm = _om->mainStopLatched() && oi >= OUT_CH1 && oi <= OUT_CH3;
         const bool hasConfirm = (oi >= 0 && oi < 4 && _cm->get(oi).available);
         const bool feedbackOn = hasConfirm ? _cm->get(oi).actual : actualOn;
 
@@ -1181,14 +1205,22 @@ private:
         root["requested"] = o->requestedOn();
         root["manualWant"] = o->manualWant();
         root["operatorHoldOff"] = _om->operatorHoldOff((uint8_t)oi);
-        root["forbidden"] = o->forbidden();
+        root["forbidden"] = (effectiveForbidMask != 0);
         root["forbidMask"] = o->forbidMask();
-        root["effectiveForbidMask"] = _om->effectiveForbidMask((uint8_t)oi);
-        root["forbidReasonText"] = _om->formatForbidReasons(o->forbidMask());
+        root["sensorForbidMask"] = _om->lastForbidMask((uint8_t)oi);
+        root["safetyForbidMask"] = _om->safetyForbidMask((uint8_t)oi);
+        root["effectiveForbidMask"] = effectiveForbidMask;
+        root["forbidReasonText"] = _om->formatForbidReasons(effectiveForbidMask);
         JsonArray reasons = root.createNestedArray("forbidReasons");
-        _appendForbidReasons(reasons, o->forbidMask());
+        _appendForbidReasons(reasons, effectiveForbidMask);
         root["wantOnMask"] = o->wantOnMask();
         root["stopLatched"] = _om->mainStopLatched();
+        root["autoOff"] = _om->autoOffActive((uint8_t)oi);
+        root["safetyBlocked"] = _om->safetyBlocked((uint8_t)oi);
+        root["blockReason"] = _om->formatForbidReasons(effectiveForbidMask);
+        root["manualRequest"] = _om->manualRequestOn((uint8_t)oi);
+        root["finalRelayState"] = o->finalRequestedOn();
+        root["physicalRelayState"] = o->actualOn();
         root["pending"] = _om->relayCommandPending((uint8_t)oi);
         root["relayPending"] = _om->relayCommandPending((uint8_t)oi);
         root["pendingCmd"] = _om->relayCommandPending((uint8_t)oi)
@@ -1203,14 +1235,15 @@ private:
         }
         if (hasConfirm) {
             const ConfirmationChannel& c = _cm->get(oi);
-            root["confirmMismatch"] = c.mismatch;
-            root["confirmTimeout"] = c.timeout;
+            root["confirmMismatch"] = stopOverridesConfirm ? false : c.mismatch;
+            root["confirmTimeout"] = stopOverridesConfirm ? false : c.timeout;
             root["confirmFault"] = ConfirmationManager::faultName(c.fault);
             root["confirmFaultText"] = ConfirmationManager::faultNameRu(c.fault);
             root["confirmFaultLatched"] = c.faultLatched;
             root["confirmEmuMode"] = ConfirmationManager::emuModeName(_cm->emuMode((uint8_t)oi));
             root["confirmEmuModeText"] = ConfirmationManager::emuModeNameRu(_cm->emuMode((uint8_t)oi));
         }
+        _appendMainOutputDebug(root, oi);
     }
 
     String _relayCommandUserMessage(int oi, const char* detail) const {
@@ -1425,6 +1458,8 @@ private:
             Output* o = _om->out[i];
             JsonObject oo = arr.createNestedObject();
             const bool actualOn = o->actualOn();
+            const uint32_t effectiveForbidMask = _om->effectiveForbidMask((uint8_t)i);
+            const bool stopOverridesConfirm = _om->mainStopLatched() && i >= OUT_CH1 && i <= OUT_CH3;
 
             oo["id"]         = _outputName(i);
             oo["state"]      = actualOn;
@@ -1433,16 +1468,22 @@ private:
             oo["requested"]  = o->requestedOn();
             oo["manualWant"] = o->manualWant();
             oo["operatorHoldOff"] = _om->operatorHoldOff((uint8_t)i);
-            oo["forbidden"]  = o->forbidden();
+            oo["forbidden"]  = (effectiveForbidMask != 0);
             oo["forbidMask"] = o->forbidMask();
             oo["sensorForbidMask"] = _om->lastForbidMask((uint8_t)i);
             oo["safetyForbidMask"] = _om->safetyForbidMask((uint8_t)i);
-            oo["effectiveForbidMask"] = _om->effectiveForbidMask((uint8_t)i);
-            oo["forbidReasonText"] = _om->formatForbidReasons(o->forbidMask());
+            oo["effectiveForbidMask"] = effectiveForbidMask;
+            oo["forbidReasonText"] = _om->formatForbidReasons(effectiveForbidMask);
             oo["wantOnMask"] = o->wantOnMask();
             JsonArray reasons = oo.createNestedArray("forbidReasons");
-            _appendForbidReasons(reasons, o->forbidMask());
+            _appendForbidReasons(reasons, effectiveForbidMask);
             oo["enabled"]    = o->enabled;
+            oo["autoOff"] = _om->autoOffActive((uint8_t)i);
+            oo["safetyBlocked"] = _om->safetyBlocked((uint8_t)i);
+            oo["blockReason"] = _om->formatForbidReasons(effectiveForbidMask);
+            oo["manualRequest"] = _om->manualRequestOn((uint8_t)i);
+            oo["finalRelayState"] = o->finalRequestedOn();
+            oo["physicalRelayState"] = o->actualOn();
             if (i < 3) oo["mode"] = (_om->chMode[i] == LOGIC_COOL) ? "cool" : "heat";
 
             oo["relayPending"] = _om->relayCommandPending((uint8_t)i);
@@ -1461,9 +1502,9 @@ private:
                 oo["confirmAvailable"] = c.available;
                 if (c.available) {
                     oo["confirmed"] = c.confirmed;
-                    oo["mismatch"]  = c.mismatch;
-                    oo["timeout"]   = c.timeout;
-                    oo["pending"]   = c.pending;
+                    oo["mismatch"]  = stopOverridesConfirm ? false : c.mismatch;
+                    oo["timeout"]   = stopOverridesConfirm ? false : c.timeout;
+                    oo["pending"]   = stopOverridesConfirm ? false : c.pending;
                     oo["confirmActual"]   = c.actual;
                     oo["confirmExpected"] = c.expected;
                     oo["feedbackOn"] = c.actual;
@@ -1478,6 +1519,37 @@ private:
                     oo["confirmNote"] = c.note;
                 }
             }
+            _appendMainOutputDebug(oo, i);
+        }
+    }
+
+    void _appendMainOutputDebug(JsonObject root, int oi) {
+        if (oi < OUT_CH1 || oi > OUT_CH3) return;
+        Output* o = _om->out[oi];
+        const uint8_t outIdx = (uint8_t)oi;
+        JsonObject dbg = root.createNestedObject("debug");
+        dbg["autoOff"] = _om->autoOffActive(outIdx);
+        dbg["safetyBlocked"] = _om->safetyBlocked(outIdx);
+        dbg["blockReason"] = _om->formatForbidReasons(_om->effectiveForbidMask(outIdx));
+        dbg["manualRequest"] = _om->manualRequestOn(outIdx);
+        dbg["finalRelayState"] = o->finalRequestedOn();
+        dbg["physicalRelayState"] = o->actualOn();
+
+        JsonArray sensors = dbg.createNestedArray("controlSensors");
+        for (uint8_t si = 0; si < SEN_COUNT; si++) {
+            if (!SensorManager::isRuleAllowedForOutput(si, outIdx)) continue;
+            SensorBase* sensor = _sm->s[si];
+            if (!sensor) continue;
+            if (!sensor->ctrl[outIdx].enabled) continue;
+
+            JsonObject so = sensors.createNestedObject();
+            so["id"] = SensorManager::sensorName(si);
+            so["ruleEnabled"] = sensor->ctrl[outIdx].enabled;
+            so["sensorEnabled"] = sensor->enabled;
+            so["sensorPresent"] = sensor->present;
+            so["sensorError"] = sensor->error;
+            so["sensorValueIsNan"] = isnan(sensor->value);
+            so["autoOff"] = _om->controlSensorAutoOff(outIdx, si);
         }
     }
 
