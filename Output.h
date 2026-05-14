@@ -142,7 +142,7 @@ public:
         if (!enabled || durationMs == 0) return;
         _pulseActive = true;
         _pulseUntilMs = millis() + durationMs;
-        _applyPhysical(true);
+        _applyPhysical(_resolvePhysicalRequest(true));
     }
 
     void setBellPatternActive(bool active) {
@@ -155,7 +155,7 @@ public:
         if (active) {
             _bellPhaseOn = true;
             _bellPhaseStartedMs = millis();
-            _applyPhysical(true);
+            _applyPhysical(_resolvePhysicalRequest(true));
         } else {
             _syncPhysicalNow();
         }
@@ -168,10 +168,10 @@ public:
             const uint32_t now = millis();
             if ((int32_t)(now - _pulseUntilMs) >= 0) {
                 _pulseActive = false;
-                if (_bellPatternActive) changed |= _applyPhysical(_bellPhaseOn);
-                else changed |= _applyPhysical(_requestedOn);
+                if (_bellPatternActive) changed |= _applyPhysical(_resolvePhysicalRequest(_bellPhaseOn));
+                else changed |= _applyPhysical(_resolvePhysicalRequest(_requestedOn));
             } else {
-                if (!_actualOn) changed |= _applyPhysical(true);
+                changed |= _applyPhysical(_resolvePhysicalRequest(true));
                 return changed;
             }
         }
@@ -183,13 +183,13 @@ public:
             if (now - _bellPhaseStartedMs >= BELL_ON_MS) {
                 _bellPhaseOn = false;
                 _bellPhaseStartedMs = now;
-                return changed | _applyPhysical(false);
+                return changed | _applyPhysical(_resolvePhysicalRequest(false));
             }
         } else {
             if (now - _bellPhaseStartedMs >= BELL_OFF_MS) {
                 _bellPhaseOn = true;
                 _bellPhaseStartedMs = now;
-                return changed | _applyPhysical(true);
+                return changed | _applyPhysical(_resolvePhysicalRequest(true));
             }
         }
         return changed;
@@ -198,12 +198,19 @@ public:
     bool isOn() const { return _actualOn; }
     bool actualOn() const { return _actualOn; }
     bool requestedOn() const { return _requestedOn; }
+    bool finalRequestedOn() const { return _resolvePhysicalRequest(_requestedOn); }
     bool manualWant() const { return _manualWant; }
     bool isBellPatternActive() const { return _bellPatternActive; }
+    bool finalOnAllowed() const { return _finalOnAllowed; }
 
     uint32_t forbidMask() const { return _forbidMask; }
     uint32_t wantOnMask() const { return _wantOnMask; }
     bool forbidden() const { return _forbidMask != 0; }
+
+    void setFinalOnAllowed(bool allowed) {
+        _finalOnAllowed = allowed;
+        _syncPhysicalNow();
+    }
 
 private:
     bool     _actualOn  = false;
@@ -221,6 +228,7 @@ private:
 
     bool     _pulseActive = false;
     uint32_t _pulseUntilMs = 0;
+    bool     _finalOnAllowed = true;
 
     void _recomputeRequestedLevel() {
         const bool canBeOn = enabled && (_forbidMask == 0);
@@ -231,7 +239,11 @@ private:
     void _syncPhysicalNow() {
         if (_pulseActive) return;
         if (_bellPatternActive) return;
-        _applyPhysical(_requestedOn);
+        _applyPhysical(_resolvePhysicalRequest(_requestedOn));
+    }
+
+    bool _resolvePhysicalRequest(bool on) const {
+        return on && _finalOnAllowed;
     }
 
     bool _applyPhysical(bool on) {
