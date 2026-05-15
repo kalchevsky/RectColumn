@@ -47,15 +47,18 @@ class EmuConfirmationModeTests(LiveEmuApiTestCase):
 
         state = self.api.wait_for_state(
             lambda current: (
-                confirmation_map(current)["WER_CH1"]["faultLatched"] is True
-                and confirmation_map(current)["WER_CH1"]["fault"] == "no_on_confirm"
+                output_map(current)["CH1"].get("relayError") == "timeout"
+                or (
+                    confirmation_map(current)["WER_CH1"]["faultLatched"] is True
+                    and confirmation_map(current)["WER_CH1"]["fault"] == "no_on_confirm"
+                )
             ),
             timeout=4.0,
         )
 
         ch1 = output_map(state)["CH1"]
         self.assertEqual(confirmation_map(state)["WER_CH1"]["emuMode"], "force_off")
-        self.assertIn(ch1.get("relayError"), ("timeout", None))
+        self.assertEqual(ch1.get("relayError"), "timeout")
 
 
 if __name__ == "__main__":
