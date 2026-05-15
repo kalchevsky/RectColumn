@@ -35,7 +35,8 @@ class EmuManualLogicTests(LiveEmuApiTestCase):
         self.assertEqual(status, 409)
         self.assertFalse(response["accepted"])
         self.assertEqual(response["detail"], "forbidden")
-        self.assertIn("запрещено текущими условиями автоматики", response["userMessage"])
+        self.assertIn("Команда CH1: включение", response["userMessage"])
+        self.assertIn("запрещено автоматикой", response["userMessage"])
         self.assertIn("T1", response["userMessage"])
 
     def test_manual_on_blocked_when_control_sensor_is_in_error(self):
@@ -57,6 +58,7 @@ class EmuManualLogicTests(LiveEmuApiTestCase):
         self.assertEqual(status, 409)
         self.assertFalse(response["accepted"])
         self.assertEqual(response["detail"], "forbidden")
+        self.assertIn("Команда CH1: включение", response["userMessage"])
         self.assertIn("T1", response["userMessage"])
 
     def test_manual_off_remains_allowed_when_control_sensor_is_in_error(self):
@@ -93,6 +95,22 @@ class EmuManualLogicTests(LiveEmuApiTestCase):
         )
         self.assertEqual(response["detail"], "stop_active")
         self.assertIn("активен STOP", response["userMessage"])
+
+    def test_manual_off_reports_specific_auto_reason(self):
+        self.isolate_ch1_t1_rule()
+        self.api.post_json("/api/v1/emu/set", safe_emu_payload(T1=65.0))
+        self.api.wait_for_state(lambda current: output_map(current)["CH1"]["actual"] is True)
+
+        _, response = self.api.request_json(
+            "/api/v1/output/CH1/manual",
+            method="POST",
+            payload={"state": False},
+            ok_statuses=(200,),
+        )
+        self.assertFalse(response["accepted"])
+        self.assertEqual(response["detail"], "auto_on_active")
+        self.assertIn("Команда CH1: выключение", response["userMessage"])
+        self.assertIn("T1", response["userMessage"])
 
 
 if __name__ == "__main__":
