@@ -694,6 +694,11 @@ class SensorFaultAndAlarmTests(unittest.TestCase):
                     alarm_enabled=(False, True, True, False))
         self.assertEqual(t1.alarm_mask(), 0b0010)
 
+    def test_disabled_sensor_alarm_mask_is_cleared(self):
+        t1 = Sensor(enabled=False, present=False, error=True, value=math.nan,
+                    alarm_enabled=(True, True, False, False))
+        self.assertEqual(t1.alarm_mask(), 0)
+
     def test_percent_threshold_applies_consistently_to_adc_sensor(self):
         c = Sensor(value=2048, threshold_percent_input=True,
                    alarm_enabled=(True, False, False, False),
@@ -835,8 +840,16 @@ class SourceGuardTests(unittest.TestCase):
 
     def test_sensor_stop_mode_is_configurable(self):
         self.assertRegex(self.config_h, r"#define\s+SAFETY_MODE_SENSOR_STOP\s+(false|true|0|1)")
-        self.assertIn("_applySensorStopIfEnabled", self.process_h)
-        self.assertIn("if (!SAFETY_MODE_SENSOR_STOP) return;", self.process_h)
+        self.assertNotIn("_applySensorStopIfEnabled", self.process_h)
+
+    def test_output_manager_recomputes_all_sensors_to_clear_disabled_runtime_flags(self):
+        self.assertIn("if (!sen) continue;", self.output_mgr_h)
+        self.assertNotIn("if (!sen || !sen->enabled) continue;", self.output_mgr_h)
+
+    def test_sensor_runtime_state_is_reset_on_config_and_rule_changes(self):
+        self.assertIn("s->resetAllControlRuntime();", self.webapi_h)
+        self.assertIn("s->resetAlarmRuntime();", self.webapi_h)
+        self.assertIn("s->resetControlRuntime((uint8_t)oi);", self.webapi_h)
 
     def test_output_manager_has_global_stop_short_circuit(self):
         self.assertIn("if (_mainStopLatched)", self.output_mgr_h)
@@ -852,6 +865,10 @@ class SourceGuardTests(unittest.TestCase):
         self.assertIn("controlGate = _flowControlGate(prevState, outIdx);", self.output_mgr_h)
         self.assertIn("return prevState[OUT_CH2];", self.output_mgr_h)
         self.assertIn("return prevState[outIdx];", self.output_mgr_h)
+
+    def test_flow_alarm_is_gated_by_ch2_runtime_and_enabled_flow_control(self):
+        self.assertIn("const bool ch2ActualOn = _om->out[OUT_CH2] && _om->out[OUT_CH2]->actualOn();", self.process_h)
+        self.assertIn("const bool flowFault = fs->enabled && flowControlEnabled && ch2ActualOn && !_sm->flowActive();", self.process_h)
 
     def test_main_loop_skips_confirmation_and_safety_while_stop_is_active(self):
         self.assertIn("if (!outputMgr.mainStopLatched())", self.main_ino)
