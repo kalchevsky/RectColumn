@@ -1,18 +1,12 @@
 #pragma once
 
 #include <Arduino.h>
-#include <math.h>
-
 #include "config.h"
 #include "TimeBase.h"
 #include "EventLog.h"
 #include "SensorManager.h"
 #include "OutputManager.h"
 #include "ConfirmationManager.h"
-
-#ifndef SAFETY_T2_COOLDOWN_THRESHOLD
-#define SAFETY_T2_COOLDOWN_THRESHOLD  35.0f
-#endif
 
 class ProcessSafety {
 public:
@@ -37,10 +31,6 @@ public:
     }
 
     bool safetyAlarmActive() const {
-        if (_levelAlarmLatched || _levelShutdownCh1Done || _flowAlarmLatched ||
-            _pressureEmergencyLatched) {
-            return true;
-        }
         for (uint8_t i = 0; i < 4; i++) {
             if (_werFaultLatched[i]) return true;
         }
@@ -65,25 +55,16 @@ private:
 
     bool _levelRawLatched = false;
     bool _levelAlarmLatched = false;
-    bool _levelShutdownCh1Done = false;
-    bool _levelCooldownCh2Done = false;
     uint32_t _levelStartedMs = 0;
 
     bool _flowConditionLatched = false;
     bool _flowAlarmLatched = false;
     uint32_t _flowStartedMs = 0;
 
-    bool _pressureEmergencyLatched = false;
     bool _werFaultLatched[4] = { false, false, false, false };
 
     void _alarm(const String& msg) {
         _log->add(msg, _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
-    }
-
-    void _applySensorStopIfEnabled(const String& why) {
-        if (!SAFETY_MODE_SENSOR_STOP) return;
-        _om->setMainStopLatched(true);
-        _alarm(why + ". STOP защёлкнут safety-режимом, ручное включение CH1-CH3 заблокировано до снятия STOP.");
     }
 
     void _handleLevelEmergency(uint32_t now) {
@@ -96,21 +77,17 @@ private:
 
         const bool level = ls->enabled && _sm->levelActive();
         const uint32_t alarmDelayMs = ls->alarmDelayMs;
-        const uint32_t ctrlDelayMs = SAFETY_LEVEL_SHUTDOWN_MS;
 
         if (level) {
             if (!_levelRawLatched) {
                 _levelRawLatched = true;
                 _levelStartedMs = now;
                 _levelAlarmLatched = false;
-                _levelShutdownCh1Done = false;
-                _levelCooldownCh2Done = false;
             }
 
             if (!_levelAlarmLatched && (now - _levelStartedMs >= alarmDelayMs)) {
                 _levelAlarmLatched = true;
                 _alarm("Авария уровня: цепь L разомкнута");
-                _applySensorStopIfEnabled("Подтверждена авария уровня L");
             }
 
             if ((now - _levelStartedMs >= alarmDelayMs) && ls->alarm[0].enabled) {
@@ -119,39 +96,15 @@ private:
             } else {
                 ls->alarm[0].triggered = false;
             }
-
-            if (!_levelShutdownCh1Done && (now - _levelStartedMs >= ctrlDelayMs)) {
-                _om->setSafetyForbid(OUT_CH1, RULEIDX_SAFETY_LEVEL, true);
-                _levelShutdownCh1Done = true;
-                _alarm("Задержка управления уровнем истекла: CH1 выкл.");
-            }
-
-            if (_levelShutdownCh1Done && !_levelCooldownCh2Done) {
-                const float t2 = _sm->getT2();
-                SensorBase* t2s = _sm->s[SEN_T2];
-                if (!t2s || !t2s->hasUsableValue()) {
-                    _om->setSafetyForbid(OUT_CH2, RULEIDX_SAFETY_LEVEL, true);
-                    _levelCooldownCh2Done = true;
-                    _alarm("Аварийное охлаждение по уровню: T2 невалиден, CH2 выкл.");
-                } else if (!isnan(t2) && t2 < SAFETY_T2_COOLDOWN_THRESHOLD) {
-                    _om->setSafetyForbid(OUT_CH2, RULEIDX_SAFETY_LEVEL, true);
-                    _levelCooldownCh2Done = true;
-                    _alarm("Аварийное охлаждение по уровню: T2 ниже порога, CH2 выкл.");
-                }
-            }
             return;
         }
 
-        if (_levelRawLatched || _levelAlarmLatched || _levelShutdownCh1Done || _levelCooldownCh2Done) {
+        if (_levelRawLatched || _levelAlarmLatched) {
             _alarm("Авария уровня сброшена");
         }
-        _om->clearSafetyForbid(OUT_CH1, RULEIDX_SAFETY_LEVEL);
-        _om->clearSafetyForbid(OUT_CH2, RULEIDX_SAFETY_LEVEL);
         ls->alarm[0].triggered = false;
         _levelRawLatched = false;
         _levelAlarmLatched = false;
-        _levelShutdownCh1Done = false;
-        _levelCooldownCh2Done = false;
         _levelStartedMs = 0;
     }
 
@@ -163,7 +116,15 @@ private:
         fs->externalAlarmMaskBits = 0;
         for (uint8_t ai = 1; ai < N_ALARMS; ai++) fs->alarm[ai].triggered = false;
 
-        const bool flowFault = fs->enabled && !_sm->flowActive();
+        bool flowControlEnabled = false;
+        for (uint8_t oi = OUT_CH1; oi <= OUT_CH3; oi++) {
+            if (fs->controlRuleEnabled(oi)) {
+                flowControlEnabled = true;
+                break;
+            }
+        }
+        const bool ch2ActualOn = _om->out[OUT_CH2] && _om->out[OUT_CH2]->actualOn();
+        const bool flowFault = fs->enabled && flowControlEnabled && ch2ActualOn && !_sm->flowActive();
         const uint32_t alarmDelayMs = fs->alarmDelayMs;
         bool alarmActive = false;
 
@@ -190,11 +151,8 @@ private:
             return;
         }
 
-        if (_flowConditionLatched || _flowAlarmLatched) {
+        if (_flowAlarmLatched) {
             _alarm("Поток восстановлен");
-        }
-        for (uint8_t oi = OUT_CH1; oi <= OUT_CH3; oi++) {
-            _om->clearSafetyForbid(oi, RULEIDX_SAFETY_FLOW);
         }
         fs->alarm[0].triggered = false;
         _flowConditionLatched = false;
@@ -203,30 +161,7 @@ private:
     }
 
     void _handlePressureHigh() {
-        SensorBase* p = _sm->s[SEN_P];
-        if (!p) return;
-
-        bool high = (p->alarmMask() != 0);
-        if (!high && p->hasUsableValue()) {
-            for (uint8_t oi = OUT_CH1; oi <= OUT_CH3; oi++) {
-                const CtrlRule& r = p->ctrl[oi];
-                if (r.enabled && r.outIdx == oi && p->value > p->effectiveThreshold(r.maxVal)) {
-                    high = true;
-                    break;
-                }
-            }
-        }
-        if (high && !_pressureEmergencyLatched) {
-            _pressureEmergencyLatched = true;
-            _om->setSafetyForbid(OUT_CH1, RULEIDX_SAFETY_PRESSURE, true);
-            _alarm("Высокое давление: CH1 выкл.");
-        }
-
-        if (!high && _pressureEmergencyLatched) {
-            _pressureEmergencyLatched = false;
-            _om->clearSafetyForbid(OUT_CH1, RULEIDX_SAFETY_PRESSURE);
-            _alarm("Авария давления сброшена");
-        }
+        _om->clearSafetyForbid(OUT_CH1, RULEIDX_SAFETY_PRESSURE);
     }
 
     void _handleWerTimeout() {
