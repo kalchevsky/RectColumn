@@ -353,6 +353,11 @@ public:
         return (_lastForbid[outIdx] & (1u << sensorIdx)) != 0;
     }
 
+    bool controlSensorAutoOn(uint8_t outIdx, uint8_t sensorIdx) const {
+        if (outIdx >= OUT_COUNT || sensorIdx >= SEN_COUNT) return false;
+        return (_lastWant[outIdx] & (1u << sensorIdx)) != 0;
+    }
+
     bool manualRequestOn(uint8_t outIdx) const {
         if (outIdx >= OUT_COUNT || !out[outIdx]) return false;
         return out[outIdx]->manualWant() ||
@@ -375,6 +380,10 @@ public:
             return "выход отключён в конфигурации";
         }
         if (strcmp(reason, "auto_on_active") == 0) {
+            const String reasons = formatWantReasons(_lastWant[outIdx]);
+            if (reasons.length() > 0) {
+                return String("автоматика требует удерживать канал включённым: ") + reasons;
+            }
             return "автоматика требует удерживать канал включённым";
         }
         if (strcmp(reason, "busy") == 0) {
@@ -420,14 +429,22 @@ public:
         String outText;
         for (uint8_t si = 0; si < SEN_COUNT; si++) {
             if (!(mask & (1u << si))) continue;
-            if (outText.length() > 0) outText += ", ";
-            outText += SensorManager::sensorName(si);
+            _appendReason(outText, _sensorReasonName(si));
         }
         if (mask & (1u << RULEIDX_STOP)) _appendReason(outText, "STOP");
         if (mask & (1u << RULEIDX_SAFETY_LEVEL)) _appendReason(outText, "авария уровня");
         if (mask & (1u << RULEIDX_SAFETY_FLOW)) _appendReason(outText, "авария потока");
         if (mask & (1u << RULEIDX_SAFETY_PRESSURE)) _appendReason(outText, "авария давления");
         if (mask & (1u << RULEIDX_SAFETY_WER)) _appendReason(outText, "авария подтверждения WER");
+        return outText;
+    }
+
+    String formatWantReasons(uint32_t mask) const {
+        String outText;
+        for (uint8_t si = 0; si < SEN_COUNT; si++) {
+            if (!(mask & (1u << si))) continue;
+            _appendReason(outText, _sensorReasonName(si));
+        }
         return outText;
     }
 
@@ -749,7 +766,7 @@ private:
 
         for (int si = 0; si < SEN_COUNT; si++) {
             SensorBase* sen = sm.s[si];
-            if (!sen || !sen->enabled) continue;
+            if (!sen) continue;
 
             for (int oi = 0; oi < OUT_COUNT; oi++) {
                 // STOP is a top-level short-circuit only for the technological
@@ -809,6 +826,21 @@ private:
         if (!text || !text[0]) return;
         if (dst.length() > 0) dst += ", ";
         dst += text;
+    }
+
+    static const char* _sensorReasonName(uint8_t sensorIdx) {
+        switch (sensorIdx) {
+            case SEN_T1: return "датчик T1";
+            case SEN_T2: return "датчик T2";
+            case SEN_T3: return "датчик T3";
+            case SEN_DT: return "датчик dT";
+            case SEN_P:  return "датчик давления";
+            case SEN_L:  return "датчик уровня";
+            case SEN_F:  return "датчик протока";
+            case SEN_C:  return "датчик тока";
+            case SEN_V:  return "датчик V";
+            default:     return "датчик";
+        }
     }
 
     static const char* _confirmationId(uint8_t outIdx) {
