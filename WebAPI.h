@@ -840,6 +840,7 @@ private:
         if (!_parseJson(req, data, len, doc)) return;
 
         SensorBase* s = _sm->s[si];
+        const bool prevEnabled = s->enabled;
 
         bool nextEnabled = s->enabled;
         uint32_t nextPeriodMs = s->periodMs;
@@ -873,6 +874,11 @@ private:
         s->periodMs = nextPeriodMs;
         s->alarmDelayMs = nextAlarmDelayMs;
         s->ctrlDelayMs = nextCtrlDelayMs;
+
+        if (prevEnabled != nextEnabled) {
+            s->resetAllControlRuntime();
+            s->resetAlarmRuntime();
+        }
 
         _syncRuntimeStateNow();
         _stor->saveSensors(*_sm);
@@ -940,6 +946,7 @@ private:
             next.enabled = false;
             next.outIdx = oi;
             r = next;
+            s->resetControlRuntime((uint8_t)oi);
             _sm->normalizeSchemeControlRules();
             _syncRuntimeStateNow();
             _stor->saveSensors(*_sm);
@@ -956,6 +963,7 @@ private:
             next.minVal = 0.5f;
             next.maxVal = 2.0f;
             r = next;
+            s->resetControlRuntime((uint8_t)oi);
             _sm->normalizeDigitalOffOnlyRules();
             _sm->normalizeSchemeControlRules();
             _syncRuntimeStateNow();
@@ -986,6 +994,7 @@ private:
 
         next.outIdx = oi;
         r = next;
+        s->resetControlRuntime((uint8_t)oi);
         if (SensorManager::isMainOutputIndex((uint8_t)oi) &&
             SensorManager::isSchemeAnalogControlSensorIndex((uint8_t)si)) {
             _applyOutputLogicMode(oi, r.logic);
@@ -1139,7 +1148,7 @@ private:
         if (!_parseRelayCommandDoc(req, data, len, cmd, targetOn)) return;
 
         if (cmd == CMD_NONE) {
-            DynamicJsonDocument resp(640);
+            DynamicJsonDocument resp(1024);
             _buildRelayStateObject(resp.to<JsonObject>(), oi);
             resp["ok"] = true;
             resp["accepted"] = true;
@@ -1157,16 +1166,27 @@ private:
             _om->beepAcceptedCommand();
         }
 
-        DynamicJsonDocument resp(640);
+        DynamicJsonDocument resp(1024);
         _buildRelayStateObject(resp.to<JsonObject>(), oi);
         resp["ok"] = legacyManual ? r.accepted : true;
         resp["accepted"] = r.accepted;
         resp["reason"] = r.reason;
         resp["detail"] = r.detail;
-        resp["detailText"] = _om->relayBlockDetailText((uint8_t)oi, r.detail);
         resp["cmd"] = relayCommandName(cmd);
         resp["target"] = targetOn;
-        if (!r.accepted) resp["userMessage"] = _relayCommandUserMessage(oi, r.detail);
+        if (!r.accepted) {
+            const String blockReasonText = _relayCommandBlockReasonText((uint8_t)oi, targetOn, r.detail);
+            resp["detailText"] = blockReasonText.length() > 0
+                ? blockReasonText
+                : _om->relayBlockDetailText((uint8_t)oi, r.detail);
+            resp["blockReasonText"] = blockReasonText;
+            JsonArray blockReasons = resp.createNestedArray("blockReasons");
+            _appendRelayCommandBlockReasons(blockReasons, (uint8_t)oi, targetOn, r.detail);
+            resp["userMessage"] = _relayCommandUserMessage(oi, targetOn, r.detail);
+        } else {
+            resp["detailText"] = "";
+            resp["blockReasonText"] = "";
+        }
 
         if (legacyManual && !r.accepted && cmd == CMD_ON) {
             _sendDoc(req, 409, resp);
@@ -1246,25 +1266,118 @@ private:
         _appendMainOutputDebug(root, oi);
     }
 
-    String _relayCommandUserMessage(int oi, const char* detail) const {
+    static void _appendHumanReason(String& dst, const String& text) {
+        if (text.length() == 0) return;
+        if (dst.length() > 0) dst += ", ";
+        dst += text;
+    }
+
+    String _sensorBlockReasonText(uint8_t sensorIdx) const {
+        SensorBase* sensor = (_sm && sensorIdx < SEN_COUNT) ? _sm->s[sensorIdx] : nullptr;
+        switch (sensorIdx) {
+            case SEN_T1: return "датчик T1";
+            case SEN_T2: return "датчик T2";
+            case SEN_T3: return "датчик T3";
+            case SEN_P:  return "датчик давления";
+            case SEN_L:  return "датчик уровня";
+            case SEN_F:
+                if (sensor && sensor->enabled && sensor->present && !sensor->error &&
+                    !isnan(sensor->value) && sensor->value <= 0.5f) {
+                    return "нет протока";
+                }
+                return "датчик протока";
+            case SEN_DT: return "датчик dT";
+            case SEN_C:  return "датчик тока";
+            case SEN_V:  return "датчик V";
+            default:     return String("датчик ") + SensorManager::sensorName(sensorIdx);
+        }
+    }
+
+    String _maskReasonText(uint32_t mask, bool wantMask) const {
+        String text;
+        for (uint8_t si = 0; si < SEN_COUNT; si++) {
+            if (!(mask & (1u << si))) continue;
+            _appendHumanReason(text, _sensorBlockReasonText(si));
+        }
+        if (!wantMask) {
+            if (mask & (1u << RULEIDX_STOP)) _appendHumanReason(text, "активен STOP");
+            if (mask & (1u << RULEIDX_SAFETY_LEVEL)) _appendHumanReason(text, "авария уровня");
+            if (mask & (1u << RULEIDX_SAFETY_FLOW)) _appendHumanReason(text, "авария потока");
+            if (mask & (1u << RULEIDX_SAFETY_PRESSURE)) _appendHumanReason(text, "авария давления");
+            if (mask & (1u << RULEIDX_SAFETY_WER)) _appendHumanReason(text, "авария подтверждения WER");
+        }
+        return text;
+    }
+
+    void _appendMaskReasons(JsonArray arr, uint32_t mask, bool wantMask) const {
+        for (uint8_t si = 0; si < SEN_COUNT; si++) {
+            if (mask & (1u << si)) arr.add(_sensorBlockReasonText(si));
+        }
+        if (!wantMask) {
+            if (mask & (1u << RULEIDX_STOP)) arr.add("активен STOP");
+            if (mask & (1u << RULEIDX_SAFETY_LEVEL)) arr.add("авария уровня");
+            if (mask & (1u << RULEIDX_SAFETY_FLOW)) arr.add("авария потока");
+            if (mask & (1u << RULEIDX_SAFETY_PRESSURE)) arr.add("авария давления");
+            if (mask & (1u << RULEIDX_SAFETY_WER)) arr.add("авария подтверждения WER");
+        }
+    }
+
+    String _relayCommandBlockReasonText(uint8_t outIdx, bool targetOn, const char* detail) const {
         if (!detail || !detail[0]) return "";
-        const String prefix = String("Команда ") + _outputName(oi) + ": ";
+        if (strcmp(detail, "forbidden") == 0) {
+            return _maskReasonText(_om->effectiveForbidMask(outIdx), false);
+        }
+        if (strcmp(detail, "auto_on_active") == 0) {
+            const String reasons = _maskReasonText(_om->lastWantMask(outIdx), true);
+            if (reasons.length() > 0) return reasons;
+            return targetOn ? "" : "автоматика требует держать канал включённым";
+        }
+        if (strcmp(detail, "stop_active") == 0) return "активен STOP";
+        if (strcmp(detail, "disabled") == 0) return "выход отключён в конфигурации";
+        if (strcmp(detail, "duplicate") == 0) return "такая же команда уже выполняется";
+        if (strcmp(detail, "busy") == 0) return "предыдущая команда ещё ожидает подтверждения";
+        if (strcmp(detail, "invalid_command") == 0) return "некорректная команда";
+        return _om->relayBlockDetailText(outIdx, detail);
+    }
+
+    void _appendRelayCommandBlockReasons(JsonArray arr, uint8_t outIdx, bool, const char* detail) const {
+        if (!detail || !detail[0]) return;
+        if (strcmp(detail, "forbidden") == 0) {
+            _appendMaskReasons(arr, _om->effectiveForbidMask(outIdx), false);
+            return;
+        }
+        if (strcmp(detail, "auto_on_active") == 0) {
+            _appendMaskReasons(arr, _om->lastWantMask(outIdx), true);
+            return;
+        }
+        arr.add(_relayCommandBlockReasonText(outIdx, false, detail));
+    }
+
+    String _relayCommandUserMessage(int oi, bool targetOn, const char* detail) const {
+        if (!detail || !detail[0]) return "";
+        const String action = targetOn ? "включение" : "выключение";
+        const String prefix = String("Команда ") + _outputName(oi) + ": " + action;
+        const String reasonText = _relayCommandBlockReasonText((uint8_t)oi, targetOn, detail);
         if (strcmp(detail, "stop_active") == 0) {
-            return prefix + "включение запрещено, активен STOP. Сначала снимите STOP.";
+            return prefix + " запрещено автоматикой. Причина: активен STOP.";
         }
         if (strcmp(detail, "forbidden") == 0) {
-            const String reasons = _om->formatForbidReasons(_om->effectiveForbidMask((uint8_t)oi));
-            if (reasons.length() > 0) {
-                return prefix + "включение запрещено текущими условиями автоматики: " + reasons + ".";
+            if (reasonText.length() > 0) {
+                return prefix + " запрещено автоматикой. Причина: " + reasonText + ".";
             }
-            return prefix + "включение запрещено текущими условиями автоматики.";
+            return prefix + " запрещено автоматикой.";
         }
-        if (strcmp(detail, "disabled") == 0) return prefix + "выход отключён в конфигурации.";
-        if (strcmp(detail, "duplicate") == 0) return prefix + "такая же команда уже выполняется.";
-        if (strcmp(detail, "busy") == 0) return prefix + "предыдущая команда ещё ожидает подтверждения.";
-        if (strcmp(detail, "auto_on_active") == 0) return prefix + "выключение запрещено, автоматика требует держать канал включённым.";
-        if (strcmp(detail, "invalid_command") == 0) return prefix + "некорректная команда.";
-        return prefix + _om->relayBlockDetailText((uint8_t)oi, detail);
+        if (strcmp(detail, "disabled") == 0) return prefix + " недоступно: выход отключён в конфигурации.";
+        if (strcmp(detail, "duplicate") == 0) return prefix + " не выполнено: такая же команда уже выполняется.";
+        if (strcmp(detail, "busy") == 0) return prefix + " не выполнено: предыдущая команда ещё ожидает подтверждения.";
+        if (strcmp(detail, "auto_on_active") == 0) {
+            if (reasonText.length() > 0) {
+                return prefix + " запрещено автоматикой. Причина: " + reasonText + ".";
+            }
+            return prefix + " запрещено автоматикой: автоматика требует держать канал включённым.";
+        }
+        if (strcmp(detail, "invalid_command") == 0) return prefix + " не выполнено: некорректная команда.";
+        return prefix + " не выполнено: " + reasonText + ".";
     }
 
     // ------------------------------------------------------------
@@ -1449,6 +1562,8 @@ private:
                 co["fixedOffOnly"] = fixedOffOnly;
                 co["logicLocked"]  = fixedOffOnly;
                 co["schemeAllowed"] = SensorManager::isRuleAllowedForOutput((uint8_t)i, (uint8_t)oi);
+                co["purpose"] = fixedOffOnly ? "protection" : "control";
+                co["purposeText"] = fixedOffOnly ? "Защита канала" : "Управление каналом";
             }
         }
     }
@@ -1549,7 +1664,11 @@ private:
             so["sensorPresent"] = sensor->present;
             so["sensorError"] = sensor->error;
             so["sensorValueIsNan"] = isnan(sensor->value);
+            so["affectsChannel"] = sensor->affectsOutput(outIdx);
             so["autoOff"] = _om->controlSensorAutoOff(outIdx, si);
+            so["autoOn"] = _om->controlSensorAutoOn(outIdx, si);
+            so["manualBlockOn"] = _om->controlSensorAutoOff(outIdx, si);
+            so["manualBlockOff"] = _om->controlSensorAutoOn(outIdx, si);
         }
     }
 
