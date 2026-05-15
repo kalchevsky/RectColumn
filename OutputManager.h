@@ -72,7 +72,7 @@ public:
         for (int i = 0; i < OUT_COUNT; i++) _applyCurrent(i);
     }
 
-    uint32_t loop(SensorManager& sm) {
+    uint32_t loop(SensorManager& sm, EventLog* log = nullptr) {
         uint32_t changed = 0;
         bool prevState[OUT_COUNT];
         for (int i = 0; i < OUT_COUNT; i++) prevState[i] = out[i]->isOn();
@@ -84,6 +84,9 @@ public:
 
         for (int i = 0; i < OUT_COUNT; i++) {
             if (out[i]->isOn() != prevState[i]) changed |= (1u << i);
+            if (log && prevState[i] && !out[i]->isOn()) {
+                _logRelayOff(log, sm, (uint8_t)i);
+            }
         }
         return changed;
     }
@@ -820,6 +823,91 @@ private:
                  sm ? sm->getT2() : NAN,
                  sm ? sm->getT3() : NAN,
                  sm ? sm->getDT() : NAN);
+    }
+
+    static int _firstSetSensorBit(uint32_t mask) {
+        for (uint8_t si = 0; si < SEN_COUNT; si++) {
+            if (mask & (1u << si)) return (int)si;
+        }
+        return -1;
+    }
+
+    static String _formatAlarmLabels(const SensorBase* s) {
+        if (!s) return String("none");
+        String outText;
+        for (uint8_t ai = 0; ai < N_ALARMS; ai++) {
+            const AlarmLevel& a = s->alarm[ai];
+            if (!a.enabled || !a.triggered) continue;
+            if (outText.length() > 0) outText += "|";
+            outText += a.isMax ? "ALmax" : "ALmin";
+            outText += String(ai + 1);
+        }
+        if (outText.length() == 0) outText = "none";
+        return outText;
+    }
+
+    static String _formatSensorState(const SensorBase* s) {
+        if (!s) return String("none");
+        String outText = String("enabled=") + (s->enabled ? "1" : "0");
+        outText += ",error=";
+        outText += (s->error ? "1" : "0");
+        outText += ",present=";
+        outText += (s->present ? "1" : "0");
+        outText += ",alarm=";
+        outText += _formatAlarmLabels(s);
+        outText += ",value=";
+        if (isnan(s->value)) outText += "nan";
+        else outText += String(s->value, 2);
+        return outText;
+    }
+
+    void _logRelayOff(EventLog* log, SensorManager& sm, uint8_t outIdx) {
+        if (!log || outIdx >= OUT_COUNT || !out[outIdx] || !_isMainOutput(outIdx)) return;
+
+        const uint32_t sensorMask = _lastForbid[outIdx];
+        const uint32_t safetyMask = _safetyForbid[outIdx];
+        const uint32_t effectiveMask = _effectiveForbidMask(outIdx);
+        const char* source = "manual_or_unknown";
+        if (_mainStopLatched) source = "stop";
+        else if (relayCommandError(outIdx) == RELAY_CMDERR_TIMEOUT) source = "confirm_timeout";
+        else if ((safetyMask & (1u << RULEIDX_SAFETY_WER)) != 0) source = "wer_timeout";
+        else if (safetyMask != 0) source = "safety";
+        else if (sensorMask != 0) source = "channel_control";
+
+        String msg = String("RELAY_OFF source=") + source +
+                     " channel=" + out[outIdx]->name +
+                     " reason=" + formatForbidReasons(effectiveMask) +
+                     " channelMask=" + String(effectiveMask) +
+                     " sensorMask=" + String(sensorMask) +
+                     " safetyMask=" + String(safetyMask);
+
+        const int sensorIdx = _firstSetSensorBit(sensorMask);
+        if (sensorIdx >= 0) {
+            SensorBase* sen = sm.s[sensorIdx];
+            msg += " sensorId=";
+            msg += SensorManager::sensorName(sensorIdx);
+            msg += " sensorName=";
+            msg += SensorManager::sensorName(sensorIdx);
+            msg += " ruleEnabled=";
+            msg += (sen && sen->controlRuleEnabled(outIdx)) ? "1" : "0";
+            msg += " sensorEnabled=";
+            msg += (sen && sen->enabled) ? "1" : "0";
+            msg += " alarmState=";
+            msg += sen ? String(sen->alarmMask()) : String("0");
+            msg += " alarms=";
+            msg += _formatAlarmLabels(sen);
+        }
+
+        msg += " flowState=";
+        msg += _formatSensorState(sm.s[SEN_F]);
+        msg += " pressureState=";
+        msg += _formatSensorState(sm.s[SEN_P]);
+
+        log->add(msg,
+                 sm.getT1(),
+                 sm.getT2(),
+                 sm.getT3(),
+                 sm.getDT());
     }
 
     static void _appendReason(String& dst, const char* text) {

@@ -792,6 +792,7 @@ class FullMatrixSourceGuardTests(unittest.TestCase):
         cls.output_h = (cls.root / "Output.h").read_text(encoding="utf-8", errors="ignore")
         cls.output_manager_h = (cls.root / "OutputManager.h").read_text(encoding="utf-8", errors="ignore")
         cls.process_h = (cls.root / "ProcessSafety.h").read_text(encoding="utf-8", errors="ignore")
+        cls.remote_notifier_h = (cls.root / "RemoteNotifier.h").read_text(encoding="utf-8", errors="ignore")
         cls.confirm_h = (cls.root / "ConfirmationManager.h").read_text(encoding="utf-8", errors="ignore")
         cls.config_h = (cls.root / "config.h").read_text(encoding="utf-8", errors="ignore")
 
@@ -850,6 +851,11 @@ class FullMatrixSourceGuardTests(unittest.TestCase):
         self.assertNotIn("_flowDemandStartedMs", self.process_h)
         self.assertNotIn("setMainStopLatched(true);", self.process_h[self.process_h.find("void _handleFlowLoss"):self.process_h.find("void _handlePressureHigh")])
 
+    def test_notifier_uses_unacked_alarms_and_resets_baseline_on_config_change(self):
+        self.assertIn("_om->unackedAlarmMaskFor(*_sm, (uint8_t)si);", self.remote_notifier_h)
+        self.assertIn("_snapshotCurrentAlarms();", self.remote_notifier_h)
+        self.assertNotIn("return s->alarmMask();", self.remote_notifier_h)
+
     def test_level_and_pressure_alarms_do_not_add_channel_safety_forbids(self):
         self.assertNotIn("_om->setSafetyForbid(OUT_CH1, RULEIDX_SAFETY_LEVEL, true);", self.process_h)
         self.assertNotIn("_om->setSafetyForbid(OUT_CH2, RULEIDX_SAFETY_LEVEL, true);", self.process_h)
@@ -874,6 +880,12 @@ class FullMatrixSourceGuardTests(unittest.TestCase):
         self.assertIn("_om->syncRuntimeState(*_sm);", self.webapi_h)
         self.assertIn("if (sm) {", self.output_manager_h)
         self.assertIn("syncRuntimeState(*sm);", self.output_manager_h)
+
+    def test_relay_off_diagnostics_include_source_and_sensor_context(self):
+        self.assertIn("RELAY_OFF source=", self.output_manager_h)
+        self.assertIn("_logRelayOff(log, sm, (uint8_t)i);", self.output_manager_h)
+        self.assertIn("_formatSensorState(sm.s[SEN_F])", self.output_manager_h)
+        self.assertIn("_formatSensorState(sm.s[SEN_P])", self.output_manager_h)
 
     def test_l_and_f_default_timeouts_match_current_sources(self):
         self.assertIn("l->ctrlDelayMs  = SAFETY_LEVEL_SHUTDOWN_MS;", self.sensor_manager_h)

@@ -240,7 +240,7 @@ void loop() {
     sensorMgr.loop();
     logSensorTransitions();
 
-    outputMgr.loop(sensorMgr);
+    outputMgr.loop(sensorMgr, &eventLog);
     logOutputTransitions();
 
     if (!outputMgr.mainStopLatched()) {

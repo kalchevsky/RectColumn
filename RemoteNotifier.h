@@ -42,6 +42,9 @@ public:
         _publishUrl.trim();
         _accessToken.trim();
         if (_stor) _stor->saveNotifyConfig(_enabled, _publishUrl, _accessToken);
+        // Re-baseline current alarms so already active/acknowledged alarms do
+        // not get replayed as "new" just because notification settings changed.
+        _snapshotCurrentAlarms();
     }
 
     bool enabled() const { return _enabled; }
@@ -115,7 +118,9 @@ private:
 
         SensorBase* s = _sm->s[si];
         if (!s || !s->enabled) return 0;
-        return s->alarmMask();
+        // Notifications follow the same acknowledgement semantics as sound:
+        // only unacknowledged active alarms should be considered new.
+        return _om->unackedAlarmMaskFor(*_sm, (uint8_t)si);
     }
 
     static uint8_t _selectPrimaryAlarmBit(uint8_t bits) {
