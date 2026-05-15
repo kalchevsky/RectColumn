@@ -729,9 +729,10 @@ class FullMatrixSourceGuardTests(unittest.TestCase):
         self.assertNotIn("_flowDemandStartedMs", self.process_h)
         self.assertNotIn("setMainStopLatched(true);", self.process_h[self.process_h.find("void _handleFlowLoss"):self.process_h.find("void _handlePressureHigh")])
 
-    def test_level_sensor_stop_is_optional_and_pressure_is_ch1_only(self):
-        self.assertIn("if (!SAFETY_MODE_SENSOR_STOP) return;", self.process_h)
-        self.assertIn("_om->setSafetyForbid(OUT_CH1, RULEIDX_SAFETY_PRESSURE, true);", self.process_h)
+    def test_level_and_pressure_alarms_do_not_add_channel_safety_forbids(self):
+        self.assertNotIn("_om->setSafetyForbid(OUT_CH1, RULEIDX_SAFETY_LEVEL, true);", self.process_h)
+        self.assertNotIn("_om->setSafetyForbid(OUT_CH2, RULEIDX_SAFETY_LEVEL, true);", self.process_h)
+        self.assertNotIn("_om->setSafetyForbid(OUT_CH1, RULEIDX_SAFETY_PRESSURE, true);", self.process_h)
         self.assertNotIn("_om->setSafetyForbid(OUT_CH2, RULEIDX_SAFETY_PRESSURE, true);", self.process_h)
         self.assertNotIn("_om->setSafetyForbid(OUT_CH3, RULEIDX_SAFETY_PRESSURE, true);", self.process_h)
 
