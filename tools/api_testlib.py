@@ -214,15 +214,64 @@ class LiveEmuApiTestCase(unittest.TestCase):
 
         self.api.post_json("/api/v1/stop?release=1", {})
         self.api.post_json("/api/v1/safety/reset", {})
+        state = self.api.get_json("/api/v1/state")
 
-        for sensor_id in ("T1", "T2", "T3", "dT", "P", "L", "F", "C", "V"):
+        for sensor in state.get("sensors", []):
+            sensor_id = sensor.get("id")
+            if not sensor_id:
+                continue
+
             self.api.post_json(
-                f"/api/v1/sensor/{sensor_id}/ctrl",
-                {"outIdx": 0, "enabled": False, "logic": "heat", "min": 0, "max": 100},
+                f"/api/v1/sensor/{sensor_id}/config",
+                {
+                    "enabled": True,
+                    "periodMs": sensor.get("periodMs", 1000),
+                    "alarmDelayMs": 0,
+                    "ctrlDelayMs": 0,
+                },
             )
+
+            for idx, alarm in enumerate(sensor.get("alarms", [])):
+                self.api.post_json(
+                    f"/api/v1/sensor/{sensor_id}/alarm",
+                    {
+                        "idx": idx,
+                        "enabled": False,
+                        "threshold": alarm.get("threshold", 0),
+                        "isMax": alarm.get("isMax", True),
+                    },
+                )
+
+            for ctrl in sensor.get("ctrl", []):
+                self.api.post_json(
+                    f"/api/v1/sensor/{sensor_id}/ctrl",
+                    {
+                        "outIdx": ctrl.get("outIdx", 0),
+                        "enabled": False,
+                        "logic": ctrl.get("logic", "heat"),
+                        "min": ctrl.get("min", 0),
+                        "max": ctrl.get("max", 100),
+                    },
+                )
 
         self.api.post_json(
             "/api/v1/sensor/T1/ctrl",
             {"outIdx": 0, "enabled": True, "logic": "heat", "min": 70.0, "max": 80.0},
         )
         self.api.post_json("/api/v1/emu/set", safe_emu_payload())
+        for output_id in ("CH1", "CH2", "CH3"):
+            self.api.post_json(
+                f"/api/v1/output/{output_id}/manual",
+                {"state": False},
+                ok_statuses=(200, 409),
+            )
+        self.api.wait_for_state(
+            lambda current: (
+                not current.get("stopLatched", False)
+                and not current.get("safetyAlarmActive", False)
+                and sensor_map(current)["T1"]["enabled"] is True
+                and output_map(current)["CH1"]["forbidden"] is False
+                and all(output_map(current)[output_id]["actual"] is False for output_id in ("CH1", "CH2", "CH3"))
+            ),
+            timeout=6.0,
+        )
