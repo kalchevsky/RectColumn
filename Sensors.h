@@ -84,6 +84,14 @@ public:
         const uint32_t now = millis();
         int primaryErrorAlarmIdx = -1;
 
+        if (!enabled) {
+            for (uint8_t i = 0; i < N_ALARMS; i++) {
+                if (alarm[i].triggered) changed = true;
+            }
+            resetAlarmRuntime();
+            return changed;
+        }
+
         // Ошибка/пропадание датчика должны поднимать сигнализацию.
         // Чтобы не зажигать сразу все уровни AL1/AL2, используем только
         // первый включённый alarm-slot как "аварию датчика".
@@ -146,6 +154,34 @@ public:
         return enabled && present && !error && !isnan(value) && !isStale();
     }
 
+    bool controlRuleEnabled(uint8_t outIdx) const {
+        return outIdx < N_CTRL_OUT &&
+               ctrl[outIdx].enabled &&
+               ctrl[outIdx].outIdx == outIdx;
+    }
+
+    bool affectsOutput(uint8_t outIdx) const {
+        return enabled && controlRuleEnabled(outIdx);
+    }
+
+    void resetControlRuntime(uint8_t outIdx) {
+        if (outIdx >= N_CTRL_OUT) return;
+        _ctrlCandidateCmd[outIdx] = 0;
+        _ctrlCandidateSinceMs[outIdx] = 0;
+    }
+
+    void resetAllControlRuntime() {
+        for (uint8_t i = 0; i < N_CTRL_OUT; i++) resetControlRuntime(i);
+    }
+
+    void resetAlarmRuntime() {
+        for (uint8_t i = 0; i < N_ALARMS; i++) {
+            alarm[i].triggered = false;
+            _alarmCandidateSinceMs[i] = 0;
+        }
+        externalAlarmMaskBits = 0;
+    }
+
     bool isStale() const {
         if (isnan(value)) return false;
         const uint32_t ageLimit = maxAgeMs ? maxAgeMs : _defaultMaxAgeMs();
@@ -165,26 +201,22 @@ public:
 
         const CtrlRule& r = ctrl[outIdx];
         if (!r.enabled || r.outIdx != outIdx) {
-            _ctrlCandidateCmd[outIdx] = 0;
-            _ctrlCandidateSinceMs[outIdx] = 0;
+            resetControlRuntime(outIdx);
             return 0;
         }
 
         if (!controlGate) {
-            _ctrlCandidateCmd[outIdx] = 0;
-            _ctrlCandidateSinceMs[outIdx] = 0;
+            resetControlRuntime(outIdx);
             return 0;
         }
 
         if (!enabled) {
-            _ctrlCandidateCmd[outIdx] = 0;
-            _ctrlCandidateSinceMs[outIdx] = 0;
+            resetControlRuntime(outIdx);
             return 0;
         }
 
         if (!hasUsableValue()) {
-            _ctrlCandidateCmd[outIdx] = 0;
-            _ctrlCandidateSinceMs[outIdx] = 0;
+            resetControlRuntime(outIdx);
             return invalidMeansOff ? -1 : 0;
         }
 
@@ -200,8 +232,7 @@ public:
         }
 
         if (cmd == 0) {
-            _ctrlCandidateCmd[outIdx] = 0;
-            _ctrlCandidateSinceMs[outIdx] = 0;
+            resetControlRuntime(outIdx);
             return 0;
         }
         if (ctrlDelayMs == 0) return cmd;
