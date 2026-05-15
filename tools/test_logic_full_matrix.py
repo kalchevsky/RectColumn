@@ -21,8 +21,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 try:  # pragma: no cover - import style depends on how unittest is launched
+    from .human_report import human_case, record_human_detail
     from . import test_logic_scheme as scheme
 except ImportError:  # pragma: no cover
+    from human_report import human_case, record_human_detail  # type: ignore
     import test_logic_scheme as scheme
 
 
@@ -325,9 +327,21 @@ class DigitalSchemeMatrixTests(unittest.TestCase):
                         -1,
                     )
 
+    @human_case(
+        title="Нет протока отключает CH1 только когда CH2 уже включён",
+        situation="Для CH1 включено правило по F, проток отсутствует, а gate для CH1 зависит от состояния CH2.",
+        steps=[
+            "Подготовить датчик F с enabled rule на CH1.",
+            "Проверить результат после полной задержки при linked_output_on=True.",
+            "Проверить forbid mask для CH1.",
+        ],
+        expected="После истечения задержки F формирует auto-off для CH1, если CH2 считается включённым.",
+    )
     def test_f_loss_with_ch2_on_after_delay_turns_off_ch1(self):
         flow = scheme.build_control_sensor(scheme.SEN_F, enabled_channels=(scheme.OUT_CH1,), fault=True)
         delay = scheme.control_delay_ms(scheme.SEN_F)
+        record_human_detail(self, "flow_rule", flow.ctrl[scheme.OUT_CH1].__dict__)
+        record_human_detail(self, "delay_ms", delay)
         self.assertEqual(
             scheme.eval_ctrl_timed(scheme.SEN_F, flow, scheme.OUT_CH1, delay, linked_output_on=True),
             -1,
@@ -337,9 +351,21 @@ class DigitalSchemeMatrixTests(unittest.TestCase):
             (1 << scheme.SEN_F, 0),
         )
 
+    @human_case(
+        title="Нет протока не влияет на CH1, пока CH2 выключен",
+        situation="Для CH1 включено правило по F, но проток должен блокировать канал только при включённом CH2.",
+        steps=[
+            "Подготовить датчик F с enabled rule на CH1.",
+            "Оставить linked_output_on=False.",
+            "Проверить eval_ctrl_timed и aggregate_rules_timed.",
+        ],
+        expected="F остаётся нейтральным для CH1, если CH2 выключен.",
+    )
     def test_f_loss_with_ch2_off_is_neutral_for_ch1(self):
         flow = scheme.build_control_sensor(scheme.SEN_F, enabled_channels=(scheme.OUT_CH1,), fault=True)
         delay = scheme.control_delay_ms(scheme.SEN_F)
+        record_human_detail(self, "flow_rule", flow.ctrl[scheme.OUT_CH1].__dict__)
+        record_human_detail(self, "delay_ms", delay)
         self.assertEqual(
             scheme.eval_ctrl_timed(scheme.SEN_F, flow, scheme.OUT_CH1, delay, linked_output_on=False),
             0,
@@ -448,6 +474,17 @@ class MainOutputPriorityTests(unittest.TestCase):
         self.assertFalse(out.actual_on)
         self.assertFalse(out.manual_want)
 
+    @human_case(
+        title="Отключённый датчик не блокирует ручное включение канала",
+        situation="Правило защиты по уровню включено для CH1, но сам датчик L выключен и формально находится в аварийном состоянии.",
+        steps=[
+            "Создать датчик L с ruleEnabled=true для CH1.",
+            "Выключить sensor.enabled.",
+            "Пересчитать forbid/want masks.",
+            "Попробовать ручное включение CH1 через hold-resolver.",
+        ],
+        expected="forbid=0, want=0, manual ON для CH1 разрешён и канал включается.",
+    )
     def test_disabled_sensor_does_not_block_manual_on(self):
         sensor = scheme.build_control_sensor(scheme.SEN_L, enabled_channels=(scheme.OUT_CH1,), fault=True)
         sensor.enabled = False
@@ -456,13 +493,37 @@ class MainOutputPriorityTests(unittest.TestCase):
             scheme.OUT_CH1,
             scheme.control_delay_ms(scheme.SEN_L),
         )
+        record_human_detail(self, "runtime_masks", {"forbid": forbid, "want": want})
         self.assertEqual((forbid, want), (0, 0))
 
         out = HoldOutputModel(actual_on=False, requested_on=False)
         out.apply_resolved_hold(forbid, want)
+        record_human_detail(self, "output_before_manual", {
+            "actual_on": out.actual_on,
+            "requested_on": out.requested_on,
+            "manual_want": out.manual_want,
+            "operator_hold_off": out.operator_hold_off,
+        })
         self.assertTrue(out.set_manual_hold(True))
+        record_human_detail(self, "output_after_manual", {
+            "actual_on": out.actual_on,
+            "requested_on": out.requested_on,
+            "manual_want": out.manual_want,
+            "operator_hold_off": out.operator_hold_off,
+        })
         self.assertTrue(out.actual_on)
 
+    @human_case(
+        title="Активный auto-off запрещает manual ON",
+        situation="Датчик L включён, ruleEnabled=true для CH1 и вход уже находится в аварийном состоянии.",
+        steps=[
+            "Создать аварийный датчик L для CH1.",
+            "Собрать forbid mask после задержки.",
+            "Передать маски в hold-resolver.",
+            "Попробовать manual ON для CH1.",
+        ],
+        expected="manual ON отклоняется, CH1 остаётся выключенным, manual_want не сохраняется.",
+    )
     def test_enabled_sensor_with_active_auto_off_blocks_manual_on(self):
         sensor = scheme.build_control_sensor(scheme.SEN_L, enabled_channels=(scheme.OUT_CH1,), fault=True)
         forbid, want = scheme.aggregate_rules_timed(
@@ -470,26 +531,62 @@ class MainOutputPriorityTests(unittest.TestCase):
             scheme.OUT_CH1,
             scheme.control_delay_ms(scheme.SEN_L),
         )
+        record_human_detail(self, "runtime_masks", {"forbid": forbid, "want": want})
         self.assertNotEqual(forbid, 0)
         self.assertEqual(want, 0)
 
         out = HoldOutputModel(actual_on=False, requested_on=False)
         out.apply_resolved_hold(forbid, want)
+        record_human_detail(self, "output_after_manual_attempt", {
+            "actual_on": out.actual_on,
+            "requested_on": out.requested_on,
+            "manual_want": out.manual_want,
+            "operator_hold_off": out.operator_hold_off,
+        })
         self.assertFalse(out.set_manual_hold(True))
         self.assertFalse(out.actual_on)
         self.assertFalse(out.manual_want)
 
+    @human_case(
+        title="Ошибка активного датчика выключает уже включённый канал",
+        situation="T1 управляет CH1, канал уже включён, затем датчик T1 уходит в error.",
+        steps=[
+            "Создать sensor error для T1 при ruleEnabled=true.",
+            "Собрать forbid mask для CH1.",
+            "Применить маски к уже включённому hold-resolver.",
+        ],
+        expected="CH1 выключается, actual_on=false и причина автоотключения исходит от T1.",
+    )
     def test_active_sensor_error_turns_already_enabled_channel_off(self):
         sensor = analog_sensor(75.0, error=True)
         sensor.ctrl[scheme.OUT_CH1] = analog_rule(scheme.OUT_CH1, logic=scheme.LOGIC_HEAT)
         forbid, want = scheme.aggregate_rules({scheme.SEN_T1: sensor}, scheme.OUT_CH1)
+        record_human_detail(self, "runtime_masks", {"forbid": forbid, "want": want})
         self.assertNotEqual(forbid, 0)
         self.assertEqual(want, 0)
 
         out = HoldOutputModel(actual_on=True, requested_on=True)
+        record_human_detail(self, "output_before_apply", {
+            "actual_on": out.actual_on,
+            "requested_on": out.requested_on,
+        })
         self.assertFalse(out.apply_resolved_hold(forbid, want))
+        record_human_detail(self, "output_after_apply", {
+            "actual_on": out.actual_on,
+            "requested_on": out.requested_on,
+        })
         self.assertFalse(out.actual_on)
 
+    @human_case(
+        title="Manual ON во время auto-off поглощается и не воспроизводится позже",
+        situation="CH1 уже запрещён активной защитой по уровню, оператор пытается включить его вручную, а затем запрет снимается.",
+        steps=[
+            "Создать активный auto-off по L для CH1.",
+            "Попробовать manual ON и получить отказ.",
+            "Снять forbid mask и пересчитать hold-resolver.",
+        ],
+        expected="После снятия запрета CH1 не включается сам, manual_want остаётся очищенным.",
+    )
     def test_manual_on_during_auto_off_is_consumed_and_not_replayed(self):
         sensor = scheme.build_control_sensor(scheme.SEN_L, enabled_channels=(scheme.OUT_CH1,), fault=True)
         forbid, want = scheme.aggregate_rules_timed(
@@ -497,21 +594,45 @@ class MainOutputPriorityTests(unittest.TestCase):
             scheme.OUT_CH1,
             scheme.control_delay_ms(scheme.SEN_L),
         )
+        record_human_detail(self, "runtime_masks_before_clear", {"forbid": forbid, "want": want})
 
         out = HoldOutputModel(actual_on=False, requested_on=False)
         out.apply_resolved_hold(forbid, want)
         self.assertFalse(out.set_manual_hold(True))
         out.apply_resolved_hold(0, 0)
+        record_human_detail(self, "output_after_clear", {
+            "actual_on": out.actual_on,
+            "requested_on": out.requested_on,
+            "manual_want": out.manual_want,
+            "operator_hold_off": out.operator_hold_off,
+        })
         self.assertFalse(out.actual_on)
         self.assertFalse(out.manual_want)
 
+    @human_case(
+        title="Manual OFF остаётся разрешённым во время auto-off",
+        situation="T1 держит CH1 в auto-off из-за ошибки датчика, но оператор всё равно может отправить команду выключения.",
+        steps=[
+            "Создать sensor error для T1 при активном правиле CH1 <- T1.",
+            "Применить forbid mask к hold-resolver.",
+            "Отправить manual OFF в модели.",
+        ],
+        expected="Команда manual OFF принимается и CH1 остаётся выключенным без дополнительных побочных эффектов.",
+    )
     def test_manual_off_remains_allowed_during_auto_off(self):
         sensor = analog_sensor(75.0, error=True)
         sensor.ctrl[scheme.OUT_CH1] = analog_rule(scheme.OUT_CH1, logic=scheme.LOGIC_HEAT)
         forbid, want = scheme.aggregate_rules({scheme.SEN_T1: sensor}, scheme.OUT_CH1)
+        record_human_detail(self, "runtime_masks", {"forbid": forbid, "want": want})
 
         out = HoldOutputModel(actual_on=False, requested_on=False)
         out.apply_resolved_hold(forbid, want)
+        record_human_detail(self, "output_after_manual_off", {
+            "actual_on": out.actual_on,
+            "requested_on": out.requested_on,
+            "manual_want": out.manual_want,
+            "operator_hold_off": out.operator_hold_off,
+        })
         self.assertTrue(out.set_manual_hold(False))
         self.assertFalse(out.actual_on)
 

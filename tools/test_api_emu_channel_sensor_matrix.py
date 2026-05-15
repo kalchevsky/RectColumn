@@ -28,6 +28,7 @@ try:  # pragma: no cover - import style depends on how unittest is launched
         safe_emu_payload,
         sensor_map,
     )
+    from .human_report import human_case, record_human_detail
 except ImportError:  # pragma: no cover
     from api_testlib import (  # type: ignore
         LiveEmuApiTestCase,
@@ -38,6 +39,7 @@ except ImportError:  # pragma: no cover
         safe_emu_payload,
         sensor_map,
     )
+    from human_report import human_case, record_human_detail  # type: ignore
 
 
 MAIN_OUTPUTS = (("CH1", 0), ("CH2", 1), ("CH3", 2))
@@ -339,6 +341,17 @@ class EmuChannelSensorMatrixTests(LiveEmuApiTestCase):
         self.assertTrue(debug_sensors[sensor_id].get("sensorError", False))
         self.assertTrue(debug_sensors[sensor_id].get("autoOff", False))
 
+    @human_case(
+        title="Потеря протока отключает только CH1, если rule F->CH2 выключено",
+        situation="У датчика протока F включено только правило для CH1. Все три основных канала включены, после чего пропадает проток.",
+        steps=[
+            "Сбросить runtime и включить только F -> CH1.",
+            "Включить CH1, CH2 и CH3 вручную.",
+            "Подать F=false.",
+            "Проверить, какие каналы выключились и где появились forbidReasons.",
+        ],
+        expected="Выключается только CH1. CH2 и CH3 продолжают работать и не получают причину блокировки F.",
+    )
     def test_flow_regression_only_ch1_turns_off_when_ch2_flow_rule_is_disabled(self):
         self._reset_runtime()
         self._set_sensor_config("F", enabled=True, ctrl_delay_ms=500)
@@ -361,6 +374,7 @@ class EmuChannelSensorMatrixTests(LiveEmuApiTestCase):
             "after_flow_loss": self._debug_snapshot("after_flow_loss"),
             "state_trace": state_trace,
         }
+        record_human_detail(self, "debug_dump", debug_dump)
         self.assertEqual(
             [ctrl["enabled"] for ctrl in sensor_map(state)["F"]["ctrl"][:3]],
             [True, False, False],
@@ -373,6 +387,17 @@ class EmuChannelSensorMatrixTests(LiveEmuApiTestCase):
         self.assertNotIn("F", outputs["CH2"].get("forbidReasons", []), msg=json.dumps(debug_dump, ensure_ascii=False, indent=2))
         self.assertNotIn("F", outputs["CH3"].get("forbidReasons", []), msg=json.dumps(debug_dump, ensure_ascii=False, indent=2))
 
+    @human_case(
+        title="STOP выключает основные каналы и не возвращает старый manual ON",
+        situation="Основные каналы были включены вручную. Затем активируется глобальный STOP и после этого снимается.",
+        steps=[
+            "Включить CH1, CH2 и CH3 без активных правил.",
+            "Активировать STOP.",
+            "Проверить, что main-каналы отключились и manual-флаги очищены.",
+            "Снять STOP и убедиться, что старые manual-запросы не воспроизводятся.",
+        ],
+        expected="После STOP все основные каналы выключены, а после release остаются выключенными без повторного запуска.",
+    )
     def test_stop_global_block_clears_main_outputs_without_replaying_manual_on(self):
         self._reset_runtime()
         self._disable_all_main_rules()
@@ -381,6 +406,10 @@ class EmuChannelSensorMatrixTests(LiveEmuApiTestCase):
         self._post_json_logged("/api/v1/stop", {})
         stopped = self._wait_outputs_idle({"CH1": False, "CH2": False, "CH3": False}, timeout=5.0)
         stopped_outputs = output_map(stopped)
+        record_human_detail(self, "state_after_stop", {
+            "stopLatched": stopped.get("stopLatched", False),
+            "outputs": stopped_outputs,
+        })
         self.assertTrue(stopped.get("stopLatched", False))
         for output_id in ("CH1", "CH2", "CH3"):
             self.assertFalse(stopped_outputs[output_id].get("manualWant", False))
@@ -388,6 +417,10 @@ class EmuChannelSensorMatrixTests(LiveEmuApiTestCase):
 
         self._post_json_logged("/api/v1/stop?release=1", {})
         released = self._wait_outputs_idle({"CH1": False, "CH2": False, "CH3": False}, timeout=5.0)
+        record_human_detail(self, "state_after_stop_release", {
+            "stopLatched": released.get("stopLatched", False),
+            "outputs": output_map(released),
+        })
         self.assertFalse(released.get("stopLatched", True))
         released_outputs = output_map(released)
         for output_id in ("CH1", "CH2", "CH3"):
@@ -415,30 +448,57 @@ class EmuChannelSensorMatrixTests(LiveEmuApiTestCase):
         )
         self.assertGreater(ch1.get("wantOnMask", 0), 0)
 
+    @human_case(
+        title="Manual-команды выполняются один раз и не оставляют скрытый hold в нейтральной зоне",
+        situation="Автоматика нейтральна, все правила main-каналов отключены. Оператор включает и затем выключает CH1 вручную.",
+        steps=[
+            "Сбросить runtime и выключить все main-правила.",
+            "Отправить manual ON для CH1.",
+            "Проверить, что CH1 включился без остаточных manualWant/operatorHoldOff.",
+            "Отправить manual OFF и проверить, что канал выключился так же чисто.",
+        ],
+        expected="CH1 переключается по командам и не хранит старые manual-флаги после применения команд.",
+    )
     def test_manual_commands_execute_once_when_auto_is_neutral(self):
         self._reset_runtime()
         self._disable_all_main_rules()
 
         response_on = self._post_json_logged("/api/v1/output/CH1/manual", {"state": True}, ok_statuses=(200,))
+        record_human_detail(self, "manual_on_response", response_on)
         self.assertTrue(response_on["accepted"])
         state_on = self._wait_outputs_idle({"CH1": True}, timeout=5.0)
         ch1_on = output_map(state_on)["CH1"]
+        record_human_detail(self, "state_after_manual_on", ch1_on)
         self.assertTrue(ch1_on["actual"])
         self.assertFalse(ch1_on.get("manualWant", False))
         self.assertFalse(ch1_on.get("operatorHoldOff", False))
 
         time.sleep(0.6)
         hold_state = self.api.get_json("/api/v1/state")
+        record_human_detail(self, "hold_state", output_map(hold_state)["CH1"])
         self.assertTrue(output_map(hold_state)["CH1"]["actual"])
 
         response_off = self._post_json_logged("/api/v1/output/CH1/manual", {"state": False}, ok_statuses=(200,))
+        record_human_detail(self, "manual_off_response", response_off)
         self.assertTrue(response_off["accepted"])
         state_off = self._wait_outputs_idle({"CH1": False}, timeout=5.0)
         ch1_off = output_map(state_off)["CH1"]
+        record_human_detail(self, "state_after_manual_off", ch1_off)
         self.assertFalse(ch1_off["actual"])
         self.assertFalse(ch1_off.get("manualWant", False))
         self.assertFalse(ch1_off.get("operatorHoldOff", False))
 
+    @human_case(
+        title="Отключённый датчик не блокирует manual ON на основном канале",
+        situation="Для T1/T2/T3 правило управления каналом оставлено enabled, но сам датчик выключен и переведён в error.",
+        steps=[
+            "Для каждого из T1/T2/T3 выключить sensor.enabled=false.",
+            "Оставить правило управления соответствующим каналом enabled.",
+            "Подать error-состояние датчика.",
+            "Попробовать вручную включить связанный канал.",
+        ],
+        expected="Manual ON принимается, а forbidden/autoOff по выключенному датчику не появляются.",
+    )
     def test_disabled_sensor_does_not_block_manual_on_on_real_api(self):
         for sensor_id, output_id, out_idx in (("T1", "CH1", 0), ("T2", "CH2", 1), ("T3", "CH3", 2)):
             with self.subTest(sensor=sensor_id, output=output_id):
@@ -464,7 +524,23 @@ class EmuChannelSensorMatrixTests(LiveEmuApiTestCase):
                 self.assertIn(sensor_id, debug_sensors)
                 self.assertFalse(debug_sensors[sensor_id].get("sensorEnabled", True))
                 self.assertFalse(debug_sensors[sensor_id].get("autoOff", True))
+                record_human_detail(self, f"{sensor_id}_{output_id}", {
+                    "manual_response": response,
+                    "output_state": output_state,
+                    "sensor_debug": debug_sensors[sensor_id],
+                })
 
+    @human_case(
+        title="Выключение датчика очищает stale autoOff и manualBlock",
+        situation="T1 ранее запретил CH1 по auto-off, после чего датчик полностью выключается через sensor/config.",
+        steps=[
+            "Подготовить активное правило CH1 <- T1.",
+            "Подать T1=85.0 и дождаться forbidden для CH1.",
+            "Выключить датчик T1 через sensor/config.",
+            "Проверить, что forbidReasons и autoOff очистились, а manual ON снова доступен.",
+        ],
+        expected="После enabled=false у датчика CH1 больше не forbidden, autoOff очищен и manual ON принимается.",
+    )
     def test_disabling_sensor_clears_stale_auto_off_and_manual_block(self):
         self._prepare_single_rule("T1", "CH1", 0)
         self._post_json_logged("/api/v1/emu/set", safe_emu_payload(T1=85.0))
@@ -476,14 +552,30 @@ class EmuChannelSensorMatrixTests(LiveEmuApiTestCase):
         self._set_sensor_config("T1", enabled=False, ctrl_delay_ms=0)
         cleared = self._wait_outputs_idle({"CH1": False}, timeout=5.0)
         ch1 = output_map(cleared)["CH1"]
+        record_human_detail(self, "state_after_sensor_disable", {
+            "sensor": sensor_map(cleared)["T1"],
+            "output": ch1,
+        })
         self.assertFalse(ch1["forbidden"])
         self.assertFalse(ch1.get("autoOff", False))
         self.assertNotIn("T1", ch1.get("forbidReasons", []))
 
         response = self._post_json_logged("/api/v1/output/CH1/manual", {"state": True}, ok_statuses=(200,))
+        record_human_detail(self, "manual_response_after_sensor_disable", response)
         self.assertTrue(response["accepted"])
         self._wait_outputs_idle({"CH1": True}, timeout=5.0)
 
+    @human_case(
+        title="Выключение ruleEnabled очищает stale autoOff и manualBlock",
+        situation="Датчик T1 остаётся включённым, но правило T1 -> CH1 после аварийного состояния отключается.",
+        steps=[
+            "Подготовить активное правило CH1 <- T1.",
+            "Подать T1=85.0 и дождаться forbidden для CH1.",
+            "Выключить ruleEnabled для CH1 <- T1.",
+            "Проверить, что CH1 очищает stale блокировку и снова принимает manual ON.",
+        ],
+        expected="После disabled rule CH1 больше не forbidden, autoOff сброшен, а manual ON проходит.",
+    )
     def test_disabling_rule_clears_stale_auto_off_and_manual_block(self):
         self._prepare_single_rule("T1", "CH1", 0)
         self._post_json_logged("/api/v1/emu/set", safe_emu_payload(T1=85.0))
@@ -495,14 +587,31 @@ class EmuChannelSensorMatrixTests(LiveEmuApiTestCase):
         self._set_sensor_rule("T1", 0, enabled=False, logic="heat", min_v=70.0, max_v=80.0)
         cleared = self._wait_outputs_idle({"CH1": False}, timeout=5.0)
         ch1 = output_map(cleared)["CH1"]
+        record_human_detail(self, "state_after_rule_disable", {
+            "sensor": sensor_map(cleared)["T1"],
+            "output": ch1,
+        })
         self.assertFalse(ch1["forbidden"])
         self.assertFalse(ch1.get("autoOff", False))
         self.assertNotIn("T1", ch1.get("forbidReasons", []))
 
         response = self._post_json_logged("/api/v1/output/CH1/manual", {"state": True}, ok_statuses=(200,))
+        record_human_detail(self, "manual_response_after_rule_disable", response)
         self.assertTrue(response["accepted"])
         self._wait_outputs_idle({"CH1": True}, timeout=5.0)
 
+    @human_case(
+        title="Повторное включение датчика пересчитывает состояние по живому нейтральному значению",
+        situation="T1 сначала запрещает CH1, затем датчик выключают, подают нейтральное значение и снова включают датчик.",
+        steps=[
+            "Подготовить активное правило CH1 <- T1.",
+            "Подать T1=85.0 и дождаться forbidden.",
+            "Выключить датчик T1.",
+            "Пока датчик выключен, подать T1=75.0 и снова включить датчик.",
+            "Проверить, что stale запрет не возвращается.",
+        ],
+        expected="После повторного включения датчика CH1 остаётся неблокированным и manual ON снова доступен.",
+    )
     def test_reenabling_sensor_recomputes_from_live_neutral_value(self):
         self._prepare_single_rule("T1", "CH1", 0)
         self._post_json_logged("/api/v1/emu/set", safe_emu_payload(T1=85.0))
@@ -517,14 +626,30 @@ class EmuChannelSensorMatrixTests(LiveEmuApiTestCase):
 
         state = self._wait_outputs_idle({"CH1": False}, timeout=5.0)
         ch1 = output_map(state)["CH1"]
+        record_human_detail(self, "state_after_sensor_reenable", {
+            "sensor": sensor_map(state)["T1"],
+            "output": ch1,
+        })
         self.assertFalse(ch1["forbidden"])
         self.assertFalse(ch1.get("autoOff", False))
         self.assertNotIn("T1", ch1.get("forbidReasons", []))
 
         response = self._post_json_logged("/api/v1/output/CH1/manual", {"state": True}, ok_statuses=(200,))
+        record_human_detail(self, "manual_response_after_sensor_reenable", response)
         self.assertTrue(response["accepted"])
         self._wait_outputs_idle({"CH1": True}, timeout=5.0)
 
+    @human_case(
+        title="Alarm по давлению не блокирует CH1, если rule P->CH1 выключено",
+        situation="У датчика давления P включена только сигнализация ALmax, но rule управления CH1 по давлению disabled.",
+        steps=[
+            "Включить датчик P и отключить rule P -> CH1.",
+            "Включить аларм P выше 1050.",
+            "Подать P=1100 и дождаться triggered alarm.",
+            "Попробовать вручную включить CH1.",
+        ],
+        expected="Аларм P срабатывает, но CH1 не становится forbidden и manual ON принимается.",
+    )
     def test_pressure_alarm_does_not_block_manual_when_pressure_rule_is_disabled(self):
         self._reset_runtime()
         self._set_sensor_config("P", enabled=True, ctrl_delay_ms=0)
@@ -536,12 +661,28 @@ class EmuChannelSensorMatrixTests(LiveEmuApiTestCase):
             lambda current: sensor_map(current)["P"]["alarms"][0]["triggered"] is True,
             timeout=4.0,
         )
+        record_human_detail(self, "pressure_state_before_manual", {
+            "sensor": sensor_map(state)["P"],
+            "output": output_map(state)["CH1"],
+        })
         self.assertTrue(sensor_map(state)["P"]["alarms"][0]["triggered"])
         self.assertFalse(output_map(state)["CH1"]["forbidden"])
 
         response = self._post_json_logged("/api/v1/output/CH1/manual", {"state": True}, ok_statuses=(200,))
+        record_human_detail(self, "manual_response", response)
         self.assertTrue(response["accepted"])
 
+    @human_case(
+        title="Авария протока не активируется, пока CH2 выключен",
+        situation="Нет протока F=false, но CH2 остаётся выключенным. Проверяется, что flow alarm не должен срабатывать заранее.",
+        steps=[
+            "Настроить F с ctrlDelay и alarmDelay.",
+            "Включить защитное правило F -> CH1 и alarm F.",
+            "Подать F=false, не включая CH2.",
+            "Проверить состояние alarm triggered.",
+        ],
+        expected="Пока CH2 выключен, flow alarm остаётся неактивным.",
+    )
     def test_flow_alarm_is_inactive_while_ch2_is_off(self):
         self._reset_runtime()
         self._set_sensor_config("F", enabled=True, ctrl_delay_ms=500, alarm_delay_ms=500)
@@ -551,8 +692,24 @@ class EmuChannelSensorMatrixTests(LiveEmuApiTestCase):
         time.sleep(0.8)
 
         state = self.api.get_json("/api/v1/state")
+        record_human_detail(self, "flow_state_with_ch2_off", {
+            "sensor": sensor_map(state)["F"],
+            "outputs": {output_id: output_map(state)[output_id] for output_id, _ in MAIN_OUTPUTS},
+        })
         self.assertFalse(sensor_map(state)["F"]["alarms"][0]["triggered"])
 
+    @human_case(
+        title="Авария протока появляется только после включения CH2 без потока",
+        situation="Нет протока F=false, alarm F настроен, а CH2 сначала выключен, потом включается вручную.",
+        steps=[
+            "Настроить F с ctrlDelay и alarmDelay.",
+            "Подать F=false и убедиться, что до включения CH2 аларма нет.",
+            "Включить CH2 вручную.",
+            "Дождаться срабатывания alarm F.",
+            "Выключить CH2 и убедиться, что alarm сбрасывается.",
+        ],
+        expected="Alarm F появляется только на фоне CH2 ON + нет протока и сбрасывается после выключения CH2.",
+    )
     def test_flow_alarm_appears_only_after_ch2_turns_on_without_flow(self):
         self._reset_runtime()
         self._set_sensor_config("F", enabled=True, ctrl_delay_ms=500, alarm_delay_ms=500)
@@ -561,6 +718,10 @@ class EmuChannelSensorMatrixTests(LiveEmuApiTestCase):
         self._post_json_logged("/api/v1/emu/set", safe_emu_payload(F=False))
 
         before_on = self.api.get_json("/api/v1/state")
+        record_human_detail(self, "state_before_ch2_on", {
+            "sensor": sensor_map(before_on)["F"],
+            "output": output_map(before_on)["CH2"],
+        })
         self.assertFalse(sensor_map(before_on)["F"]["alarms"][0]["triggered"])
 
         self._turn_on_outputs(("CH2",))
@@ -568,6 +729,10 @@ class EmuChannelSensorMatrixTests(LiveEmuApiTestCase):
             lambda current: sensor_map(current)["F"]["alarms"][0]["triggered"] is True,
             timeout=4.0,
         )
+        record_human_detail(self, "state_with_alarm_active", {
+            "sensor": sensor_map(alarmed)["F"],
+            "output": output_map(alarmed)["CH2"],
+        })
         self.assertTrue(output_map(alarmed)["CH2"]["actual"])
         self.assertTrue(sensor_map(alarmed)["F"]["alarms"][0]["triggered"])
 
@@ -579,8 +744,23 @@ class EmuChannelSensorMatrixTests(LiveEmuApiTestCase):
             ),
             timeout=5.0,
         )
+        record_human_detail(self, "state_after_ch2_off", {
+            "sensor": sensor_map(cleared)["F"],
+            "output": output_map(cleared)["CH2"],
+        })
         self.assertFalse(sensor_map(cleared)["F"]["alarms"][0]["triggered"])
 
+    @human_case(
+        title="Активный auto-off запрещает manual ON и не воспроизводится позже",
+        situation="T1 уже запретил CH1 по температуре выше максимума. Оператор пытается включить CH1 вручную, а затем датчик возвращается в нейтральную зону.",
+        steps=[
+            "Включить правило CH1 <- T1.",
+            "Подать T1=85.0 и дождаться forbidden.",
+            "Отправить manual ON для CH1 и получить отказ.",
+            "Вернуть T1=75.0 и проверить, что CH1 сам не включился задним числом.",
+        ],
+        expected="Manual ON отклоняется, а после снятия запрета CH1 остаётся выключенным без replay старой команды.",
+    )
     def test_active_auto_off_blocks_manual_on_and_does_not_replay_later_on_real_api(self):
         self._reset_runtime()
         self._set_sensor_config("T1", enabled=True, ctrl_delay_ms=0)
@@ -591,6 +771,7 @@ class EmuChannelSensorMatrixTests(LiveEmuApiTestCase):
             lambda current: output_map(current)["CH1"]["forbidden"] is True,
             timeout=4.0,
         )
+        record_human_detail(self, "forbidden_state", output_map(forbidden_state)["CH1"])
         self.assertIn("T1", output_map(forbidden_state)["CH1"].get("forbidReasons", []))
 
         status, response = self.api.request_json(
@@ -599,6 +780,8 @@ class EmuChannelSensorMatrixTests(LiveEmuApiTestCase):
             payload={"state": True},
             ok_statuses=(409,),
         )
+        record_human_detail(self, "manual_http_status", status)
+        record_human_detail(self, "manual_response", response)
         self.assertEqual(status, 409)
         self.assertFalse(response["accepted"])
         self.assertEqual(response["detail"], "forbidden")
@@ -606,6 +789,7 @@ class EmuChannelSensorMatrixTests(LiveEmuApiTestCase):
         self._post_json_logged("/api/v1/emu/set", safe_emu_payload(T1=75.0))
         cleared = self._wait_outputs_idle({"CH1": False}, timeout=5.0)
         ch1 = output_map(cleared)["CH1"]
+        record_human_detail(self, "state_after_clearing_forbid", ch1)
         self.assertFalse(ch1["actual"])
         self.assertFalse(ch1.get("manualWant", False))
         self.assertFalse(ch1.get("operatorHoldOff", False))
@@ -628,6 +812,17 @@ class EmuChannelSensorMatrixTests(LiveEmuApiTestCase):
     def test_emupanel_t3_error_then_manual_on_keeps_ch3_off(self):
         self._assert_emupanel_error_blocks_immediate_manual_on("T3", "CH3", 2)
 
+    @human_case(
+        title="Ошибка активного датчика выключает уже включённый CH1",
+        situation="CH1 уже включён вручную, после чего датчик T1 уходит в состояние error при активном правиле CH1 <- T1.",
+        steps=[
+            "Подготовить активное правило CH1 <- T1.",
+            "Включить CH1 вручную.",
+            "Подать T1err=true.",
+            "Проверить, что CH1 выключился и получил причину T1.",
+        ],
+        expected="CH1 выключается, в forbidReasons появляется T1, а manualWant очищается.",
+    )
     def test_active_sensor_error_turns_already_enabled_channel_off(self):
         self._prepare_single_rule("T1", "CH1", 0)
         self._turn_on_outputs(("CH1",))
@@ -635,10 +830,26 @@ class EmuChannelSensorMatrixTests(LiveEmuApiTestCase):
 
         state = self._wait_outputs_idle({"CH1": False}, timeout=5.0)
         ch1 = output_map(state)["CH1"]
+        record_human_detail(self, "state_after_t1_error", {
+            "sensor": sensor_map(state)["T1"],
+            "output": ch1,
+        })
         self.assertTrue(sensor_map(state)["T1"]["error"])
         self.assertIn("T1", ch1.get("forbidReasons", []))
         self.assertFalse(ch1.get("manualWant", False))
 
+    @human_case(
+        title="Manual ON во время sensor error поглощается и не воспроизводится после очистки ошибки",
+        situation="T1 уже держит CH1 в forbidden из-за error, после чего оператор пытается включить CH1 вручную.",
+        steps=[
+            "Подготовить активное правило CH1 <- T1.",
+            "Подать T1err=true и дождаться forbidden.",
+            "Отправить manual ON для CH1 и получить отказ.",
+            "Снять ошибку T1 и вернуть нейтральное значение.",
+            "Проверить, что CH1 остался выключенным без replay manual-команды.",
+        ],
+        expected="После очистки ошибки CH1 не включается сам, manualWant/operatorHoldOff очищены.",
+    )
     def test_manual_on_during_active_sensor_error_is_consumed_and_not_replayed_after_clearing_error(self):
         self._prepare_single_rule("T1", "CH1", 0)
         self._post_json_logged("/api/v1/emu/set", safe_emu_payload(T1err=True))
@@ -656,17 +867,34 @@ class EmuChannelSensorMatrixTests(LiveEmuApiTestCase):
             payload={"state": True},
             ok_statuses=(409,),
         )
+        record_human_detail(self, "manual_http_status", status)
+        record_human_detail(self, "manual_response", response)
         self.assertEqual(status, 409)
         self.assertFalse(response["accepted"])
 
         self._post_json_logged("/api/v1/emu/set", safe_emu_payload(T1=75.0, T1err=False))
         cleared = self._wait_outputs_idle({"CH1": False}, timeout=5.0)
         ch1 = output_map(cleared)["CH1"]
+        record_human_detail(self, "state_after_error_clear", {
+            "sensor": sensor_map(cleared)["T1"],
+            "output": ch1,
+        })
         self.assertFalse(sensor_map(cleared)["T1"]["error"])
         self.assertFalse(ch1["actual"])
         self.assertFalse(ch1.get("manualWant", False))
         self.assertFalse(ch1.get("operatorHoldOff", False))
 
+    @human_case(
+        title="Manual OFF остаётся доступным во время auto-off по sensor error",
+        situation="CH1 был включён, затем T1 ушёл в error и автоматика уже выключила канал.",
+        steps=[
+            "Подготовить активное правило CH1 <- T1.",
+            "Включить CH1 вручную.",
+            "Подать T1err=true и дождаться auto-off.",
+            "Отправить manual OFF.",
+        ],
+        expected="API принимает manual OFF даже в состоянии автоматической блокировки по ошибке датчика.",
+    )
     def test_manual_off_remains_allowed_during_sensor_error_auto_off(self):
         self._prepare_single_rule("T1", "CH1", 0)
         self._turn_on_outputs(("CH1",))
@@ -681,21 +909,47 @@ class EmuChannelSensorMatrixTests(LiveEmuApiTestCase):
         )
 
         response = self._post_json_logged("/api/v1/output/CH1/manual", {"state": False}, ok_statuses=(200,))
+        record_human_detail(self, "manual_response", response)
         self.assertTrue(response["accepted"])
 
+    @human_case(
+        title="Защита уровня выключает CH1 только после задержки",
+        situation="Для CH1 настроена цифровая защита уровня L с задержкой. После пропадания уровня канал не должен отключаться мгновенно.",
+        steps=[
+            "Подготовить правило L -> CH1.",
+            "Включить CH1 вручную.",
+            "Подать L=false.",
+            "Проверить, что сразу канал ещё включён.",
+            "Дождаться таймаута и убедиться, что CH1 выключился по L.",
+        ],
+        expected="До таймаута CH1 остаётся включённым, после таймаута выключается и получает причину L.",
+    )
     def test_l_delay_turns_off_after_timeout(self):
         self._prepare_single_rule("L", "CH1", 0)
         self._turn_on_outputs(("CH1",))
         self._post_json_logged("/api/v1/emu/set", safe_emu_payload(L=False))
         time.sleep(0.2)
         early = self.api.get_json("/api/v1/state")
+        record_human_detail(self, "state_before_delay_timeout", output_map(early)["CH1"])
         self.assertTrue(output_map(early)["CH1"]["actual"])
 
         state = self._wait_outputs({"CH1": False}, timeout=4.0)
         ch1 = output_map(state)["CH1"]
+        record_human_detail(self, "state_after_delay_timeout", ch1)
         self.assertFalse(ch1["actual"])
         self.assertIn("L", ch1.get("forbidReasons", []))
 
+    @human_case(
+        title="Датчик протока F влияет на CH1 только когда CH2 уже включён",
+        situation="Для CH1 включено правило по протоку F. Сначала CH2 выключен, затем включается, при этом протока нет.",
+        steps=[
+            "Подготовить правило F -> CH1 и подать F=false.",
+            "Включить только CH1 и убедиться, что запрета пока нет.",
+            "Включить CH2.",
+            "Проверить, что после этого CH1 выключается по F.",
+        ],
+        expected="При CH2 OFF CH1 не блокируется. После CH2 ON CH1 получает forbidReason F и выключается.",
+    )
     def test_f_depends_on_ch2_for_ch1(self):
         self._reset_runtime()
         self._set_sensor_config("F", enabled=True, ctrl_delay_ms=500)
@@ -706,12 +960,22 @@ class EmuChannelSensorMatrixTests(LiveEmuApiTestCase):
         time.sleep(0.8)
         with_ch2_off = self.api.get_json("/api/v1/state")
         ch1_before = output_map(with_ch2_off)["CH1"]
+        record_human_detail(self, "state_with_ch2_off", {
+            "ch1": ch1_before,
+            "ch2": output_map(with_ch2_off)["CH2"],
+            "flow_sensor": sensor_map(with_ch2_off)["F"],
+        })
         self.assertTrue(ch1_before["actual"])
         self.assertNotIn("F", ch1_before.get("forbidReasons", []))
 
         self._turn_on_outputs(("CH2",))
         state = self._wait_outputs({"CH1": False, "CH2": True}, timeout=4.0)
         ch1_after = output_map(state)["CH1"]
+        record_human_detail(self, "state_with_ch2_on", {
+            "ch1": ch1_after,
+            "ch2": output_map(state)["CH2"],
+            "flow_sensor": sensor_map(state)["F"],
+        })
         self.assertFalse(ch1_after["actual"])
         self.assertIn("F", ch1_after.get("forbidReasons", []))
 

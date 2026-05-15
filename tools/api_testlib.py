@@ -23,7 +23,11 @@ DEFAULT_BASE_URL = "http://192.168.4.1"
 
 class RectColumnApi:
     def __init__(self, base_url: str | None = None, timeout: float = 6.0):
-        self.base_url = (base_url or os.environ.get("RECTCOLUMN_BASE_URL") or DEFAULT_BASE_URL).rstrip("/")
+        env_base_url = (
+            os.environ.get("RECTCOLUMN_BASE_URL")
+            or os.environ.get("RECTLOLUMN_BASE_URL")
+        )
+        self.base_url = (base_url or env_base_url or DEFAULT_BASE_URL).rstrip("/")
         self.timeout = timeout
 
     def _url(self, path: str) -> str:

@@ -28,6 +28,11 @@ from enum import Enum, auto
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
+try:  # pragma: no cover - depends on unittest invocation style
+    from .human_report import human_case, record_human_detail
+except ImportError:  # pragma: no cover
+    from human_report import human_case, record_human_detail  # type: ignore
+
 
 # ---------------------------------------------------------------------------
 # Constants from config.h / flowchart model
@@ -515,9 +520,21 @@ class DigitalLFTests(unittest.TestCase):
         self.assertEqual(flow.eval_ctrl(OUT_CH1, control_gate=False), 0)
         self.assertEqual(flow.eval_ctrl(OUT_CH1, control_gate=True), -1)
 
+    @human_case(
+        title="Проток F влияет на CH1 только через состояние CH2",
+        situation="Для CH1 включено правило по протоку F, но gate для этого правила должен зависеть от текущего состояния CH2.",
+        steps=[
+            "Создать аварийный датчик F с enabled rule только для CH1.",
+            "Проверить поведение при linked_output_on=False.",
+            "Проверить поведение при linked_output_on=True.",
+        ],
+        expected="При CH2 OFF датчик F нейтрален для CH1, а при CH2 ON формирует auto-off.",
+    )
     def test_flow_rule_for_ch1_depends_on_ch2_state_in_scheme(self):
         flow = build_control_sensor(SEN_F, enabled_channels=(OUT_CH1,), fault=True)
         delay = control_delay_ms(SEN_F)
+        record_human_detail(self, "flow_rule", flow.ctrl[OUT_CH1].__dict__)
+        record_human_detail(self, "delay_ms", delay)
         self.assertEqual(
             eval_ctrl_timed(SEN_F, flow, OUT_CH1, delay, linked_output_on=False),
             0,
@@ -542,6 +559,16 @@ class ChannelSensorMatrixTests(unittest.TestCase):
     def assertChannelStateTuple(self, states: Dict[int, bool], expected: Tuple[bool, bool, bool]) -> None:
         self.assertEqual(state_tuple(states), expected)
 
+    @human_case(
+        title="Аварийный датчик не отключает каналы, если ruleEnabled=false",
+        situation="Контролируемый датчик находится в fault/error состоянии, но для канала правило управления этим датчиком выключено.",
+        steps=[
+            "Для каждого control sensor подготовить аварийное состояние.",
+            "Оставить enabled_channels пустым.",
+            "Пересчитать состояния CH1/CH2/CH3.",
+        ],
+        expected="Все основные каналы остаются включёнными, потому что выключенное правило не должно создавать auto-off.",
+    )
     def test_faulty_sensor_does_not_turn_off_channels_when_rule_disabled(self):
         for out_idx in MAIN_CHANNELS:
             for sensor_idx in CONTROL_SENSOR_INDICES:
@@ -552,6 +579,16 @@ class ChannelSensorMatrixTests(unittest.TestCase):
                     states = simulate_main_channel_states(sensors, elapsed_ms=control_delay_ms(sensor_idx))
                     self.assertChannelStateTuple(states, (True, True, True))
 
+    @human_case(
+        title="Включённый датчик в нормальном диапазоне не выключает целевой канал",
+        situation="Для канала активировано правило управления по датчику, но сам датчик находится в нормальном, неаварийном диапазоне.",
+        steps=[
+            "Для каждого control sensor включить правило на целевой канал.",
+            "Подать нормальное значение без fault.",
+            "Пересчитать состояния основных каналов.",
+        ],
+        expected="Целевой канал остаётся включённым, auto-off не формируется.",
+    )
     def test_enabled_sensor_in_normal_state_keeps_target_channel_on(self):
         for out_idx in MAIN_CHANNELS:
             for sensor_idx in CONTROL_SENSOR_INDICES:
@@ -668,11 +705,22 @@ class ChannelSensorMatrixTests(unittest.TestCase):
                 states = simulate_main_channel_states(sensors, elapsed_ms=elapsed_ms)
                 self.assertChannelStateTuple(states, (False, False, True))
 
+    @human_case(
+        title="Потеря протока отключает CH1, но не CH2, если у CH2 flow-rule disabled",
+        situation="Датчик F аварийный, правило F -> CH1 включено, а для CH2 и CH3 правила отключены.",
+        steps=[
+            "Создать аварийный датчик F с enabled rule только для CH1.",
+            "Пересчитать состояния основных каналов после задержки.",
+            "Сравнить итог для CH1, CH2 и CH3.",
+        ],
+        expected="Выключается только CH1, а CH2 и CH3 продолжают работать.",
+    )
     def test_regression_flow_fault_turns_off_ch1_but_not_ch2_when_ch2_flow_control_is_disabled(self):
         sensors = {
             SEN_F: build_control_sensor(SEN_F, enabled_channels=(OUT_CH1,), fault=True),
         }
         states = simulate_main_channel_states(sensors, elapsed_ms=control_delay_ms(SEN_F))
+        record_human_detail(self, "states", states)
         self.assertChannelStateTuple(states, (False, True, True))
 
 
@@ -683,10 +731,26 @@ class SensorFaultAndAlarmTests(unittest.TestCase):
                                     fail_safe=FailSafeMode.FORCE_OFF)
         self.assertEqual(t1.eval_ctrl(OUT_CH1), -1)
 
+    @human_case(
+        title="Отключённый аналоговый датчик полностью исключается из блокировки канала",
+        situation="T1 выключен на уровне sensor.enabled=false и одновременно находится в error/missing состоянии.",
+        steps=[
+            "Создать выключенный T1 с error=True и отсутствующим значением.",
+            "Оставить правило T1 -> CH1 включённым.",
+            "Проверить eval_ctrl для CH1.",
+        ],
+        expected="Отключённый датчик возвращает 0 и не формирует auto-off для CH1.",
+    )
     def test_disabled_analog_control_sensor_error_is_excluded(self):
         t1 = Sensor(enabled=False, present=False, error=True, value=math.nan)
         t1.ctrl[OUT_CH1] = CtrlRule(True, OUT_CH1, LOGIC_HEAT, 70, 80,
                                     fail_safe=FailSafeMode.FORCE_OFF)
+        record_human_detail(self, "sensor_state", {
+            "enabled": t1.enabled,
+            "present": t1.present,
+            "error": t1.error,
+            "value": t1.value,
+        })
         self.assertEqual(t1.eval_ctrl(OUT_CH1), 0)
 
     def test_nan_error_raises_first_enabled_alarm_slot(self):

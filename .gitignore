@@ -41,6 +41,7 @@ htmlcov/
 *.bak
 *.orig
 *.rej
+reports/*.html
 
 # Project dumps generated for ChatGPT/review
 ALL_TEXT.txt
