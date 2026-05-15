@@ -697,6 +697,12 @@ function fillSelects(sensorIds = DEFAULT_SENSOR_IDS, outputIds = DEFAULT_OUTPUT_
   $('ctrlOutput').innerHTML = outputIds.map(v => `<option value="${v}">${v}</option>`).join('');
   syncEditorsFromState();
 }
+function syncCtrlLogicLabels() {
+  const sensorId = $('ctrlSensor')?.value;
+  const coolOption = $('ctrlLogic')?.querySelector('option[value="cool"]');
+  if (!coolOption) return;
+  coolOption.textContent = (sensorId === 'L' || sensorId === 'F') ? 'включено' : 'cool';
+}
 function getSensorIds() {
   return state.schema?.sensorIds || state.deviceState?.sensors?.map(s => s.id) || DEFAULT_SENSOR_IDS;
 }
@@ -1095,6 +1101,7 @@ function renderRawState() {
   $('rawState').textContent = pretty(state.deviceState);
 }
 function syncEditorsFromState() {
+  syncCtrlLogicLabels();
   const sensors = state.deviceState?.sensors || [];
   const byId = Object.fromEntries(sensors.map(sensor => [sensor.id, sensor]));
   const current = byId[$('cfgSensor')?.value];
@@ -1281,6 +1288,7 @@ function bindEvents() {
   $('btnSendApi').addEventListener('click', sendRawApi);
   $('btnCopyState').addEventListener('click', copyRawState);
   $('cfgSensor').addEventListener('change', syncEditorsFromState);
+  $('ctrlSensor').addEventListener('change', syncCtrlLogicLabels);
   $('pollInterval').addEventListener('change', () => { saveSettings(); if (state.polling) startPolling(); });
   $('baseUrl').addEventListener('change', async () => { saveSettings(); await refreshEverything(); });
   ['state','info','diag','emu','manual'].forEach(kind => document.querySelectorAll(`[data-template="${kind}"]`).forEach(btn => btn.addEventListener('click', () => applyApiTemplate(kind))));
