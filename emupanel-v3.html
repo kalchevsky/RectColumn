@@ -721,6 +721,11 @@ function pretty(obj) {
 function flowAlarmVisible(sensor) {
   if (!sensor || sensor.id !== 'F') return false;
   if (!sensor.enabled || sensor.error || sensor.value === null || typeof sensor.value === 'undefined' || sensor.present === false) return false;
+  const flowControlEnabled = (sensor.ctrl || []).some(rule => rule && rule.enabled && Number(rule.outIdx) >= 0 && Number(rule.outIdx) <= 2);
+  if (!flowControlEnabled) return false;
+  const outputs = state.deviceState?.outputs || [];
+  const ch2 = outputs.find(output => output && output.id === 'CH2');
+  if (!ch2 || !ch2.actual) return false;
   return Number(sensor.value) <= 0.5;
 }
 function formatValue(sensor) {
@@ -993,7 +998,12 @@ function renderSensors() {
       if (!a.enabled) return null;
       return `${idx}:${a.isMax ? 'max' : 'min'} ${a.threshold}${a.triggered ? ' !' : ''}`;
     }).filter(Boolean).join(' · ') || '—';
-    const ctrl = (sensor.ctrl || []).map(rule => rule.enabled ? `${getOutputIds()[rule.outIdx] || ('#' + rule.outIdx)} ${rule.logic} [${rule.min};${rule.max}]` : null).filter(Boolean).join(' | ') || '—';
+    const ctrl = (sensor.ctrl || []).map(rule => {
+      if (!rule.enabled) return null;
+      const outId = getOutputIds()[rule.outIdx] || ('#' + rule.outIdx);
+      if (rule.fixedOffOnly) return `${outId} ${rule.purposeText || 'Защита канала'}`;
+      return `${outId} ${rule.logic} [${rule.min};${rule.max}]`;
+    }).filter(Boolean).join(' | ') || '—';
     return `
       <tr>
         <td class="nowrap"><strong>${sensor.id}</strong></td>
