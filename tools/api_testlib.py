@@ -15,6 +15,7 @@ import time
 import unittest
 import urllib.error
 import urllib.request
+import email.message
 from typing import Any, Callable
 
 
@@ -72,6 +73,31 @@ class RectColumnApi:
 
     def delete_json(self, path: str, *, ok_statuses: tuple[int, ...] = (200,)) -> Any:
         return self.request_json(path, method="DELETE", ok_statuses=ok_statuses)[1]
+
+    def request_text(self, path: str, *, method: str = "GET", payload: Any | None = None,
+                     ok_statuses: tuple[int, ...] = (200,)) -> tuple[int, str, email.message.Message]:
+        body = None
+        headers = {}
+        if payload is not None:
+            body = json.dumps(payload).encode("utf-8")
+            headers["Content-Type"] = "application/json"
+
+        req = urllib.request.Request(self._url(path), data=body, headers=headers, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                raw = resp.read().decode("utf-8", errors="replace")
+                status = resp.status
+                response_headers = resp.headers
+        except urllib.error.HTTPError as exc:
+            raw = exc.read().decode("utf-8", errors="replace")
+            status = exc.code
+            response_headers = exc.headers
+        except Exception as exc:  # pragma: no cover - used only for live device access
+            raise unittest.SkipTest(f"Device is unreachable at {self.base_url}: {exc}") from exc
+
+        if status not in ok_statuses:
+            raise AssertionError(f"{method} {path} returned HTTP {status}: {raw[:1200]}")
+        return status, raw, response_headers
 
     def wait_for_state(self, predicate: Callable[[dict[str, Any]], bool], *,
                        timeout: float = 4.0, interval: float = 0.2) -> dict[str, Any]:

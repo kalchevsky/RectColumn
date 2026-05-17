@@ -68,6 +68,7 @@ public:
             ctrl[i].outIdx = i;
             _ctrlCandidateCmd[i] = 0;
             _ctrlCandidateSinceMs[i] = 0;
+            _ctrlRearmPollAfterMs[i] = 0;
         }
         for (uint8_t i = 0; i < N_ALARMS; i++) {
             _alarmCandidateSinceMs[i] = 0;
@@ -168,10 +169,39 @@ public:
         if (outIdx >= N_CTRL_OUT) return;
         _ctrlCandidateCmd[outIdx] = 0;
         _ctrlCandidateSinceMs[outIdx] = 0;
+        _ctrlRearmPollAfterMs[outIdx] = 0;
     }
 
     void resetAllControlRuntime() {
         for (uint8_t i = 0; i < N_CTRL_OUT; i++) resetControlRuntime(i);
+    }
+
+    void rearmControlAfterFreshPoll(uint8_t outIdx, uint32_t now = millis()) {
+        if (outIdx >= N_CTRL_OUT) return;
+        _ctrlCandidateCmd[outIdx] = 0;
+        _ctrlCandidateSinceMs[outIdx] = 0;
+        _ctrlRearmPollAfterMs[outIdx] = now ? now : 1;
+    }
+
+    void rearmAllControlAfterFreshPoll(uint32_t now = millis()) {
+        for (uint8_t i = 0; i < N_CTRL_OUT; i++) rearmControlAfterFreshPoll(i, now);
+    }
+
+    int8_t controlRuntimeCmd(uint8_t outIdx) const {
+        if (outIdx >= N_CTRL_OUT) return 0;
+        return _ctrlCandidateCmd[outIdx];
+    }
+
+    uint32_t controlRuntimeSinceMs(uint8_t outIdx) const {
+        if (outIdx >= N_CTRL_OUT) return 0;
+        return _ctrlCandidateSinceMs[outIdx];
+    }
+
+    uint32_t controlRuntimeElapsedMs(uint8_t outIdx, uint32_t now = millis()) const {
+        if (outIdx >= N_CTRL_OUT) return 0;
+        const uint32_t startedAt = _ctrlCandidateSinceMs[outIdx];
+        if (startedAt == 0) return 0;
+        return now - startedAt;
     }
 
     void resetAlarmRuntime() {
@@ -206,13 +236,21 @@ public:
         }
 
         if (!controlGate) {
-            resetControlRuntime(outIdx);
+            // Gate only freezes the current delay budget. The runtime must stay
+            // intact so a short confirmation dip does not restart ctrlDelayMs.
             return 0;
         }
 
         if (!enabled) {
             resetControlRuntime(outIdx);
             return 0;
+        }
+
+        if (_ctrlRearmPollAfterMs[outIdx] != 0) {
+            _ctrlCandidateCmd[outIdx] = 0;
+            _ctrlCandidateSinceMs[outIdx] = 0;
+            if (_lastPollMs < _ctrlRearmPollAfterMs[outIdx]) return 0;
+            _ctrlRearmPollAfterMs[outIdx] = 0;
         }
 
         if (!hasUsableValue()) {
@@ -264,6 +302,7 @@ private:
     uint32_t _alarmCandidateSinceMs[N_ALARMS] = {};
     int8_t   _ctrlCandidateCmd[N_CTRL_OUT] = {};
     uint32_t _ctrlCandidateSinceMs[N_CTRL_OUT] = {};
+    uint32_t _ctrlRearmPollAfterMs[N_CTRL_OUT] = {};
 
     uint32_t _defaultMaxAgeMs() const {
         if (periodMs == 0) return 0;

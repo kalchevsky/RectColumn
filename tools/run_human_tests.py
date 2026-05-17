@@ -33,9 +33,11 @@ UNIT_TEST_MODULES = [
 ]
 
 LIVE_TEST_MODULES = [
+    "tools.test_api_emu_smoke",
     "tools.test_api_emu_manual_logic",
     "tools.test_api_emu_confirmation_modes",
     "tools.test_api_emu_channel_sensor_matrix",
+    "tools.test_flow_ctrl_delay_log",
 ]
 
 

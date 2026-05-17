@@ -555,20 +555,47 @@ private:
             }
         }
 
-        return sen->evalCtrl(outIdx, invalidMeansOff, controlGate);
+        const int cmd = sen->evalCtrl(outIdx, invalidMeansOff, controlGate);
+#if STABILITY_BOOT_DIAG
+        if (sensorIdx == SEN_F && outIdx == OUT_CH1 &&
+            sen->controlRuleEnabled(outIdx) && controlGate &&
+            (cmd != 0 || !sen->hasUsableValue())) {
+            const bool ch2Wanted =
+                prevState[OUT_CH2] ||
+                (out[OUT_CH2] && out[OUT_CH2]->manualWant()) ||
+                (_lastWant[OUT_CH2] != 0);
+            Serial.printf("[CTRL][F->CH1] gate=%d usable=%d stale=%d pollMs=%lu val=%.2f delay=%lu cmd=%d ch2Actual=%d ch2Wanted=%d\n",
+                          controlGate ? 1 : 0,
+                          sen->hasUsableValue() ? 1 : 0,
+                          sen->isStale() ? 1 : 0,
+                          (unsigned long)sen->_lastPollMs,
+                          isnan(sen->value) ? -9999.0 : sen->value,
+                          (unsigned long)sen->ctrlDelayMs,
+                          cmd,
+                          prevState[OUT_CH2] ? 1 : 0,
+                          ch2Wanted ? 1 : 0);
+        }
+#endif
+        return cmd;
     }
 
     bool _flowControlGate(const bool prevState[OUT_COUNT], uint8_t outIdx) const {
+        auto wants = [&](uint8_t idx) -> bool {
+            if (idx >= OUT_COUNT || !out[idx]) return false;
+            return prevState[idx] ||
+                   out[idx]->manualWant() ||
+                   (_lastWant[idx] != 0);
+        };
+
         if (outIdx == OUT_CH1) {
             // Source scheme explicitly says CH1 flow loss is relevant only when
-            // the linked relay CH2 (valve) is already ON.
-            return prevState[OUT_CH2];
+            // the linked relay CH2 (valve) is already requested or already ON.
+            return wants(OUT_CH2);
         }
 
-        // CH2/CH3 have no explicit linked-relay mapping in the source scheme.
-        // Keep the current per-channel gate until the project gains a dedicated
-        // configuration for their flow dependency.
-        return prevState[outIdx];
+        // For CH2/CH3 delay must start from the intent to keep the channel ON,
+        // not only after the physical confirmation arrives.
+        return wants(outIdx);
     }
 
     void _applyGlobalStop() {
@@ -864,6 +891,7 @@ private:
     void _logRelayOff(EventLog* log, SensorManager& sm, uint8_t outIdx) {
         if (!log || outIdx >= OUT_COUNT || !out[outIdx] || !_isMainOutput(outIdx)) return;
 
+        const uint32_t now = millis();
         const uint32_t sensorMask = _lastForbid[outIdx];
         const uint32_t safetyMask = _safetyForbid[outIdx];
         const uint32_t effectiveMask = _effectiveForbidMask(outIdx);
@@ -884,6 +912,7 @@ private:
         const int sensorIdx = _firstSetSensorBit(sensorMask);
         if (sensorIdx >= 0) {
             SensorBase* sen = sm.s[sensorIdx];
+            const CtrlRule* rule = (sen && outIdx < N_CTRL_OUT) ? &sen->ctrl[outIdx] : nullptr;
             msg += " sensorId=";
             msg += SensorManager::sensorName(sensorIdx);
             msg += " sensorName=";
@@ -896,12 +925,40 @@ private:
             msg += sen ? String(sen->alarmMask()) : String("0");
             msg += " alarms=";
             msg += _formatAlarmLabels(sen);
+            msg += " ctrlDelayMs=";
+            msg += sen ? String(sen->ctrlDelayMs) : String("0");
+            msg += " elapsedMs=";
+            msg += sen ? String(sen->controlRuntimeElapsedMs(outIdx, now)) : String("0");
+            msg += " ruleState=";
+            if (rule) {
+                msg += "logic=";
+                msg += (rule->logic == LOGIC_COOL) ? "cool" : "heat";
+                msg += ",min=";
+                msg += String(rule->minVal, 2);
+                msg += ",max=";
+                msg += String(rule->maxVal, 2);
+                msg += ",runtimeCmd=";
+                msg += String((int)sen->controlRuntimeCmd(outIdx));
+            } else {
+                msg += "none";
+            }
+            msg += " sensorValue=";
+            if (sen && !isnan(sen->value)) msg += String(sen->value, 2);
+            else                           msg += "nan";
         }
 
         msg += " flowState=";
         msg += _formatSensorState(sm.s[SEN_F]);
         msg += " pressureState=";
         msg += _formatSensorState(sm.s[SEN_P]);
+
+#if STABILITY_BOOT_DIAG
+        Serial.printf("[CTRL][relay_off] ch=%s sensorMask=%lu safetyMask=%lu reason=%s\n",
+                      out[outIdx]->name,
+                      (unsigned long)sensorMask,
+                      (unsigned long)safetyMask,
+                      msg.c_str());
+#endif
 
         log->add(msg,
                  sm.getT1(),

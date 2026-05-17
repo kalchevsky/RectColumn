@@ -979,6 +979,92 @@ class EmuChannelSensorMatrixTests(LiveEmuApiTestCase):
         self.assertFalse(ch1_after["actual"])
         self.assertIn("F", ch1_after.get("forbidReasons", []))
 
+    def test_flow_ctrl_delay_update_resets_runtime_on_real_api(self):
+        self._reset_runtime()
+        self._set_sensor_config("F", enabled=True, ctrl_delay_ms=300)
+        self._set_sensor_rule("F", 0, enabled=True)
+        self._post_json_logged("/api/v1/emu/set", safe_emu_payload(F=True))
+        self._turn_on_outputs(("CH1", "CH2"))
+        self.api.delete_json("/api/v1/log")
+
+        self._post_json_logged("/api/v1/emu/set", safe_emu_payload(F=False))
+        time.sleep(0.15)
+        self._set_sensor_config("F", enabled=True, ctrl_delay_ms=1500)
+
+        time.sleep(0.45)
+        early = self.api.get_json("/api/v1/state")
+        early_logs = self.api.get_json("/api/v1/log")
+        record_human_detail(self, "flow_delay_runtime_after_update", {
+            "output": output_map(early)["CH1"],
+            "sensor": sensor_map(early)["F"],
+            "logs": early_logs,
+        })
+        self.assertTrue(output_map(early)["CH1"]["actual"])
+        self.assertFalse(any(
+            "RELAY_OFF source=channel_control" in (entry.get("e") or "")
+            and "sensorId=F" in (entry.get("e") or "")
+            for entry in early_logs
+        ))
+
+        final_state = self._wait_outputs({"CH1": False, "CH2": True}, timeout=3.0)
+        final_logs = self.api.get_json("/api/v1/log")
+        self.assertTrue(any(
+            "RELAY_OFF source=channel_control" in (entry.get("e") or "")
+            and "sensorId=F" in (entry.get("e") or "")
+            for entry in final_logs
+        ))
+        self.assertIn("F", output_map(final_state)["CH1"].get("forbidReasons", []))
+
+    @human_case(
+        title="Включение датчика F через интерфейс не отключает CH1 раньше ctrlDelayMs",
+        situation="CH2 уже включён, цепь датчика F разомкнута, правило F -> CH1 активно, а сам датчик F до этого был выключен через интерфейс.",
+        steps=[
+            "Выключить датчик F через sensor/config при сохранённом правиле F -> CH1.",
+            "Включить CH1 и CH2, подать F=false.",
+            "Включить датчик F обратно через sensor/config.",
+            "Проверить, что до истечения ctrlDelayMs CH1 ещё включён.",
+            "Дождаться таймаута и убедиться, что CH1 выключился только после задержки.",
+        ],
+        expected="Повторное включение датчика не использует stale sample для мгновенного auto-off: CH1 выключается только после нового интервала ctrlDelayMs.",
+    )
+    def test_enabling_flow_sensor_via_api_restarts_delay_from_enable_moment(self):
+        self._reset_runtime()
+        self._set_sensor_config("F", enabled=False, ctrl_delay_ms=1500)
+        self._set_sensor_rule("F", 0, enabled=True)
+        self._set_sensor_rule("F", 1, enabled=False)
+        self._set_sensor_rule("F", 2, enabled=False)
+        self._post_json_logged("/api/v1/emu/set", safe_emu_payload(F=False))
+        self._turn_on_outputs(("CH1", "CH2"))
+        self.api.delete_json("/api/v1/log")
+
+        self._set_sensor_config("F", enabled=True, ctrl_delay_ms=1500)
+        time.sleep(0.35)
+
+        early = self.api.get_json("/api/v1/state")
+        early_logs = self.api.get_json("/api/v1/log")
+        record_human_detail(self, "state_after_sensor_enable_before_timeout", {
+            "output": output_map(early)["CH1"],
+            "sensor": sensor_map(early)["F"],
+            "logs": early_logs,
+        })
+        self.assertTrue(output_map(early)["CH1"]["actual"])
+        self.assertFalse(output_map(early)["CH1"]["forbidden"])
+        self.assertFalse(output_map(early)["CH1"].get("autoOff", False))
+        self.assertFalse(any(
+            "RELAY_OFF source=channel_control" in (entry.get("e") or "")
+            and "sensorId=F" in (entry.get("e") or "")
+            for entry in early_logs
+        ))
+
+        final_state = self._wait_outputs({"CH1": False, "CH2": True}, timeout=4.0)
+        final_logs = self.api.get_json("/api/v1/log")
+        self.assertTrue(any(
+            "RELAY_OFF source=channel_control" in (entry.get("e") or "")
+            and "sensorId=F" in (entry.get("e") or "")
+            for entry in final_logs
+        ))
+        self.assertIn("F", output_map(final_state)["CH1"].get("forbidReasons", []))
+
     def _assert_off_condition_turns_off_only_target_main_channel(self, sensor_id: str,
                                                                  output_id: str,
                                                                  out_idx: int) -> None:

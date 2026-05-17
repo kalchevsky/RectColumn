@@ -8,6 +8,7 @@
 #include <freertos/task.h>
 #include <new>
 #include <math.h>
+#include <string.h>
 
 #include "WiFiMgr.h"
 #include "EventLog.h"
@@ -66,6 +67,7 @@ public:
 
     void loop() {
         if (!_wifi || !_sm || !_om) return;
+        _flushQueuedFailure();
 
         for (int si = 0; si < SEN_COUNT; si++) {
             const uint8_t curMask = _audibleAlarmMask(si);
@@ -94,6 +96,9 @@ private:
     String  _accessToken;
     uint8_t _lastAlarmMask[SEN_COUNT] = {};
     uint32_t _lastFailLogMs = 0;
+    portMUX_TYPE _failMux = portMUX_INITIALIZER_UNLOCKED;
+    bool _queuedFailPending = false;
+    char _queuedFailText[192] = {};
 
     struct NotifyTaskPayload {
         RemoteNotifier* self = nullptr;
@@ -241,10 +246,16 @@ private:
         payload->priority = priority ? priority : "3";
         payload->tags = tags ? tags : "information_source";
 
+#if STABILITY_BOOT_DIAG
+        Serial.printf("[NTFY] schedule bodyLen=%u urlLen=%u\n",
+                      (unsigned)payload->body.length(),
+                      (unsigned)payload->publishUrl.length());
+#endif
+
         const BaseType_t ok = xTaskCreate(
             _notifyTask,
             "notify",
-            4096,
+            6144,
             payload,
             1,
             nullptr
@@ -268,6 +279,9 @@ private:
         RemoteNotifier* self = payload->self;
         if (self) {
             String err;
+#if STABILITY_BOOT_DIAG
+            Serial.printf("[NTFY] task start bodyLen=%u\n", (unsigned)payload->body.length());
+#endif
             if (!self->_sendNtfyWithTarget(payload->publishUrl,
                                            payload->token,
                                            payload->title,
@@ -275,7 +289,7 @@ private:
                                            payload->priority.c_str(),
                                            payload->tags.c_str(),
                                            err)) {
-                self->_logSendFailure(err);
+                self->_queueSendFailure(err.c_str());
             }
         }
 
@@ -315,20 +329,33 @@ private:
         http.addHeader("Priority", priority ? priority : "3");
         http.addHeader("Tags", tags ? tags : "information_source");
         if (token.length() > 0) {
-            http.addHeader("Authorization", String("Bearer ") + token);
+            String authHeader;
+            authHeader.reserve(token.length() + 7);
+            authHeader = "Bearer ";
+            authHeader += token;
+            http.addHeader("Authorization", authHeader);
         }
 
         code = http.POST((uint8_t*)body.c_str(), body.length());
+        if (code >= 200 && code < 300) {
+#if STABILITY_BOOT_DIAG
+            Serial.printf("[NTFY] sent ok code=%d\n", code);
+#endif
+            http.end();
+            return true;
+        }
+
         resp = http.getString();
         http.end();
-
-        if (code >= 200 && code < 300) return true;
 
         errOut = String("HTTP ") + code;
         if (resp.length()) {
             errOut += ": ";
             errOut += resp;
         }
+#if STABILITY_BOOT_DIAG
+        Serial.printf("[NTFY] send failed code=%d errLen=%u\n", code, (unsigned)errOut.length());
+#endif
         return false;
     }
 
@@ -345,6 +372,36 @@ private:
             return false;
         }
         return true;
+    }
+
+    void _queueSendFailure(const char* err) {
+        portENTER_CRITICAL(&_failMux);
+        _queuedFailPending = true;
+        if (!err || !err[0]) err = "unknown";
+        strncpy(_queuedFailText, err, sizeof(_queuedFailText) - 1);
+        _queuedFailText[sizeof(_queuedFailText) - 1] = '\0';
+        portEXIT_CRITICAL(&_failMux);
+#if STABILITY_BOOT_DIAG
+        Serial.printf("[NTFY] queued failure: %s\n", _queuedFailText);
+#endif
+    }
+
+    void _flushQueuedFailure() {
+        char errBuf[sizeof(_queuedFailText)] = {};
+        bool hasQueuedFailure = false;
+
+        portENTER_CRITICAL(&_failMux);
+        if (_queuedFailPending) {
+            strncpy(errBuf, _queuedFailText, sizeof(errBuf) - 1);
+            errBuf[sizeof(errBuf) - 1] = '\0';
+            _queuedFailPending = false;
+            _queuedFailText[0] = '\0';
+            hasQueuedFailure = true;
+        }
+        portEXIT_CRITICAL(&_failMux);
+
+        if (!hasQueuedFailure) return;
+        _logSendFailure(String(errBuf));
     }
 
     void _logSendFailure(const String& err) {

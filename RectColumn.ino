@@ -3,6 +3,7 @@
 // ================================================================
 
 #include <Arduino.h>
+#include <esp_core_dump.h>
 #include <esp_system.h>
 #include "config.h"
 #include "TimeBase.h"
@@ -57,6 +58,27 @@ static const char* resetReasonText(esp_reset_reason_t reason) {
         case ESP_RST_BROWNOUT:  return "просадка питания (BROWNOUT)";
         case ESP_RST_SDIO:      return "сброс SDIO";
         default:                return "прочая причина (OTHER)";
+    }
+}
+
+static void printBootResetDiagnostics(esp_reset_reason_t reason) {
+    Serial.printf("[BOOT] reset reason = %d (%s)\n", (int)reason, resetReasonText(reason));
+
+#if !CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH
+    Serial.println("[BOOT] TODO: текущий профиль Arduino-ESP32 собран без flash coredump");
+#endif
+
+    if (reason == ESP_RST_PANIC || reason == ESP_RST_INT_WDT || reason == ESP_RST_TASK_WDT) {
+        size_t addr = 0;
+        size_t size = 0;
+        if (esp_core_dump_image_get(&addr, &size) == ESP_OK) {
+            Serial.printf("[BOOT] coredump available: addr=0x%x size=%u\n",
+                          (unsigned)addr,
+                          (unsigned)size);
+            Serial.println("[BOOT] use 'espcoredump.py info_corefile' to decode");
+        } else {
+            Serial.println("[BOOT] coredump not found in flash");
+        }
     }
 }
 
@@ -185,13 +207,15 @@ static void updateWiFiLed() {
 void setup() {
     Serial.begin(115200);
     delay(300);
+    const esp_reset_reason_t resetReason = esp_reset_reason();
+    printBootResetDiagnostics(resetReason);
     Serial.println();
     Serial.println("=== " DEVICE_NAME " " FW_VERSION " ===");
-    Serial.println(String("Причина сброса: ") + resetReasonText(esp_reset_reason()));
+    Serial.println(String("Причина сброса: ") + resetReasonText(resetReason));
 
     eventLog.begin(&timeBase);
     eventLog.add("Версия прошивки " FW_VERSION);
-    eventLog.add(String("Загрузка: причина сброса ") + resetReasonText(esp_reset_reason()));
+    eventLog.add(String("Загрузка: причина сброса ") + resetReasonText(resetReason));
 
     storage.loadSensors(sensorMgr);
     storage.loadOutputs(outputMgr);

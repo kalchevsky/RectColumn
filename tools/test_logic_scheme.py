@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import math
 import re
+import gzip
 from itertools import combinations
 import unittest
 from dataclasses import dataclass, field
@@ -268,6 +269,61 @@ class ArbiterOutput:
 
 
 @dataclass
+class ControlRuntime:
+    candidate_cmd: int = 0
+    candidate_since_ms: int = 0
+
+
+def reset_control_runtime(runtime: ControlRuntime) -> None:
+    runtime.candidate_cmd = 0
+    runtime.candidate_since_ms = 0
+
+
+def eval_ctrl_with_runtime(sensor: Sensor, out_idx: int, runtime: ControlRuntime, now_ms: int,
+                           *, control_gate: bool = True) -> int:
+    rule = sensor.ctrl.get(out_idx)
+    if not rule or not rule.enabled or rule.out_idx != out_idx:
+        reset_control_runtime(runtime)
+        return 0
+    rule.validate()
+
+    if not control_gate:
+        return 0
+
+    if not sensor.enabled:
+        reset_control_runtime(runtime)
+        return 0
+
+    if not sensor.usable():
+        reset_control_runtime(runtime)
+        if rule.fail_safe in (FailSafeMode.FORCE_OFF, FailSafeMode.LATCH_FAULT):
+            return -1
+        if rule.fail_safe is FailSafeMode.FORCE_ON:
+            return 1
+        return 0
+
+    cmd = sensor.eval_ctrl(out_idx, control_gate=True)
+    if cmd == 0:
+        reset_control_runtime(runtime)
+        return 0
+
+    delay_ms = rule.off_delay_ms if cmd == -1 else rule.on_delay_ms
+    if delay_ms == 0:
+        return cmd
+
+    if runtime.candidate_cmd != cmd:
+        runtime.candidate_cmd = cmd
+        runtime.candidate_since_ms = now_ms
+        return 0
+
+    if runtime.candidate_since_ms == 0:
+        runtime.candidate_since_ms = now_ms
+    if now_ms - runtime.candidate_since_ms >= delay_ms:
+        return cmd
+    return 0
+
+
+@dataclass
 class ConfirmationFSM:
     state: RelayState = RelayState.OFF
     command_on: bool = False
@@ -343,6 +399,10 @@ def sound_required(sensor_alarm_active: bool, safety_fault_active: bool, muted: 
 
 def control_delay_ms(sensor_idx: int) -> int:
     return CONTROL_DELAY_MS[sensor_idx]
+
+
+def flow_control_gate(actual_on: bool, *, manual_want: bool = False, want_mask: int = 0) -> bool:
+    return actual_on or manual_want or want_mask != 0
 
 
 def requires_wer_confirmation(out_idx: int) -> bool:
@@ -455,6 +515,16 @@ def validate_ctrl_update(current: CtrlRule, patch: Dict[str, object]) -> CtrlRul
         candidate.max_val = float(patch["max_val"])
     candidate.validate()
     return candidate
+
+
+def decode_gzip_header_array(header_text: str) -> str:
+    match = re.search(r"static const uint8_t .*?\[] PROGMEM = \{(.*)\};\s*static const size_t",
+                      header_text, re.S)
+    if not match:
+        raise ValueError("gzip array not found")
+    nums = re.findall(r"0x[0-9a-fA-F]+|\b\d+\b", match.group(1))
+    data = bytes(int(token, 16) if token.startswith("0x") else int(token) for token in nums)
+    return gzip.decompress(data).decode("utf-8", errors="replace")
 
 
 # ---------------------------------------------------------------------------
@@ -724,6 +794,158 @@ class ChannelSensorMatrixTests(unittest.TestCase):
         self.assertChannelStateTuple(states, (False, True, True))
 
 
+class ControlDelayRuntimeTests(unittest.TestCase):
+    CTRL_DELAY_MS = 20_000
+
+    def make_flow_sensor(self, *, enabled: bool = True,
+                         enabled_channels: Tuple[int, ...] = (OUT_CH1,),
+                         flow_ok: bool = False) -> Sensor:
+        sensor = build_control_sensor(SEN_F, enabled_channels=enabled_channels, fault=not flow_ok)
+        sensor.enabled = enabled
+        for out_idx in MAIN_CHANNELS:
+            sensor.ctrl[out_idx].off_delay_ms = self.CTRL_DELAY_MS
+        return sensor
+
+    def test_flow_protection_respects_ctrl_delay(self):
+        sensor = self.make_flow_sensor(enabled_channels=(OUT_CH1,), flow_ok=False)
+        runtime = ControlRuntime()
+        output = ArbiterOutput(actual_on=True, requested_on=True)
+
+        early_cmd = eval_ctrl_with_runtime(sensor, OUT_CH1, runtime, now_ms=1_000, control_gate=True)
+        output.apply((1 << SEN_F) if early_cmd == -1 else 0, 0)
+        self.assertEqual(early_cmd, 0)
+        self.assertTrue(output.actual_on)
+
+        before_timeout_cmd = eval_ctrl_with_runtime(sensor, OUT_CH1, runtime, now_ms=20_999, control_gate=True)
+        output.apply((1 << SEN_F) if before_timeout_cmd == -1 else 0, 0)
+        self.assertEqual(before_timeout_cmd, 0)
+        self.assertTrue(output.actual_on)
+
+        timeout_cmd = eval_ctrl_with_runtime(sensor, OUT_CH1, runtime, now_ms=21_000, control_gate=True)
+        output.apply((1 << SEN_F) if timeout_cmd == -1 else 0, 0)
+        self.assertEqual(timeout_cmd, -1)
+        self.assertFalse(output.actual_on)
+
+    def test_flow_protection_delay_resets_when_flow_restored(self):
+        sensor = self.make_flow_sensor(enabled_channels=(OUT_CH1,), flow_ok=False)
+        runtime = ControlRuntime()
+
+        self.assertEqual(
+            eval_ctrl_with_runtime(sensor, OUT_CH1, runtime, now_ms=1_000, control_gate=True),
+            0,
+        )
+        self.assertEqual(
+            eval_ctrl_with_runtime(sensor, OUT_CH1, runtime, now_ms=15_000, control_gate=True),
+            0,
+        )
+
+        sensor.value = 1.0
+        self.assertEqual(
+            eval_ctrl_with_runtime(sensor, OUT_CH1, runtime, now_ms=16_000, control_gate=True),
+            0,
+        )
+        self.assertEqual(runtime.candidate_since_ms, 0)
+
+        sensor.value = 0.0
+        self.assertEqual(
+            eval_ctrl_with_runtime(sensor, OUT_CH1, runtime, now_ms=17_000, control_gate=True),
+            0,
+        )
+        self.assertEqual(
+            eval_ctrl_with_runtime(sensor, OUT_CH1, runtime, now_ms=36_999, control_gate=True),
+            0,
+        )
+        self.assertEqual(
+            eval_ctrl_with_runtime(sensor, OUT_CH1, runtime, now_ms=37_000, control_gate=True),
+            -1,
+        )
+
+    def test_enabling_flow_sensor_does_not_reuse_old_ctrl_runtime(self):
+        sensor = self.make_flow_sensor(enabled_channels=(OUT_CH1,), flow_ok=False)
+        runtime = ControlRuntime()
+
+        self.assertEqual(
+            eval_ctrl_with_runtime(sensor, OUT_CH1, runtime, now_ms=1_000, control_gate=True),
+            0,
+        )
+        self.assertEqual(runtime.candidate_since_ms, 1_000)
+
+        sensor.enabled = False
+        self.assertEqual(
+            eval_ctrl_with_runtime(sensor, OUT_CH1, runtime, now_ms=25_000, control_gate=True),
+            0,
+        )
+        self.assertEqual(runtime.candidate_since_ms, 0)
+
+        sensor.enabled = True
+        self.assertEqual(
+            eval_ctrl_with_runtime(sensor, OUT_CH1, runtime, now_ms=50_000, control_gate=True),
+            0,
+        )
+        self.assertEqual(
+            eval_ctrl_with_runtime(sensor, OUT_CH1, runtime, now_ms=69_999, control_gate=True),
+            0,
+        )
+        self.assertEqual(
+            eval_ctrl_with_runtime(sensor, OUT_CH1, runtime, now_ms=70_000, control_gate=True),
+            -1,
+        )
+
+    def test_ch2_ch3_not_affected_by_flow_ch1_protection(self):
+        sensor = self.make_flow_sensor(enabled_channels=(OUT_CH1,), flow_ok=False)
+        states = simulate_main_channel_states(
+            {SEN_F: sensor},
+            elapsed_ms={SEN_F: self.CTRL_DELAY_MS},
+        )
+        self.assertEqual(state_tuple(states), (False, True, True))
+
+    def test_flow_gate_uses_channel_intent_and_freezes_runtime_during_short_drop(self):
+        sensor = self.make_flow_sensor(enabled_channels=(OUT_CH1, OUT_CH2), flow_ok=False)
+        ch1_runtime = ControlRuntime()
+        ch2_runtime = ControlRuntime()
+        pending_gate = flow_control_gate(False, manual_want=True)
+
+        self.assertTrue(pending_gate)
+        self.assertEqual(
+            eval_ctrl_with_runtime(sensor, OUT_CH1, ch1_runtime, now_ms=1_000, control_gate=pending_gate),
+            0,
+        )
+        self.assertEqual(
+            eval_ctrl_with_runtime(sensor, OUT_CH2, ch2_runtime, now_ms=1_000, control_gate=pending_gate),
+            0,
+        )
+        self.assertEqual(ch1_runtime.candidate_since_ms, 1_000)
+        self.assertEqual(ch2_runtime.candidate_since_ms, 1_000)
+
+        self.assertEqual(
+            eval_ctrl_with_runtime(sensor, OUT_CH1, ch1_runtime, now_ms=10_000, control_gate=False),
+            0,
+        )
+        self.assertEqual(
+            eval_ctrl_with_runtime(sensor, OUT_CH2, ch2_runtime, now_ms=10_000, control_gate=False),
+            0,
+        )
+        self.assertEqual(ch1_runtime.candidate_since_ms, 1_000)
+        self.assertEqual(ch2_runtime.candidate_since_ms, 1_000)
+
+        self.assertEqual(
+            eval_ctrl_with_runtime(sensor, OUT_CH1, ch1_runtime, now_ms=20_999, control_gate=pending_gate),
+            0,
+        )
+        self.assertEqual(
+            eval_ctrl_with_runtime(sensor, OUT_CH2, ch2_runtime, now_ms=20_999, control_gate=pending_gate),
+            0,
+        )
+        self.assertEqual(
+            eval_ctrl_with_runtime(sensor, OUT_CH1, ch1_runtime, now_ms=21_000, control_gate=pending_gate),
+            -1,
+        )
+        self.assertEqual(
+            eval_ctrl_with_runtime(sensor, OUT_CH2, ch2_runtime, now_ms=21_000, control_gate=pending_gate),
+            -1,
+        )
+
+
 class SensorFaultAndAlarmTests(unittest.TestCase):
     def test_enabled_analog_control_sensor_error_forms_auto_off(self):
         t1 = Sensor(present=False, error=True, value=math.nan)
@@ -832,12 +1054,16 @@ class SourceGuardTests(unittest.TestCase):
         cls.sensors_h = (cls.root / "Sensors.h").read_text(encoding="utf-8", errors="ignore")
         cls.confirm_h = (cls.root / "ConfirmationManager.h").read_text(encoding="utf-8", errors="ignore")
         cls.process_h = (cls.root / "ProcessSafety.h").read_text(encoding="utf-8", errors="ignore")
+        cls.event_log_h = (cls.root / "EventLog.h").read_text(encoding="utf-8", errors="ignore")
         cls.output_h = (cls.root / "Output.h").read_text(encoding="utf-8", errors="ignore")
         cls.output_mgr_h = (cls.root / "OutputManager.h").read_text(encoding="utf-8", errors="ignore")
         cls.webapi_h = (cls.root / "WebAPI.h").read_text(encoding="utf-8", errors="ignore")
         cls.wifi_mgr_h = (cls.root / "WiFiMgr.h").read_text(encoding="utf-8", errors="ignore")
         cls.main_ino = (cls.root / "RectColumn.ino").read_text(encoding="utf-8", errors="ignore")
+        cls.partitions_csv = (cls.root / "partitions.csv").read_text(encoding="utf-8", errors="ignore")
         cls.emu_panel = (cls.root / "emupanel-v3.html").read_text(encoding="utf-8", errors="ignore")
+        cls.webpage_app_js_h = (cls.root / "WebPageAppJs.h").read_text(encoding="utf-8", errors="ignore")
+        cls.app_js = decode_gzip_header_array(cls.webpage_app_js_h)
 
     def define_int(self, name: str) -> int:
         m = re.search(rf"^\s*#define\s+{name}\s+(-?\d+)(?:[uUlL]*)\b", self.config_h, re.MULTILINE)
@@ -911,9 +1137,24 @@ class SourceGuardTests(unittest.TestCase):
         self.assertNotIn("if (!sen || !sen->enabled) continue;", self.output_mgr_h)
 
     def test_sensor_runtime_state_is_reset_on_config_and_rule_changes(self):
+        self.assertIn("const uint32_t prevCtrlDelayMs = s->ctrlDelayMs;", self.webapi_h)
+        self.assertIn("const bool controlRuntimeChanged =", self.webapi_h)
+        self.assertIn("(prevCtrlDelayMs != nextCtrlDelayMs);", self.webapi_h)
         self.assertIn("s->resetAllControlRuntime();", self.webapi_h)
+        self.assertIn("_refreshSensorControlStateAfterConfigChange(s, true);", self.webapi_h)
+        self.assertIn("_refreshSensorControlStateAfterRuleChange(s, (uint8_t)oi);", self.webapi_h)
+        self.assertIn("s->rearmAllControlAfterFreshPoll(now);", self.webapi_h)
+        self.assertIn("s->rearmControlAfterFreshPoll(outIdx, now);", self.webapi_h)
+        self.assertIn("void rearmAllControlAfterFreshPoll(uint32_t now = millis())", self.sensors_h)
+        self.assertIn("if (_ctrlRearmPollAfterMs[outIdx] != 0) {", self.sensors_h)
         self.assertIn("s->resetAlarmRuntime();", self.webapi_h)
         self.assertIn("s->resetControlRuntime((uint8_t)oi);", self.webapi_h)
+
+    def test_log_page_has_download_button(self):
+        self.assertIn("function downloadLog()", self.app_js)
+        self.assertIn("/api/v1/log/download", self.app_js)
+        self.assertIn("Скачать журнал", self.app_js)
+        self.assertIn("Content-Disposition", self.webapi_h)
 
     def test_output_manager_has_global_stop_short_circuit(self):
         self.assertIn("if (_mainStopLatched)", self.output_mgr_h)
@@ -927,8 +1168,27 @@ class SourceGuardTests(unittest.TestCase):
 
     def test_flow_rule_for_ch1_depends_on_ch2_and_other_channels_keep_local_gate(self):
         self.assertIn("controlGate = _flowControlGate(prevState, outIdx);", self.output_mgr_h)
-        self.assertIn("return prevState[OUT_CH2];", self.output_mgr_h)
-        self.assertIn("return prevState[outIdx];", self.output_mgr_h)
+        self.assertIn("out[idx]->manualWant()", self.output_mgr_h)
+        self.assertIn("(_lastWant[idx] != 0)", self.output_mgr_h)
+        self.assertIn("return wants(OUT_CH2);", self.output_mgr_h)
+        self.assertIn("return wants(outIdx);", self.output_mgr_h)
+
+    def test_flow_gate_does_not_reset_control_delay_runtime(self):
+        self.assertIn("if (!controlGate) {", self.sensors_h)
+        self.assertIn("return 0;", self.sensors_h)
+        self.assertNotIn("if (!controlGate) {\n            resetControlRuntime(outIdx);", self.sensors_h)
+
+    def test_event_log_uses_spinlock_for_ring_buffer_access(self):
+        self.assertIn("mutable portMUX_TYPE _mux = portMUX_INITIALIZER_UNLOCKED;", self.event_log_h)
+        self.assertIn("portENTER_CRITICAL(&_mux);", self.event_log_h)
+        self.assertIn("portEXIT_CRITICAL(&_mux);", self.event_log_h)
+        self.assertIn("int size() const { return count(); }", self.event_log_h)
+
+    def test_boot_coredump_diagnostics_are_enabled(self):
+        self.assertIn("#include <esp_core_dump.h>", self.main_ino)
+        self.assertIn("printBootResetDiagnostics", self.main_ino)
+        self.assertIn("esp_core_dump_image_get(&addr, &size)", self.main_ino)
+        self.assertIn("coredump,   data, coredump, 0x3F0000, 0x10000,", self.partitions_csv)
 
     def test_flow_alarm_is_gated_by_ch2_runtime_and_enabled_flow_control(self):
         self.assertIn("const bool ch2ActualOn = _om->out[OUT_CH2] && _om->out[OUT_CH2]->actualOn();", self.process_h)

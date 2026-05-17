@@ -838,8 +838,10 @@ class FullMatrixSourceGuardTests(unittest.TestCase):
 
     def test_flow_gate_uses_ch2_for_ch1_and_keeps_local_gate_for_other_channels(self):
         self.assertIn("controlGate = _flowControlGate(prevState, outIdx);", self.output_manager_h)
-        self.assertIn("return prevState[OUT_CH2];", self.output_manager_h)
-        self.assertIn("return prevState[outIdx];", self.output_manager_h)
+        self.assertIn("out[idx]->manualWant()", self.output_manager_h)
+        self.assertIn("(_lastWant[idx] != 0)", self.output_manager_h)
+        self.assertIn("return wants(OUT_CH2);", self.output_manager_h)
+        self.assertIn("return wants(outIdx);", self.output_manager_h)
 
     def test_mute_clears_sound_outputs_without_touching_main_channels(self):
         self.assertIn("out[OUT_CH4]->setBellPatternActive(false);", self.output_manager_h)
@@ -855,6 +857,13 @@ class FullMatrixSourceGuardTests(unittest.TestCase):
         self.assertIn("_om->unackedAlarmMaskFor(*_sm, (uint8_t)si);", self.remote_notifier_h)
         self.assertIn("_snapshotCurrentAlarms();", self.remote_notifier_h)
         self.assertNotIn("return s->alarmMask();", self.remote_notifier_h)
+
+    def test_notifier_defers_failure_logging_from_background_task(self):
+        self.assertIn("_flushQueuedFailure();", self.remote_notifier_h)
+        self.assertIn("self->_queueSendFailure(err.c_str());", self.remote_notifier_h)
+        self.assertIn("void _queueSendFailure(const char* err)", self.remote_notifier_h)
+        self.assertIn("void _flushQueuedFailure()", self.remote_notifier_h)
+        self.assertNotIn("self->_logSendFailure(err);", self.remote_notifier_h)
 
     def test_level_and_pressure_alarms_do_not_add_channel_safety_forbids(self):
         self.assertNotIn("_om->setSafetyForbid(OUT_CH1, RULEIDX_SAFETY_LEVEL, true);", self.process_h)
@@ -884,6 +893,9 @@ class FullMatrixSourceGuardTests(unittest.TestCase):
     def test_relay_off_diagnostics_include_source_and_sensor_context(self):
         self.assertIn("RELAY_OFF source=", self.output_manager_h)
         self.assertIn("_logRelayOff(log, sm, (uint8_t)i);", self.output_manager_h)
+        self.assertIn("ctrlDelayMs=", self.output_manager_h)
+        self.assertIn("elapsedMs=", self.output_manager_h)
+        self.assertIn("ruleState=", self.output_manager_h)
         self.assertIn("_formatSensorState(sm.s[SEN_F])", self.output_manager_h)
         self.assertIn("_formatSensorState(sm.s[SEN_P])", self.output_manager_h)
 

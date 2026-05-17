@@ -10,6 +10,14 @@ except ImportError:  # pragma: no cover
 
 
 class EmuSmokeTests(LiveEmuApiTestCase):
+    def tearDown(self):
+        try:
+            self.api.post_json("/api/v1/emu/set", safe_emu_payload())
+            self.api.post_json("/api/v1/stop?release=1", {})
+            self.api.post_json("/api/v1/safety/reset", {})
+        except Exception:
+            pass
+
     def test_core_endpoints_respond_with_expected_shape(self):
         health = self.api.get_json("/api/v1/health")
         info = self.api.get_json("/api/v1/info")
@@ -48,6 +56,20 @@ class EmuSmokeTests(LiveEmuApiTestCase):
         self.assertAlmostEqual(sensors["P"]["value"], 1100.0, places=1)
         self.assertFalse(sensors["F"]["value"] > 0.5)
         self.assertTrue(confirmations["WER_CH2"]["actual"])
+
+    def test_log_download_endpoint_returns_text_file(self):
+        status, body, headers = self.api.request_text("/api/v1/log/download")
+        self.assertEqual(status, 200)
+        self.assertIn("text/plain", headers.get("Content-Type", ""))
+        self.assertIn("charset=utf-8", headers.get("Content-Type", "").lower())
+        self.assertIn("attachment", headers.get("Content-Disposition", "").lower())
+        self.assertIn("rectcolumn-log-", headers.get("Content-Disposition", ""))
+        self.assertTrue(body.strip())
+        self.assertTrue(
+            ("Версия прошивки" in body)
+            or ("Веб-сервер запущен" in body)
+            or ("Журнал очищен" in body)
+        )
 
 
 if __name__ == "__main__":

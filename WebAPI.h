@@ -327,6 +327,18 @@ private:
             _sendDoc(req, 200, resp);
         });
 
+        _server.on("/api/v1/log/download", HTTP_GET, [this](AsyncWebServerRequest* req) {
+            _log->refreshTimeStrings();
+            const String filename = _logDownloadFilename();
+            const String body = _log->toPlainText(true);
+            AsyncWebServerResponse* resp = req->beginResponse(200, "text/plain; charset=utf-8", body);
+            resp->addHeader("Content-Disposition", String("attachment; filename=\"") + filename + "\"");
+            resp->addHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+            resp->addHeader("Pragma", "no-cache");
+            resp->addHeader("Expires", "0");
+            req->send(resp);
+        });
+
         _server.on("/api/v1/log", HTTP_GET, [this](AsyncWebServerRequest* req) {
             _log->refreshTimeStrings();
             String json = "[";
@@ -841,6 +853,7 @@ private:
 
         SensorBase* s = _sm->s[si];
         const bool prevEnabled = s->enabled;
+        const uint32_t prevCtrlDelayMs = s->ctrlDelayMs;
 
         bool nextEnabled = s->enabled;
         uint32_t nextPeriodMs = s->periodMs;
@@ -875,8 +888,26 @@ private:
         s->alarmDelayMs = nextAlarmDelayMs;
         s->ctrlDelayMs = nextCtrlDelayMs;
 
-        if (prevEnabled != nextEnabled) {
+#if STABILITY_BOOT_DIAG
+        Serial.printf("[API][sensor/config] id=%s en=%d->%d ctrlDelay=%lu alarmDelay=%lu lastPoll=%lu stale=%d val=%.2f\n",
+                      SensorManager::sensorName(si),
+                      prevEnabled ? 1 : 0,
+                      nextEnabled ? 1 : 0,
+                      (unsigned long)nextCtrlDelayMs,
+                      (unsigned long)nextAlarmDelayMs,
+                      (unsigned long)s->_lastPollMs,
+                      s->isStale() ? 1 : 0,
+                      isnan(s->value) ? -9999.0 : s->value);
+#endif
+
+        const bool controlRuntimeChanged =
+            (prevEnabled != nextEnabled) ||
+            (prevCtrlDelayMs != nextCtrlDelayMs);
+        if (controlRuntimeChanged) {
             s->resetAllControlRuntime();
+            _refreshSensorControlStateAfterConfigChange(s, true);
+        }
+        if (prevEnabled != nextEnabled) {
             s->resetAlarmRuntime();
         }
 
@@ -964,6 +995,7 @@ private:
             next.maxVal = 2.0f;
             r = next;
             s->resetControlRuntime((uint8_t)oi);
+            if (next.enabled) _refreshSensorControlStateAfterRuleChange(s, (uint8_t)oi);
             _sm->normalizeDigitalOffOnlyRules();
             _sm->normalizeSchemeControlRules();
             _syncRuntimeStateNow();
@@ -995,6 +1027,7 @@ private:
         next.outIdx = oi;
         r = next;
         s->resetControlRuntime((uint8_t)oi);
+        if (next.enabled) _refreshSensorControlStateAfterRuleChange(s, (uint8_t)oi);
         if (SensorManager::isMainOutputIndex((uint8_t)oi) &&
             SensorManager::isSchemeAnalogControlSensorIndex((uint8_t)si)) {
             _applyOutputLogicMode(oi, r.logic);
@@ -1085,6 +1118,56 @@ private:
     void _syncRuntimeStateNow() {
         if (!_sm || !_om) return;
         _om->syncRuntimeState(*_sm);
+    }
+
+    void _refreshSensorControlStateAfterConfigChange(SensorBase* s, bool allOutputs) {
+        if (!s || !s->enabled) return;
+        const uint32_t now = millis();
+        const bool wasStaleBeforePoll = s->isStale();
+        _refreshLiveSensorSampleForControl(s);
+        const bool stillStaleAfterPoll = s->isStale();
+        if (allOutputs && wasStaleBeforePoll && stillStaleAfterPoll) {
+            s->rearmAllControlAfterFreshPoll(now);
+        }
+#if STABILITY_BOOT_DIAG
+        Serial.printf("[API][sensor/rearm] all=%d pollMs=%lu staleBefore=%d staleAfter=%d val=%.2f\n",
+                      allOutputs ? 1 : 0,
+                      (unsigned long)s->_lastPollMs,
+                      wasStaleBeforePoll ? 1 : 0,
+                      stillStaleAfterPoll ? 1 : 0,
+                      isnan(s->value) ? -9999.0 : s->value);
+#endif
+    }
+
+    void _refreshSensorControlStateAfterRuleChange(SensorBase* s, uint8_t outIdx) {
+        if (!s || !s->enabled) return;
+        const uint32_t now = millis();
+        const bool wasStaleBeforePoll = s->isStale();
+        _refreshLiveSensorSampleForControl(s);
+        const bool stillStaleAfterPoll = s->isStale();
+        if (wasStaleBeforePoll && stillStaleAfterPoll) {
+            s->rearmControlAfterFreshPoll(outIdx, now);
+        }
+#if STABILITY_BOOT_DIAG
+        Serial.printf("[API][rule/rearm] out=%u pollMs=%lu staleBefore=%d staleAfter=%d val=%.2f\n",
+                      (unsigned)outIdx,
+                      (unsigned long)s->_lastPollMs,
+                      wasStaleBeforePoll ? 1 : 0,
+                      stillStaleAfterPoll ? 1 : 0,
+                      isnan(s->value) ? -9999.0 : s->value);
+#endif
+    }
+
+    void _refreshLiveSensorSampleForControl(SensorBase* s) {
+        if (!s || !_sm) return;
+#if EMU_MODE
+        if (_emu) {
+            _emu->injectAll(*_sm);
+            _sm->loop();
+            return;
+        }
+#endif
+        s->poll();
     }
 
     void _applyEmuInputsToRuntimeNow() {
@@ -1456,6 +1539,7 @@ private:
         endpoints.add("/api/v1/output");
         endpoints.add("/api/v1/output/config");
         endpoints.add("/api/v1/log");
+        endpoints.add("/api/v1/log/download");
         endpoints.add("/api/v1/time/sync");
         endpoints.add("/api/v1/stop");
         endpoints.add("/api/v1/stop?release=1");
@@ -1838,6 +1922,38 @@ private:
     static String _fmtVal(float v) {
         if (isnan(v)) return "null";
         return String(v, 2);
+    }
+
+    String _logDownloadFilename() const {
+        uint64_t localUnixMs = 0;
+        bool hasLocalTime = false;
+        if (_tb) {
+            hasLocalTime = _tb->isSynced();
+            localUnixMs = _tb->nowLocalUnixMs();
+        } else {
+            localUnixMs = millis();
+        }
+
+        char stamp[24];
+        if (hasLocalTime) {
+            const time_t sec = (time_t)(localUnixMs / 1000ULL);
+            struct tm tmValue;
+            gmtime_r(&sec, &tmValue);
+            snprintf(stamp, sizeof(stamp), "%04d%02d%02d-%02d%02d%02d",
+                     tmValue.tm_year + 1900,
+                     tmValue.tm_mon + 1,
+                     tmValue.tm_mday,
+                     tmValue.tm_hour,
+                     tmValue.tm_min,
+                     tmValue.tm_sec);
+        } else {
+            const uint32_t totalSec = (uint32_t)(localUnixMs / 1000ULL);
+            const uint32_t hh = (totalSec / 3600U) % 24U;
+            const uint32_t mm = (totalSec / 60U) % 60U;
+            const uint32_t ss = totalSec % 60U;
+            snprintf(stamp, sizeof(stamp), "19700101-%02u%02u%02u", hh, mm, ss);
+        }
+        return String("rectcolumn-log-") + stamp + ".txt";
     }
 
     static String _jsonEscape(const String& s) {
