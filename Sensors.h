@@ -63,6 +63,25 @@ public:
 
     uint32_t _lastPollMs = 0;
 
+    // === PATCH WARMUP BEGIN ===
+    uint32_t _enableWarmupUntilMs = 0;
+
+    void startEnableWarmup(uint32_t durationMs) {
+        uint32_t target = millis() + durationMs;
+        if (target == 0) target = 1;
+        _enableWarmupUntilMs = target;
+    }
+
+    void clearEnableWarmup() {
+        _enableWarmupUntilMs = 0;
+    }
+
+    bool isInEnableWarmup() const {
+        if (_enableWarmupUntilMs == 0) return false;
+        return (int32_t)(millis() - _enableWarmupUntilMs) < 0;
+    }
+    // === PATCH WARMUP END ===
+
     explicit SensorBase(const String& n) : name(n) {
         for (uint8_t i = 0; i < N_CTRL_OUT; i++) {
             ctrl[i].outIdx = i;
@@ -228,6 +247,13 @@ public:
 
     int evalCtrl(uint8_t outIdx, bool invalidMeansOff = true, bool controlGate = true) {
         if (outIdx >= N_CTRL_OUT) return 0;
+
+        // === PATCH WARMUP BEGIN ===
+        if (isInEnableWarmup()) {
+            resetControlRuntime(outIdx);
+            return 0;
+        }
+        // === PATCH WARMUP END ===
 
         const CtrlRule& r = ctrl[outIdx];
         if (!r.enabled || r.outIdx != outIdx) {

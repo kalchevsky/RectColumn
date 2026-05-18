@@ -95,6 +95,7 @@ public:
 
     void loop(const OutputManager& om, const SensorManager& sm, EventLog* log) {
         const uint32_t now = millis();
+        const bool stopActive = om.mainStopLatched();
 
         for (uint8_t i = 0; i < 4; i++) {
             ConfirmationChannel& c = _ch[i];
@@ -136,6 +137,16 @@ public:
             if (c.actual != c.raw && (now - c.rawChangedMs >= c.debounceMs)) {
                 c.actual = c.raw;
                 c.actualChangedMs = now;
+            }
+
+            if (stopActive && requiresWerConfirmation(c.outputIdx)) {
+                c.expected = false;
+                c.expectedChangedMs = now;
+                c.pending = false;
+                c.mismatch = false;
+                c.timeout = false;
+                c.confirmed = !c.actual;
+                continue;
             }
 
             const bool newExpected = om.out[c.outputIdx]->actualOn();

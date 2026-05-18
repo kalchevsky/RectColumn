@@ -8,7 +8,7 @@
 // true  -> аппаратное оборудование НЕ опрашивается,
 //          значения берутся из /api/v1/emu/*
 // false -> режим реального оборудования
-#define EMU_MODE false 
+#define EMU_MODE false
 
 // Включить периодический (каждые 5 секунд) вывод в Serial
 // состояния всех датчиков и подтверждений.
@@ -16,7 +16,7 @@
 #define SERIAL_DEBUG_SENSOR_SNAPSHOT  0
 
 // ─── Версия прошивки / API ───────────────────────────────────────
-#define FW_VERSION      "1.6.31"
+#define FW_VERSION      "1.6.32-hotfix2"
 #define API_VERSION     "v1"
 #define AP_SSID_DEF     "Control_System"
 #define DEVICE_NAME     "RectColumn"
@@ -90,6 +90,12 @@
 #define PIN_CH4   32   // CH4: внешний звонок
 #define PIN_CH5   13   // CH5: встроенный буззер
 #define PIN_WIFI_LED 4 // LED индикации WiFi
+// GPIO14 — strapping pin. Если удерживать кнопку нажатой во время
+// power-on/reset, ESP32 может войти в специальный режим загрузки.
+// После старта прошивки это не влияет на обычную работу кнопки ACK.
+#define PIN_ACK_BUTTON 14
+#define ACK_BUTTON_ACTIVE_LOW 1
+#define ACK_BUTTON_DEBOUNCE_MS 50UL
 
 static_assert(PIN_CH5 != PIN_WER_CH1, "PIN_CH5 conflicts with WER_CH1");
 static_assert(PIN_CH5 != PIN_WER_CH2, "PIN_CH5 conflicts with WER_CH2");
@@ -100,6 +106,11 @@ static_assert(PIN_WIFI_LED != PIN_CH2, "PIN_WIFI_LED conflicts with CH2");
 static_assert(PIN_WIFI_LED != PIN_CH3, "PIN_WIFI_LED conflicts with CH3");
 static_assert(PIN_WIFI_LED != PIN_CH4, "PIN_WIFI_LED conflicts with CH4");
 static_assert(PIN_WIFI_LED != PIN_CH5, "PIN_WIFI_LED conflicts with CH5");
+static_assert(PIN_ACK_BUTTON != PIN_CH1, "PIN_ACK_BUTTON conflicts with CH1");
+static_assert(PIN_ACK_BUTTON != PIN_CH2, "PIN_ACK_BUTTON conflicts with CH2");
+static_assert(PIN_ACK_BUTTON != PIN_CH3, "PIN_ACK_BUTTON conflicts with CH3");
+static_assert(PIN_ACK_BUTTON != PIN_CH4, "PIN_ACK_BUTTON conflicts with CH4");
+static_assert(PIN_ACK_BUTTON != PIN_CH5, "PIN_ACK_BUTTON conflicts with CH5");
 static_assert(PIN_WER_CH1 == 27, "Hardware map requires WER_CH1 on IO27");
 static_assert(PIN_WER_CH2 == 35, "Hardware map requires WER_CH2 on IO35");
 static_assert(PIN_WER_CH3 == 34, "Hardware map requires WER_CH3 on IO34");

@@ -71,8 +71,8 @@ GPIO35_MODE_V_SENSOR = 0
 GPIO35_MODE_WER_CH2 = 1
 
 MAIN_CHANNELS = (OUT_CH1, OUT_CH2, OUT_CH3)
-CONTROL_SENSOR_INDICES = (SEN_T1, SEN_T2, SEN_T3, SEN_P, SEN_L, SEN_F)
-NON_CONTROL_SENSOR_INDICES = (SEN_DT, SEN_C, SEN_V)
+CONTROL_SENSOR_INDICES = (SEN_T1, SEN_T2, SEN_T3, SEN_DT, SEN_P, SEN_L, SEN_F)
+NON_CONTROL_SENSOR_INDICES = (SEN_C, SEN_V)
 
 CHANNEL_NAMES = {
     OUT_CH1: "CH1",
@@ -96,6 +96,7 @@ CONTROL_DELAY_MS = {
     SEN_T1: 0,
     SEN_T2: 0,
     SEN_T3: 0,
+    SEN_DT: 0,
     SEN_P: 0,
     SEN_L: 5 * 60 * 1000,
     SEN_F: 5000,
@@ -371,6 +372,14 @@ class ConfirmationFSM:
             self.state = RelayState.FAULT_STUCK_ON
             self.fault_latched = self.state
         return self.state
+
+    def loop_main_output(self, now_ms: int, feedback_on: bool, *, stop_active: bool) -> RelayState:
+        if stop_active:
+            self.command_on = False
+            self.t0_ms = now_ms
+            self.state = RelayState.SWITCHING_OFF if feedback_on else RelayState.OFF
+            return self.state
+        return self.loop(now_ms, feedback_on)
 
     def reset(self, feedback_on: bool) -> bool:
         if feedback_on:
@@ -1026,6 +1035,19 @@ class ConfirmationFsmTests(unittest.TestCase):
         fsm = ConfirmationFSM(state=RelayState.OFF)
         self.assertEqual(fsm.loop(now_ms=0, feedback_on=True), RelayState.FAULT_STUCK_ON)
 
+    def test_stop_does_not_latch_wer_fault(self):
+        fsm = ConfirmationFSM(state=RelayState.ON, command_on=True, timeout_ms=5000)
+        self.assertEqual(fsm.loop_main_output(now_ms=0, feedback_on=True, stop_active=False), RelayState.ON)
+        self.assertIsNone(fsm.fault_latched)
+
+        for step in range(1, 31):
+            state = fsm.loop_main_output(now_ms=step * 500, feedback_on=True, stop_active=True)
+            self.assertEqual(state, RelayState.SWITCHING_OFF)
+            self.assertIsNone(fsm.fault_latched)
+
+        self.assertEqual(fsm.loop_main_output(now_ms=15100, feedback_on=True, stop_active=False), RelayState.SWITCHING_OFF)
+        self.assertIsNone(fsm.fault_latched)
+
 
 class SafetyAndApiTests(unittest.TestCase):
     def test_safety_alarm_drives_sound_even_without_sensor_alarm(self):
@@ -1059,6 +1081,8 @@ class SourceGuardTests(unittest.TestCase):
         cls.output_mgr_h = (cls.root / "OutputManager.h").read_text(encoding="utf-8", errors="ignore")
         cls.webapi_h = (cls.root / "WebAPI.h").read_text(encoding="utf-8", errors="ignore")
         cls.wifi_mgr_h = (cls.root / "WiFiMgr.h").read_text(encoding="utf-8", errors="ignore")
+        cls.remote_notifier_h = (cls.root / "RemoteNotifier.h").read_text(encoding="utf-8", errors="ignore")
+        cls.ack_button_h = (cls.root / "AckButton.h").read_text(encoding="utf-8", errors="ignore")
         cls.main_ino = (cls.root / "RectColumn.ino").read_text(encoding="utf-8", errors="ignore")
         cls.partitions_csv = (cls.root / "partitions.csv").read_text(encoding="utf-8", errors="ignore")
         cls.emu_panel = (cls.root / "emupanel-v3.html").read_text(encoding="utf-8", errors="ignore")
@@ -1116,10 +1140,10 @@ class SourceGuardTests(unittest.TestCase):
 
     def test_main_channel_control_sensor_set_matches_sensor_manager(self):
         self.assertIn("return sensorIdx == SEN_T1 || sensorIdx == SEN_T2 ||", self.sensor_manager_h)
-        self.assertIn("sensorIdx == SEN_T3 || sensorIdx == SEN_P;", self.sensor_manager_h)
+        self.assertIn("sensorIdx == SEN_T3 || sensorIdx == SEN_DT ||", self.sensor_manager_h)
+        self.assertIn("sensorIdx == SEN_P;", self.sensor_manager_h)
         self.assertIn("sensorIdx == SEN_L || sensorIdx == SEN_F;", self.sensor_manager_h)
         self.assertIn("if (!isRuleAllowedForOutput(si, oi)) r.enabled = false;", self.sensor_manager_h)
-        self.assertNotIn("sensorIdx == SEN_DT", self.sensor_manager_h)
         self.assertNotIn("sensorIdx == SEN_C", self.sensor_manager_h)
         self.assertNotIn("sensorIdx == SEN_V", self.sensor_manager_h)
 
@@ -1150,11 +1174,22 @@ class SourceGuardTests(unittest.TestCase):
         self.assertIn("s->resetAlarmRuntime();", self.webapi_h)
         self.assertIn("s->resetControlRuntime((uint8_t)oi);", self.webapi_h)
 
+    def test_sensor_enable_warmup_is_present_in_runtime_and_api(self):
+        self.assertIn("uint32_t _enableWarmupUntilMs = 0;", self.sensors_h)
+        self.assertIn("void startEnableWarmup(uint32_t durationMs)", self.sensors_h)
+        self.assertIn("void clearEnableWarmup()", self.sensors_h)
+        self.assertIn("bool isInEnableWarmup() const", self.sensors_h)
+        self.assertIn("if (isInEnableWarmup()) {", self.sensors_h)
+        self.assertIn("s->startEnableWarmup(3000);", self.webapi_h)
+        self.assertIn("s->clearEnableWarmup();", self.webapi_h)
+        self.assertIn("so[\"warmup\"] = s->isInEnableWarmup();", self.webapi_h)
+
     def test_log_page_has_download_button(self):
         self.assertIn("function downloadLog()", self.app_js)
         self.assertIn("/api/v1/log/download", self.app_js)
         self.assertIn("Скачать журнал", self.app_js)
         self.assertIn("Content-Disposition", self.webapi_h)
+        self.assertIn("/api/v1/notify/status", self.webapi_h)
 
     def test_output_manager_has_global_stop_short_circuit(self):
         self.assertIn("if (_mainStopLatched)", self.output_mgr_h)
@@ -1194,9 +1229,14 @@ class SourceGuardTests(unittest.TestCase):
         self.assertIn("const bool ch2ActualOn = _om->out[OUT_CH2] && _om->out[OUT_CH2]->actualOn();", self.process_h)
         self.assertIn("const bool flowFault = fs->enabled && flowControlEnabled && ch2ActualOn && !_sm->flowActive();", self.process_h)
 
-    def test_main_loop_skips_confirmation_and_safety_while_stop_is_active(self):
+    def test_main_loop_keeps_confirmation_polling_while_stop_is_active(self):
+        self.assertIn("confirmMgr.loop(outputMgr, sensorMgr, &eventLog);", self.main_ino)
         self.assertIn("if (!outputMgr.mainStopLatched())", self.main_ino)
         self.assertIn("outputMgr.setSafetyAlarmActive(false);", self.main_ino)
+        self.assertLess(
+            self.main_ino.find("confirmMgr.loop(outputMgr, sensorMgr, &eventLog);"),
+            self.main_ino.find("if (!outputMgr.mainStopLatched())"),
+        )
 
     def test_wer_confirmation_is_explicitly_limited_to_ch1_ch3(self):
         self.assertIn("static inline constexpr bool requiresWerConfirmation(uint8_t outIdx)", self.config_h)
@@ -1205,6 +1245,65 @@ class SourceGuardTests(unittest.TestCase):
         self.assertIn("if (!requiresWerConfirmation(oi)) {", self.output_mgr_h)
         self.assertIn("requiresWerConfirmation(c.outputIdx)", self.process_h)
         self.assertIn("requiresWerConfirmation(c.outputIdx)", self.main_ino)
+
+    def test_wer_timeout_is_diagnostic_only(self):
+        update_feedback = self.output_mgr_h[
+            self.output_mgr_h.find("void updateRelayCommandFeedback"):
+            self.output_mgr_h.find("bool relayCommandPending")
+        ]
+        self.assertNotIn("out[oi]->forceOff(true);", update_feedback)
+        self.assertNotIn("restoreManualWant(_cmdPrevManual[oi]);", update_feedback)
+        self.assertIn("_lastCmdError[oi] = RELAY_CMDERR_TIMEOUT;", update_feedback)
+        self.assertNotIn("_om->setSafetyForbid(c.outputIdx, RULEIDX_SAFETY_WER, true);", self.process_h)
+        self.assertNotIn("_om->out[c.outputIdx]->forceOff(true);", self.process_h)
+        self.assertIn("Только индикация, без отключения канала.", self.process_h)
+
+    def test_stop_suppresses_new_wer_faults_for_main_outputs(self):
+        self.assertIn("const bool stopActive = om.mainStopLatched();", self.confirm_h)
+        self.assertIn("if (stopActive && requiresWerConfirmation(c.outputIdx)) {", self.confirm_h)
+        self.assertIn("c.expected = false;", self.confirm_h)
+        self.assertIn("c.pending = false;", self.confirm_h)
+        self.assertIn("c.mismatch = false;", self.confirm_h)
+        self.assertIn("c.timeout = false;", self.confirm_h)
+        self.assertIn("c.confirmed = !c.actual;", self.confirm_h)
+
+    def test_remote_notifier_uses_single_queue_worker(self):
+        self.assertIn("xQueueCreate(QUEUE_SIZE, sizeof(QueueItem))", self.remote_notifier_h)
+        self.assertIn("xTaskCreatePinnedToCore(", self.remote_notifier_h)
+        self.assertIn("16384,", self.remote_notifier_h)
+        self.assertIn("xQueueSend(_queue, &item, 0)", self.remote_notifier_h)
+        self.assertIn("xQueueReceive(self->_queue, &item, portMAX_DELAY)", self.remote_notifier_h)
+        self.assertIn("_refreshConfigSnapshot();", self.remote_notifier_h)
+        self.assertIn("doc[\"queueDepth\"]", self.webapi_h)
+        self.assertIn("doc[\"droppedCount\"]", self.webapi_h)
+        self.assertNotIn("NotifyTaskPayload", self.remote_notifier_h)
+        self.assertNotIn("static void _notifyTask", self.remote_notifier_h)
+
+    def test_remote_notifier_disables_redirects_and_closes_http_connections(self):
+        self.assertIn("http.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);", self.remote_notifier_h)
+        self.assertIn("http.useHTTP10(true);", self.remote_notifier_h)
+        self.assertIn("http.addHeader(\"Connection\", \"close\");", self.remote_notifier_h)
+        self.assertIn("if (code == 301 || code == 302 || code == 307 || code == 308) {", self.remote_notifier_h)
+        self.assertIn("server returned redirect (HTTPS required?); use a publish URL that does not redirect", self.remote_notifier_h)
+        self.assertIn("portENTER_CRITICAL(&_cfgMux);", self.remote_notifier_h)
+        self.assertIn("portEXIT_CRITICAL(&_cfgMux);", self.remote_notifier_h)
+
+    def test_ack_button_is_declared_and_wired(self):
+        self.assertEqual(self.define_int("PIN_ACK_BUTTON"), 14)
+        self.assertEqual(self.define_int("ACK_BUTTON_ACTIVE_LOW"), 1)
+        self.assertEqual(self.define_int("ACK_BUTTON_DEBOUNCE_MS"), 50)
+        self.assertIn("AckButton", self.main_ino)
+        self.assertIn("ackButton;", self.main_ino)
+        self.assertIn("ackButton.begin();", self.main_ino)
+        self.assertIn("ackButton.loop(outputMgr, sensorMgr, &eventLog);", self.main_ino)
+        self.assertIn("Оператор подтвердил тревоги (кнопка)", self.ack_button_h)
+
+    def test_dt_is_virtual_but_editable_in_ui(self):
+        self.assertIn("function isVirtualSensor(id){ return id === 'dT'; }", self.app_js)
+        self.assertIn("function sensorSupportsAlarmDelay(id){ return id === 'L' || id === 'F' || id === 'C' || id === 'dT'; }", self.app_js)
+        self.assertIn("function sensorSupportsCtrlDelay(id){ return id === 'L' || id === 'F' || id === 'dT'; }", self.app_js)
+        self.assertIn("Настроить управление", self.app_js)
+        self.assertIn("Настроить тревоги", self.app_js)
 
     def test_emupanel_error_toggles_use_same_emu_set_fields_as_runtime(self):
         self.assertIn("payload.T1err = $('emu_T1err').checked;", self.emu_panel)

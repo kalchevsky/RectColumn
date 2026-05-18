@@ -221,16 +221,6 @@ public:
             }
 
             if (now - out[oi]->commandSentAt() >= _relayConfirmTimeoutMs(oi)) {
-                if (cmd == CMD_ON) {
-                    // Do not leave a delayed ON request after a failed confirmation.
-                    // For stateful CH1..CH3, neutral hold would otherwise keep the
-                    // physical request ON, so force the relay off explicitly.
-                    out[oi]->restoreManualWant(_cmdPrevManual[oi]);
-                    _operatorHoldOff[oi] = _cmdPrevHoldOff[oi];
-                    out[oi]->forceOff(true);
-                    _manualStateDirty = true;
-                }
-
                 out[oi]->clearCommand();
                 _lastCmdError[oi] = RELAY_CMDERR_TIMEOUT;
                 _lastCmdErrorMs[oi] = now;

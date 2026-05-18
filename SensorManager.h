@@ -91,11 +91,15 @@ public:
     }
 
     // These are the analog sensors from the channel-control chart whose
-    // HEAT/COOL logic follows the output mode. dT/C/V remain explicit
-    // per-sensor extensions and are not rewritten by output mode changes.
+    // HEAT/COOL logic follows the output mode. dT remains a virtual sensor,
+    // but its CH1..CH3 control rules are editable and participate in the
+    // same scheme mapping as the other analog control sensors. C/V remain
+    // explicit per-sensor extensions and are not rewritten by output mode
+    // changes.
     static bool isSchemeAnalogControlSensorIndex(uint8_t sensorIdx) {
         return sensorIdx == SEN_T1 || sensorIdx == SEN_T2 ||
-               sensorIdx == SEN_T3 || sensorIdx == SEN_P;
+               sensorIdx == SEN_T3 || sensorIdx == SEN_DT ||
+               sensorIdx == SEN_P;
     }
 
     static bool isSchemeControlSensorIndex(uint8_t sensorIdx) {

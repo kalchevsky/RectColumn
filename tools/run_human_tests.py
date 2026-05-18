@@ -38,6 +38,7 @@ LIVE_TEST_MODULES = [
     "tools.test_api_emu_confirmation_modes",
     "tools.test_api_emu_channel_sensor_matrix",
     "tools.test_flow_ctrl_delay_log",
+    "tools.test_notify_failure_emu",
 ]
 
 

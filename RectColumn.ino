@@ -20,6 +20,7 @@
 #include "SerialDebugReporter.h"
 #include "ProcessSafety.h"
 #include "RemoteNotifier.h"
+#include "AckButton.h"
 
 // ── Глобальные объекты ───────────────────────────────────────────
 TimeBase            timeBase;
@@ -34,6 +35,7 @@ Emulator            emulator;
 SerialDebugReporter debugReporter;
 ProcessSafety       processSafety;
 RemoteNotifier      remoteNotifier;
+AckButton           ackButton;
 
 // ── Отслеживание состояния для журнала событий ──────────────────
 bool    prevOutState[OUT_COUNT]    = {};
@@ -242,6 +244,7 @@ void setup() {
     debugReporter.begin();
     processSafety.begin(timeBase, eventLog, sensorMgr, outputMgr, confirmMgr);
     remoteNotifier.begin(wifiMgr, eventLog, sensorMgr, outputMgr, storage);
+    ackButton.begin();
 
     initPrevState();
 
@@ -267,9 +270,11 @@ void loop() {
     outputMgr.loop(sensorMgr, &eventLog);
     logOutputTransitions();
 
-    if (!outputMgr.mainStopLatched()) {
-        confirmMgr.loop(outputMgr, sensorMgr, &eventLog);
+    // Опрос WER-подтверждений должен работать всегда, чтобы API/UI видели
+    // реальное состояние реле даже при активном STOP.
+    confirmMgr.loop(outputMgr, sensorMgr, &eventLog);
 
+    if (!outputMgr.mainStopLatched()) {
         bool relayFeedbackOn[OUT_COUNT] = {};
         bool relayFeedbackAvailable[OUT_COUNT] = {};
         for (uint8_t i = 0; i < 4; i++) {
@@ -287,6 +292,8 @@ void loop() {
     } else {
         outputMgr.setSafetyAlarmActive(false);
     }
+
+    ackButton.loop(outputMgr, sensorMgr, &eventLog);
     remoteNotifier.loop();
 
     if (outputMgr.consumeManualStateDirty()) {

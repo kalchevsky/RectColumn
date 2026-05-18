@@ -787,6 +787,7 @@ class FullMatrixSourceGuardTests(unittest.TestCase):
     def setUpClass(cls):
         cls.root = Path(__file__).resolve().parents[1]
         cls.sensor_manager_h = (cls.root / "SensorManager.h").read_text(encoding="utf-8", errors="ignore")
+        cls.sensors_h = (cls.root / "Sensors.h").read_text(encoding="utf-8", errors="ignore")
         cls.webapi_h = (cls.root / "WebAPI.h").read_text(encoding="utf-8", errors="ignore")
         cls.storage_h = (cls.root / "Storage.h").read_text(encoding="utf-8", errors="ignore")
         cls.output_h = (cls.root / "Output.h").read_text(encoding="utf-8", errors="ignore")
@@ -803,15 +804,16 @@ class FullMatrixSourceGuardTests(unittest.TestCase):
         self.assertIn("const bool keepEnabled = r.enabled;", self.sensor_manager_h)
         self.assertIn("r.enabled = keepEnabled;", self.sensor_manager_h)
 
-    def test_dt_c_v_are_not_allowed_to_control_ch1_ch3(self):
+    def test_dt_is_allowed_for_main_channels_but_c_and_v_remain_blocked(self):
         self.assertIn("if (!isMainOutputIndex(outIdx)) return true;", self.sensor_manager_h)
         self.assertIn("return isSchemeControlSensorIndex(sensorIdx);", self.sensor_manager_h)
-        self.assertNotIn("sensorIdx == SEN_DT", self.sensor_manager_h)
+        self.assertIn("sensorIdx == SEN_DT", self.sensor_manager_h)
         self.assertNotIn("sensorIdx == SEN_C", self.sensor_manager_h)
         self.assertNotIn("sensorIdx == SEN_V", self.sensor_manager_h)
 
-    def test_web_api_rejects_enabling_extended_sensor_rules_for_main_outputs(self):
+    def test_web_api_keeps_main_channel_allowlist(self):
         self.assertIn("sensor is not allowed to control CH1..CH3 in scheme mode", self.webapi_h)
+        self.assertIn("SensorManager::isRuleAllowedForOutput((uint8_t)si, (uint8_t)oi)", self.webapi_h)
         self.assertIn("_sm->normalizeSchemeControlRules();", self.webapi_h)
 
     def test_storage_sanitize_disables_restored_extended_rules_for_main_outputs(self):
@@ -872,10 +874,29 @@ class FullMatrixSourceGuardTests(unittest.TestCase):
         self.assertNotIn("_om->setSafetyForbid(OUT_CH2, RULEIDX_SAFETY_PRESSURE, true);", self.process_h)
         self.assertNotIn("_om->setSafetyForbid(OUT_CH3, RULEIDX_SAFETY_PRESSURE, true);", self.process_h)
 
-    def test_wer_fault_blocks_only_corresponding_main_channel(self):
+    def test_wer_fault_is_logged_without_safety_lockout(self):
         self.assertIn("requiresWerConfirmation(c.outputIdx) && c.faultLatched", self.process_h)
-        self.assertIn("_om->setSafetyForbid(c.outputIdx, RULEIDX_SAFETY_WER, true);", self.process_h)
+        self.assertIn("Только индикация, без отключения канала.", self.process_h)
+        self.assertNotIn("_om->setSafetyForbid(c.outputIdx, RULEIDX_SAFETY_WER, true);", self.process_h)
+        self.assertNotIn("_om->out[c.outputIdx]->forceOff(true);", self.process_h)
         self.assertIn("if (!requiresWerConfirmation(_ch[idx].outputIdx)) return false;", self.confirm_h)
+
+    def test_notifier_uses_single_worker_queue_and_status_endpoint(self):
+        self.assertIn("QueueHandle_t _queue = nullptr;", self.remote_notifier_h)
+        self.assertIn("TaskHandle_t _worker = nullptr;", self.remote_notifier_h)
+        self.assertIn("xTaskCreatePinnedToCore(", self.remote_notifier_h)
+        self.assertIn("16384,", self.remote_notifier_h)
+        self.assertIn("xQueueSend(_queue, &item, 0)", self.remote_notifier_h)
+        self.assertIn("_server.on(\"/api/v1/notify/status\", HTTP_GET", self.webapi_h)
+        self.assertIn("notify[\"droppedCount\"]", self.webapi_h)
+
+    def test_sensor_enable_warmup_and_ntfy_redirect_guard_are_present(self):
+        self.assertIn("startEnableWarmup(3000);", self.webapi_h)
+        self.assertIn("so[\"warmup\"] = s->isInEnableWarmup();", self.webapi_h)
+        self.assertIn("if (isInEnableWarmup()) {", self.sensors_h)
+        self.assertIn("http.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);", self.remote_notifier_h)
+        self.assertIn("http.useHTTP10(true);", self.remote_notifier_h)
+        self.assertIn("server returned redirect (HTTPS required?); use a publish URL that does not redirect", self.remote_notifier_h)
 
     def test_aux_outputs_skip_wer_confirmation_and_timeout_path(self):
         self.assertIn("static inline constexpr bool requiresWerConfirmation(uint8_t outIdx)", self.config_h)

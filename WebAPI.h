@@ -637,6 +637,21 @@ private:
             doc["url"] = (_notifier ? _notifier->publishUrl() : String(""));
             doc["token"] = (_notifier ? _notifier->accessToken() : String(""));
             doc["hasToken"] = (_notifier ? _notifier->hasToken() : false);
+            doc["workerReady"] = (_notifier ? _notifier->workerReady() : false);
+            doc["queueDepth"] = (_notifier ? _notifier->queueDepth() : 0);
+            doc["queueSize"] = (_notifier ? _notifier->queueCapacity() : 0);
+            doc["droppedCount"] = (_notifier ? _notifier->droppedCount() : 0);
+            _sendDoc(req, 200, doc);
+        });
+
+        _server.on("/api/v1/notify/status", HTTP_GET, [this](AsyncWebServerRequest* req) {
+            DynamicJsonDocument doc(320);
+            doc["ok"] = true;
+            doc["enabled"] = (_notifier ? _notifier->enabled() : false);
+            doc["workerReady"] = (_notifier ? _notifier->workerReady() : false);
+            doc["queueDepth"] = (_notifier ? _notifier->queueDepth() : 0);
+            doc["queueSize"] = (_notifier ? _notifier->queueCapacity() : 0);
+            doc["droppedCount"] = (_notifier ? _notifier->droppedCount() : 0);
             _sendDoc(req, 200, doc);
         });
 
@@ -884,6 +899,13 @@ private:
         }
 
         s->enabled = nextEnabled;
+        // === PATCH WARMUP BEGIN ===
+        if (!prevEnabled && nextEnabled) {
+            s->startEnableWarmup(3000);
+        } else if (prevEnabled && !nextEnabled) {
+            s->clearEnableWarmup();
+        }
+        // === PATCH WARMUP END ===
         s->periodMs = nextPeriodMs;
         s->alarmDelayMs = nextAlarmDelayMs;
         s->ctrlDelayMs = nextCtrlDelayMs;
@@ -1294,8 +1316,9 @@ private:
         const bool actualOn = o->actualOn();
         const uint32_t effectiveForbidMask = _om->effectiveForbidMask((uint8_t)oi);
         const bool stopOverridesConfirm = _om->mainStopLatched() && oi >= OUT_CH1 && oi <= OUT_CH3;
-        const bool hasConfirm = (oi >= 0 && oi < 4 && _cm->get(oi).available);
-        const bool feedbackOn = hasConfirm ? _cm->get(oi).actual : actualOn;
+        const bool usesWerConfirm = (oi >= OUT_CH1 && oi <= OUT_CH3);
+        const bool hasConfirm = usesWerConfirm && _cm->get(oi).available;
+        const bool feedbackOn = usesWerConfirm ? (hasConfirm ? _cm->get(oi).actual : false) : actualOn;
 
         root["id"] = _outputName(oi);
         root["confirmed"] = feedbackOn ? 1 : 0;
@@ -1336,7 +1359,7 @@ private:
             root["relayErrorMs"] = _om->relayCommandErrorMs((uint8_t)oi);
             root["relayErrorText"] = _om->relayErrorText((uint8_t)oi);
         }
-        if (hasConfirm) {
+        if (usesWerConfirm) {
             const ConfirmationChannel& c = _cm->get(oi);
             root["confirmMismatch"] = stopOverridesConfirm ? false : c.mismatch;
             root["confirmTimeout"] = stopOverridesConfirm ? false : c.timeout;
@@ -1345,6 +1368,9 @@ private:
             root["confirmFaultLatched"] = c.faultLatched;
             root["confirmEmuMode"] = ConfirmationManager::emuModeName(_cm->emuMode((uint8_t)oi));
             root["confirmEmuModeText"] = ConfirmationManager::emuModeNameRu(_cm->emuMode((uint8_t)oi));
+        } else {
+            root["confirmMismatch"] = false;
+            root["confirmTimeout"] = false;
         }
         _appendMainOutputDebug(root, oi);
     }
@@ -1520,6 +1546,10 @@ private:
         notify["enabled"] = (_notifier ? _notifier->enabled() : false);
         notify["url"] = (_notifier ? _notifier->publishUrl() : String(""));
         notify["hasToken"] = (_notifier ? _notifier->hasToken() : false);
+        notify["workerReady"] = (_notifier ? _notifier->workerReady() : false);
+        notify["queueDepth"] = (_notifier ? _notifier->queueDepth() : 0);
+        notify["queueSize"] = (_notifier ? _notifier->queueCapacity() : 0);
+        notify["droppedCount"] = (_notifier ? _notifier->droppedCount() : 0);
 
         JsonArray pages = root.createNestedArray("servicePages");
         pages.add("/");
@@ -1551,6 +1581,7 @@ private:
         endpoints.add("/api/v1/ack/");
         endpoints.add("/api/v1/safety/reset");
         endpoints.add("/api/v1/notify/config");
+        endpoints.add("/api/v1/notify/status");
         endpoints.add("/api/v1/notify/test");
         endpoints.add("/api/v1/wifi/scan");
         endpoints.add("/api/v1/wifi/connect");
@@ -1609,6 +1640,9 @@ private:
             JsonObject so = arr.createNestedObject();
             so["id"]      = SensorManager::sensorName(i);
             so["enabled"] = s->enabled;
+            // === PATCH WARMUP BEGIN ===
+            so["warmup"] = s->isInEnableWarmup();
+            // === PATCH WARMUP END ===
             so["periodMs"] = s->periodMs;
             so["error"]   = s->error;
             so["present"] = s->present;
@@ -1698,21 +1732,27 @@ private:
 
             if (i < 4) {
                 const ConfirmationChannel& c = _cm->get(i);
-                oo["confirmAvailable"] = c.available;
-                if (c.available) {
+                if (i >= OUT_CH1 && i <= OUT_CH3) {
+                    oo["confirmAvailable"] = c.available;
                     oo["confirmed"] = c.confirmed;
                     oo["mismatch"]  = stopOverridesConfirm ? false : c.mismatch;
                     oo["timeout"]   = stopOverridesConfirm ? false : c.timeout;
+                    oo["confirmMismatch"] = stopOverridesConfirm ? false : c.mismatch;
+                    oo["confirmTimeout"] = stopOverridesConfirm ? false : c.timeout;
                     oo["pending"]   = stopOverridesConfirm ? false : c.pending;
                     oo["confirmActual"]   = c.actual;
                     oo["confirmExpected"] = c.expected;
                     oo["feedbackOn"] = c.actual;
                     oo["confirmedLevel"] = c.actual ? 1 : 0;
                 } else {
+                    oo["confirmAvailable"] = false;
                     oo["confirmed"] = nullptr;
                     oo["mismatch"]  = false;
                     oo["timeout"]   = false;
+                    oo["confirmMismatch"] = false;
+                    oo["confirmTimeout"] = false;
                     oo["pending"]   = false;
+                    oo["confirmActual"] = actualOn;
                     oo["feedbackOn"] = actualOn;
                     oo["confirmedLevel"] = actualOn ? 1 : 0;
                     oo["confirmNote"] = c.note;
@@ -1801,6 +1841,11 @@ private:
         root["storageRecovered"] = (_stor ? _stor->recovered() : false);
         root["storageStatus"] = (_stor ? _stor->statusText() : String("недоступно"));
         root["stopLatched"] = _om->mainStopLatched();
+        root["freeHeap"] = ESP.getFreeHeap();
+        root["minFreeHeap"] = ESP.getMinFreeHeap();
+        root["notifyWorkerReady"] = (_notifier ? _notifier->workerReady() : false);
+        root["notifyQueueDepth"] = (_notifier ? _notifier->queueDepth() : 0);
+        root["notifyDroppedCount"] = (_notifier ? _notifier->droppedCount() : 0);
 
         JsonArray hw = root.createNestedArray("hardwareLimitations");
         if (adc2Warning) {

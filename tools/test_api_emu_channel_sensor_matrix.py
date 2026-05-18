@@ -640,6 +640,73 @@ class EmuChannelSensorMatrixTests(LiveEmuApiTestCase):
         self._wait_outputs_idle({"CH1": True}, timeout=5.0)
 
     @human_case(
+        title="Повторное включение датчика с ошибкой даёт нейтральный warm-up перед auto-off",
+        situation="Правило T1 -> CH1 активно, CH1 уже включён вручную, а датчик T1 повторно включается из disabled в состоянии ошибки.",
+        steps=[
+            "Выключить T1 через sensor/config при сохранённом правиле T1 -> CH1.",
+            "Подать T1err=true и включить CH1 вручную.",
+            "Включить T1 обратно через sensor/config.",
+            "Проверить, что сразу после enabled=true sensor.warmup=true, а CH1 ещё не forbidden.",
+            "Дождаться конца warm-up и убедиться, что при сохранённой ошибке обычный auto-off всё же срабатывает.",
+        ],
+        expected="Во время warm-up CH1 не выключается мгновенно; после ~3 секунд при всё ещё ошибочном датчике включается штатная блокировка.",
+    )
+    def test_reenabling_error_sensor_keeps_output_on_during_warmup(self):
+        self._reset_runtime()
+        self._set_sensor_config("T1", enabled=False, ctrl_delay_ms=0)
+        self._set_sensor_rule("T1", 0, enabled=True, logic="heat", min_v=70.0, max_v=80.0)
+        self._post_json_logged("/api/v1/emu/set", safe_emu_payload(T1err=True))
+
+        response = self._post_json_logged("/api/v1/output/CH1/manual", {"state": True}, ok_statuses=(200,))
+        self.assertTrue(response["accepted"])
+        self._wait_outputs_idle({"CH1": True}, timeout=5.0)
+
+        self.api.delete_json("/api/v1/log")
+        self._set_sensor_config("T1", enabled=True, ctrl_delay_ms=0)
+        time.sleep(0.35)
+
+        early = self.api.get_json("/api/v1/state")
+        early_logs = self.api.get_json("/api/v1/log")
+        early_sensor = sensor_map(early)["T1"]
+        early_output = output_map(early)["CH1"]
+        record_human_detail(self, "warmup_early_state", {
+            "sensor": early_sensor,
+            "output": early_output,
+            "logs": early_logs,
+        })
+        self.assertTrue(early_sensor.get("warmup", False))
+        self.assertTrue(early_output["actual"])
+        self.assertFalse(early_output["forbidden"])
+        self.assertFalse(early_output.get("autoOff", False))
+        self.assertNotIn("T1", early_output.get("forbidReasons", []))
+        self.assertFalse(any(
+            "RELAY_OFF source=channel_control" in (entry.get("e") or "")
+            and "sensorId=T1" in (entry.get("e") or "")
+            for entry in early_logs
+        ))
+
+        final_state = self.api.wait_for_state(
+            lambda current: (
+                sensor_map(current)["T1"].get("warmup", False) is False
+                and output_map(current)["CH1"]["actual"] is False
+                and output_map(current)["CH1"]["forbidden"] is True
+            ),
+            timeout=7.0,
+        )
+        final_logs = self.api.get_json("/api/v1/log")
+        record_human_detail(self, "warmup_final_state", {
+            "sensor": sensor_map(final_state)["T1"],
+            "output": output_map(final_state)["CH1"],
+            "logs": final_logs,
+        })
+        self.assertIn("T1", output_map(final_state)["CH1"].get("forbidReasons", []))
+        self.assertTrue(any(
+            "RELAY_OFF source=channel_control" in (entry.get("e") or "")
+            and "sensorId=T1" in (entry.get("e") or "")
+            for entry in final_logs
+        ))
+
+    @human_case(
         title="Alarm по давлению не блокирует CH1, если rule P->CH1 выключено",
         situation="У датчика давления P включена только сигнализация ALmax, но rule управления CH1 по давлению disabled.",
         steps=[
@@ -1110,9 +1177,9 @@ class EmuChannelSensorMatrixTests(LiveEmuApiTestCase):
                     self.assertFalse(current["forbidden"])
                     self.assertNotIn(sensor_id, current.get("forbidReasons", []))
 
-    def test_api_rejects_extended_sensor_rules_for_main_channels(self):
+    def test_api_rejects_only_c_and_v_rules_for_main_channels(self):
         self._reset_runtime()
-        for sensor_id in ("dT", "C", "V"):
+        for sensor_id in ("C", "V"):
             for _, out_idx in MAIN_OUTPUTS:
                 with self.subTest(sensor=sensor_id, out_idx=out_idx):
                     status, response = self.api.request_json(
@@ -1125,6 +1192,24 @@ class EmuChannelSensorMatrixTests(LiveEmuApiTestCase):
                     self.assertEqual(response.get("type"), "bad_params")
                     self.assertIn("CH1..CH3", response.get("error", ""))
 
+    def test_api_accepts_dt_rule_for_main_channels(self):
+        self._reset_runtime()
+        for output_id, out_idx in MAIN_OUTPUTS:
+            with self.subTest(output=output_id):
+                response = self._post_json_logged(
+                    "/api/v1/sensor/dT/ctrl",
+                    {"outIdx": out_idx, "enabled": True, "logic": "heat", "min": 1.5, "max": 6.5},
+                )
+                self.assertTrue(response["ok"])
+
+                state = self.api.get_json("/api/v1/state")
+                ctrl_rules = sensor_map(state)["dT"]["ctrl"]
+                rule = next(item for item in ctrl_rules if item["outIdx"] == out_idx)
+                self.assertTrue(rule["enabled"])
+                self.assertEqual(rule["logic"], "heat")
+                self.assertAlmostEqual(rule["min"], 1.5, places=2)
+                self.assertAlmostEqual(rule["max"], 6.5, places=2)
+
     def test_wer_ch1_force_off_times_out_only_ch1_on_real_api(self):
         self._reset_runtime()
         self._post_json_logged("/api/v1/emu/set", safe_emu_payload(WER_CH1_mode="force_off"))
@@ -1134,7 +1219,7 @@ class EmuChannelSensorMatrixTests(LiveEmuApiTestCase):
 
         state = self.api.wait_for_state(
             lambda current: (
-                output_map(current)["CH1"]["actual"] is False
+                output_map(current)["CH1"]["actual"] is True
                 and output_map(current)["CH2"]["actual"] is True
                 and output_map(current)["CH1"].get("relayError") == "timeout"
                 and confirmation_map(current)["WER_CH1"]["emuMode"] == "force_off"
@@ -1143,13 +1228,12 @@ class EmuChannelSensorMatrixTests(LiveEmuApiTestCase):
         )
         outputs = output_map(state)
         confirmations = confirmation_map(state)
-        self.assertFalse(outputs["CH1"]["actual"])
+        self.assertTrue(outputs["CH1"]["actual"])
         self.assertTrue(outputs["CH2"]["actual"])
         self.assertEqual(outputs["CH1"].get("relayError"), "timeout")
-        self.assertFalse(outputs["CH1"].get("manualWant"))
         self.assertFalse(state.get("safetyAlarmActive", False))
         self.assertEqual(confirmations["WER_CH1"].get("emuMode"), "force_off")
-        self.assertFalse(confirmations["WER_CH1"].get("faultLatched", False))
+        self.assertTrue(confirmations["WER_CH1"].get("faultLatched", False))
         self.assertNotIn("SAFETY_WER", outputs["CH1"].get("forbidReasons", []))
         self.assertNotIn("SAFETY_WER", outputs["CH2"].get("forbidReasons", []))
 

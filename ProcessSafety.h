@@ -31,16 +31,10 @@ public:
     }
 
     bool safetyAlarmActive() const {
-        for (uint8_t i = 0; i < 4; i++) {
-            if (_werFaultLatched[i]) return true;
-        }
         return false;
     }
 
     void resetLatchedFaults() {
-        for (uint8_t oi = OUT_CH1; oi <= OUT_CH3; oi++) {
-            _om->clearSafetyForbid(oi, RULEIDX_SAFETY_WER);
-        }
         for (uint8_t i = 0; i < 4; i++) _werFaultLatched[i] = false;
         if (_cm) _cm->resetFaults();
         if (_log && _sm) _alarm("Оператор сбросил защёлкнутые аварии safety-слоя");
@@ -171,11 +165,11 @@ private:
 
             if (faultedMain && !_werFaultLatched[i]) {
                 _werFaultLatched[i] = true;
-                _om->setSafetyForbid(c.outputIdx, RULEIDX_SAFETY_WER, true);
-                _om->out[c.outputIdx]->forceOff(true);
-                _alarm(String(c.id) + ": защёлкнута авария подтверждения - " +
+                _alarm(String(c.id) + ": нет подтверждения реле - " +
                        ConfirmationManager::faultNameRu(c.fault) +
-                       ". Канал заблокирован до сброса аварии.");
+                       ". Только индикация, без отключения канала.");
+            } else if (!faultedMain && _werFaultLatched[i]) {
+                _werFaultLatched[i] = false;
             }
         }
     }
