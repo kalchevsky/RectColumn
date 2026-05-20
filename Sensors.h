@@ -471,11 +471,24 @@ public:
 
     void poll() override {
         _lastPollMs = millis();
-        present = true;
         hwLimited = false;
         diagCode = SENSOR_DIAG_NONE;
 
-        if (!isnan(_t1->value) && !isnan(_t2->value) && !_t1->error && !_t2->error && _t1->present && _t2->present) {
+        if (!enabled) {
+            present = true;
+            value = NAN;
+            error = false;
+            resetAlarmRuntime();
+            resetAllControlRuntime();
+            return;
+        }
+
+        present = true;
+
+        if (!isnan(_t1->value) && !isnan(_t2->value) &&
+            !_t1->error && !_t2->error &&
+            _t1->present && _t2->present &&
+            _t1->enabled && _t2->enabled) {
             value = _t2->value - _t1->value;
             lastValidMs = _lastPollMs;
             error = false;

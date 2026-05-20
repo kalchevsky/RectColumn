@@ -10,3 +10,5 @@ Live EMU API:
 
 Linux/macOS:
 `RECTCOLUMN_BASE_URL=http://192.168.4.1 python -m unittest -v tools.test_api_emu_channel_sensor_matrix`
+
+Правила UI и backend: [DOC/UI_RULES.md](DOC/UI_RULES.md), [DOC/BACKEND_RULES.md](DOC/BACKEND_RULES.md)

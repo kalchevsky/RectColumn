@@ -1302,8 +1302,108 @@ class SourceGuardTests(unittest.TestCase):
         self.assertIn("function isVirtualSensor(id){ return id === 'dT'; }", self.app_js)
         self.assertIn("function sensorSupportsAlarmDelay(id){ return id === 'L' || id === 'F' || id === 'C' || id === 'dT'; }", self.app_js)
         self.assertIn("function sensorSupportsCtrlDelay(id){ return id === 'L' || id === 'F' || id === 'dT'; }", self.app_js)
-        self.assertIn("Настроить управление", self.app_js)
-        self.assertIn("Настроить тревоги", self.app_js)
+        self.assertIn("toggleSensorEnabled(", self.app_js)
+        self.assertIn("editSensorPeriod(", self.app_js)
+
+    def test_dt_sensor_page_uses_common_status_and_toggle_row(self):
+        config_grid = self.app_js[
+            self.app_js.find("function renderSensorConfigGrid(id, s){"):
+            self.app_js.find("function renderSensor(id){")
+        ]
+        render_sensor = self.app_js[
+            self.app_js.find("function renderSensor(id){"):
+            self.app_js.find("function editSensorDelay(id, kind){")
+        ]
+        self.assertIn("function renderSensorConfigGrid(id, s){", self.app_js)
+        self.assertNotIn("if (id === 'dT')", config_grid)
+        self.assertIn("Статус: «", config_grid)
+        self.assertIn("toggleSensorEnabled(", config_grid)
+        self.assertIn("editSensorPeriod(", config_grid)
+        self.assertNotIn("Настроить управление", config_grid)
+        self.assertNotIn("Настроить тревоги", config_grid)
+        self.assertIn("renderSensorConfigGrid(id, s)", render_sensor)
+        self.assertNotIn("if (!isVirtualSensor(id)) {", render_sensor)
+
+    def test_virtual_sensor_poll_respects_enabled_and_source_state(self):
+        virtual_poll = self.sensors_h[
+            self.sensors_h.find("class VirtualSensor : public SensorBase {"):
+            self.sensors_h.find("class PressureSensor : public SensorBase {")
+        ]
+        self.assertIn("if (!enabled) {", virtual_poll)
+        self.assertIn("present = true;", virtual_poll)
+        self.assertIn("value = NAN;", virtual_poll)
+        self.assertIn("error = false;", virtual_poll)
+        self.assertIn("resetAlarmRuntime();", virtual_poll)
+        self.assertIn("resetAllControlRuntime();", virtual_poll)
+        self.assertIn("_t1->enabled && _t2->enabled", virtual_poll)
+        self.assertIn("error = true;", virtual_poll)
+
+    def test_manual_relay_button_holds_pending_until_terminal_state_and_uses_firmware_error_text(self):
+        manual_logic = self.app_js[
+            self.app_js.find("function relayCommandPending(o){"):
+            self.app_js.find("function manualMessageText(o){")
+        ]
+        merge_block = self.app_js[
+            self.app_js.find("function mergeManualOutputState(id, res){"):
+            self.app_js.find("function setManual(id, on){")
+        ]
+        render_manual = self.app_js[
+            self.app_js.find("function renderManual(){"):
+            self.app_js.find("function renderStopConfirm(){", self.app_js.find("function renderManual(){"))
+        ]
+        self.assertIn("function relayCommandPending(o){", manual_logic)
+        self.assertIn("function normalizeRelayCommand(cmd){", manual_logic)
+        self.assertIn("var MANUAL_PENDING_HARD_TIMEOUT_MS = 8000;", self.app_js)
+        self.assertIn("manualPendingByCh: {},", self.app_js)
+        self.assertIn("function relayCommandErrorSignature(o){", manual_logic)
+        self.assertIn("function relayTerminalBaseline(o){", manual_logic)
+        self.assertIn("function manualPendingStateRaw(id){", manual_logic)
+        self.assertIn("function armManualPendingState(id, cmd, sentAt, baselineTerminal){", manual_logic)
+        self.assertIn("terminal: {", manual_logic)
+        self.assertIn("commandError: String(baselineTerminal.commandError || '')", manual_logic)
+        self.assertIn("function manualPendingHardTimedOut(ctx){", manual_logic)
+        self.assertIn("function manualPendingResolvedByActual(o, ctx){", manual_logic)
+        self.assertIn("function manualPendingBaselineSignature(o){", manual_logic)
+        self.assertIn("return relayTerminalBaseline(o);", manual_logic)
+        self.assertIn("function clearManualRelayErrorFields(o){", manual_logic)
+        self.assertIn("function manualPendingTerminalForContext(o, ctx){", manual_logic)
+        self.assertIn("var baseline = ctx.terminal || {};", manual_logic)
+        self.assertIn("var commandError = relayCommandErrorSignature(o);", manual_logic)
+        self.assertIn("if (commandError && commandError !== String(baseline.commandError || '')) return true;", manual_logic)
+        self.assertIn("function manualPendingContext(o){", manual_logic)
+        self.assertIn("function manualPendingCommand(o, ctx){", manual_logic)
+        self.assertIn("function classifyManualRelayButtonState(o, ctx){", manual_logic)
+        self.assertIn("ctx = ctx || manualPendingContext(o);", manual_logic)
+        self.assertIn("if (relayCommandFailed(o) && (!ctx || manualPendingTerminalForContext(o, ctx))) {", manual_logic)
+        self.assertIn("if (ctx && ctx.armed) return 'pending';", manual_logic)
+        self.assertIn("return actualOn ? 'on' : 'off';", manual_logic)
+        self.assertIn("return outputConfirmedOn(o);", manual_logic)
+        self.assertIn("return manualDesiredOn(o) ? 'Выключить' : 'Включить';", manual_logic)
+        self.assertIn("function manualToggleClass(o, btnState){", manual_logic)
+        self.assertIn("btnState = btnState || manualButtonState(o);", manual_logic)
+        self.assertIn("var cls = ' relay-btn btn-' + btnState;", manual_logic)
+        self.assertIn("if (o && o.relayErrorText && (!ctx || !ctx.armed || manualPendingTerminalForContext(o, ctx))) {", manual_logic)
+        self.assertIn("if (manualPendingResolvedByActual(o, ctx) || manualPendingTerminalForContext(o, ctx)) {", manual_logic)
+        self.assertIn("if (manualPendingHardTimedOut(ctx)) {", manual_logic)
+        self.assertIn("if (remoteCmd) return armManualPendingState(o.id, remoteCmd, Date.now(), manualPendingBaselineSignature(o));", manual_logic)
+        self.assertIn("var acceptsPendingState = !!(res && (", merge_block)
+        self.assertIn("else if (acceptsPendingState) o.relayError = '';", merge_block)
+        self.assertIn("else if (acceptsPendingState) o.relayErrorMs = 0;", merge_block)
+        self.assertIn("else if ((typeof res.relayError !== 'undefined' && !res.relayError) || acceptsPendingState) o.relayErrorText = '';", merge_block)
+        self.assertIn("var baselineTerminal = manualPendingBaselineSignature(currentOutput);", self.app_js)
+        self.assertIn("clearManualRelayErrorFields(currentOutput);", self.app_js)
+        self.assertIn("armManualPendingState(id, cmd, Date.now(), baselineTerminal);", self.app_js)
+        self.assertIn("armManualPendingState(id, manualPendingCommand(res, { cmd:cmd }) || cmd, Date.now(), manualPendingBaselineSignature(res));", self.app_js)
+        self.assertIn("clearManualPendingState(id);", self.app_js)
+        self.assertIn("if (prev === 'manual' && view !== 'manual') resetManualRelayUiState();", self.app_js)
+        self.assertIn("ensureManualRelayPendingStyles();", render_manual)
+        self.assertIn(":root{--btn-pending-bg:#374151;--btn-pending-fg:#f9fafb;--btn-pending-spinner:#f9fafb;}", self.app_js)
+        self.assertIn(".manual-toggle-btn.relay-btn.btn-pending{background:var(--btn-pending-bg);color:var(--btn-pending-fg);display:flex;align-items:center;justify-content:center;pointer-events:none;}", self.app_js)
+        self.assertIn(".manual-toggle-btn.relay-btn.btn-pending .manual-btn-spinner{display:inline-block;}", self.app_js)
+        self.assertIn("data-btn-state=\"' + btnState + '\"", render_manual)
+        self.assertIn("aria-busy=\"' + (pending ? 'true' : 'false') + '\"", render_manual)
+        self.assertIn("(pending ? 'disabled ' : '')", render_manual)
+        self.assertIn("manualStatusText(o, ctx)", render_manual)
 
     def test_emupanel_error_toggles_use_same_emu_set_fields_as_runtime(self):
         self.assertIn("payload.T1err = $('emu_T1err').checked;", self.emu_panel)

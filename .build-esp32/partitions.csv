@@ -1,0 +1,12 @@
+# Project-local copy of the Arduino-ESP32 3.3.8 "default" 4MB layout.
+# The standard `arduino-cli compile --fqbn esp32:esp32:esp32 ...` command
+# automatically prefers this file over the platform default, so the coredump
+# partition stays pinned in the repository.
+# If this file changes, the next upload also rewrites `partitions.bin`.
+# Name,     Type, SubType,  Offset,   Size,     Flags
+nvs,        data, nvs,      0x9000,   0x5000,
+otadata,    data, ota,      0xe000,   0x2000,
+app0,       app,  ota_0,    0x10000,  0x140000,
+app1,       app,  ota_1,    0x150000, 0x140000,
+spiffs,     data, spiffs,   0x290000, 0x160000,
+coredump,   data, coredump, 0x3F0000, 0x10000,

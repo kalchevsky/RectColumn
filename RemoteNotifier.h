@@ -223,12 +223,6 @@ private:
         return _formatRuNumber(pct, 1);
     }
 
-    static String _formatPressureMmHg(float hpa) {
-        if (!isfinite(hpa)) return String("—");
-        float mmhg = hpa * 0.75006156f;
-        return _formatRuNumber(mmhg, 1);
-    }
-
     static String _alarmToken(uint8_t bitIdx) {
         switch (bitIdx) {
             case 0: return "min1";
@@ -257,7 +251,7 @@ private:
                 return "Уровень max";
             case SEN_P: {
                 const float thr = (s && bitIdx < N_ALARMS) ? s->alarm[bitIdx].threshold : NAN;
-                return String("Давление ") + _alarmToken(bitIdx) + " (" + _formatPressureMmHg(thr) + " мм. рт. ст.)";
+                return String("Давление ") + _alarmToken(bitIdx) + " (" + _formatRuNumber(thr, 1) + " гПа)";
             }
             case SEN_T1:
             case SEN_T2:
