@@ -859,6 +859,8 @@ class FullMatrixSourceGuardTests(unittest.TestCase):
         self.assertIn("_om->unackedAlarmMaskFor(*_sm, (uint8_t)si);", self.remote_notifier_h)
         self.assertIn("_snapshotCurrentAlarms();", self.remote_notifier_h)
         self.assertNotIn("return s->alarmMask();", self.remote_notifier_h)
+        self.assertIn("if (bits & SENSOR_LOST_ALARM_MASK) return SENSOR_LOST_ALARM_BIT;", self.remote_notifier_h)
+        self.assertIn("return s->sensorLostNotice();", self.remote_notifier_h)
 
     def test_notifier_defers_failure_logging_from_background_task(self):
         self.assertIn("_flushQueuedFailure();", self.remote_notifier_h)
@@ -894,6 +896,8 @@ class FullMatrixSourceGuardTests(unittest.TestCase):
         self.assertIn("startEnableWarmup(3000);", self.webapi_h)
         self.assertIn("so[\"warmup\"] = s->isInEnableWarmup();", self.webapi_h)
         self.assertIn("if (isInEnableWarmup()) {", self.sensors_h)
+        self.assertIn("sensorErrorLatched", self.webapi_h)
+        self.assertIn("sensorLostNotice", self.webapi_h)
         self.assertIn("http.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);", self.remote_notifier_h)
         self.assertIn("http.useHTTP10(true);", self.remote_notifier_h)
         self.assertIn("server returned redirect (HTTPS required?); use a publish URL that does not redirect", self.remote_notifier_h)
@@ -924,6 +928,11 @@ class FullMatrixSourceGuardTests(unittest.TestCase):
         self.assertIn("l->ctrlDelayMs  = SAFETY_LEVEL_SHUTDOWN_MS;", self.sensor_manager_h)
         self.assertIn("f->ctrlDelayMs  = 5000UL;", self.sensor_manager_h)
         self.assertIn("#define SAFETY_LEVEL_SHUTDOWN_MS   (5UL * 60UL * 1000UL)", self.config_h)
+        self.assertIn("#define SENSOR_LOST_TIMEOUT_MS       3000UL", self.config_h)
+        self.assertIn("#define SENSOR_LOST_TIMEOUT_DS_MS    5000UL", self.config_h)
+        self.assertIn("#define SENSOR_HEALTHY_HYSTERESIS_MS 5000UL", self.config_h)
+        self.assertIn("#define PRESSURE_SANITY_MIN_HPA      300.0f", self.config_h)
+        self.assertIn("#define PRESSURE_SANITY_MAX_HPA      1100.0f", self.config_h)
 
 
 if __name__ == "__main__":

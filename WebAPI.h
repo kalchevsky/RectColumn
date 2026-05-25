@@ -869,6 +869,8 @@ private:
         SensorBase* s = _sm->s[si];
         const bool prevEnabled = s->enabled;
         const uint32_t prevCtrlDelayMs = s->ctrlDelayMs;
+        bool logOperatorRestore = false;
+        bool logOperatorRelatch = false;
 
         bool nextEnabled = s->enabled;
         uint32_t nextPeriodMs = s->periodMs;
@@ -898,10 +900,18 @@ private:
             }
         }
 
+        if (prevEnabled && !nextEnabled) {
+            s->armOperatorResetCycle();
+        }
+
         s->enabled = nextEnabled;
         // === PATCH WARMUP BEGIN ===
         if (!prevEnabled && nextEnabled) {
             s->startEnableWarmup(3000);
+            _om->clearSensorLostAcknowledgement((uint8_t)si);
+            const SensorOperatorResetResult resetResult = s->applyOperatorResetCycle();
+            logOperatorRestore = (resetResult == SensorOperatorResetResult::Restored);
+            logOperatorRelatch = (resetResult == SensorOperatorResetResult::Relatched);
         } else if (prevEnabled && !nextEnabled) {
             s->clearEnableWarmup();
         }
@@ -938,6 +948,14 @@ private:
         _om->beepAcceptedCommand();
         _log->add("Настройка датчика: " + s->name + " " + String(s->enabled ? "включён" : "отключён"),
                   _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
+        if (logOperatorRestore) {
+            _log->add("Датчик " + s->name + " восстановлен оператором",
+                      _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
+        }
+        if (logOperatorRelatch) {
+            _log->add("Потеря датчика " + s->name,
+                      _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
+        }
         _sendOk(req);
     }
 
@@ -1336,14 +1354,14 @@ private:
         root["sensorForbidMask"] = _om->lastForbidMask((uint8_t)oi);
         root["safetyForbidMask"] = _om->safetyForbidMask((uint8_t)oi);
         root["effectiveForbidMask"] = effectiveForbidMask;
-        root["forbidReasonText"] = _om->formatForbidReasons(effectiveForbidMask);
+        root["forbidReasonText"] = _maskReasonText(effectiveForbidMask, false);
         JsonArray reasons = root.createNestedArray("forbidReasons");
         _appendForbidReasons(reasons, effectiveForbidMask);
         root["wantOnMask"] = o->wantOnMask();
         root["stopLatched"] = _om->mainStopLatched();
         root["autoOff"] = _om->autoOffActive((uint8_t)oi);
         root["safetyBlocked"] = _om->safetyBlocked((uint8_t)oi);
-        root["blockReason"] = _om->formatForbidReasons(effectiveForbidMask);
+        root["blockReason"] = _maskReasonText(effectiveForbidMask, false);
         root["manualRequest"] = _om->manualRequestOn((uint8_t)oi);
         root["finalRelayState"] = o->finalRequestedOn();
         root["physicalRelayState"] = o->actualOn();
@@ -1383,6 +1401,9 @@ private:
 
     String _sensorBlockReasonText(uint8_t sensorIdx) const {
         SensorBase* sensor = (_sm && sensorIdx < SEN_COUNT) ? _sm->s[sensorIdx] : nullptr;
+        if (sensor && sensor->hasSensorLostAlarm()) {
+            return sensor->sensorLostNotice();
+        }
         switch (sensorIdx) {
             case SEN_T1: return "датчик T1";
             case SEN_T2: return "датчик T2";
@@ -1646,6 +1667,10 @@ private:
             so["periodMs"] = s->periodMs;
             so["error"]   = s->error;
             so["present"] = s->present;
+            so["sensorError"] = s->error;
+            so["sensorErrorLatched"] = s->sensorErrorLatched;
+            so["sensorErrorReason"] = s->sensorErrorReasonCode();
+            so["sensorLostNotice"] = s->sensorLostNotice();
             so["stale"]   = s->isStale();
             so["lastValidMs"] = s->lastValidMs;
             so["unit"]    = SensorManager::sensorUnit(i);
@@ -1658,6 +1683,7 @@ private:
             else                               so["value"] = nullptr;
 
             const uint8_t unackedMask = _om->unackedAlarmMaskFor(*_sm, i);
+            so["sensorLostUnacked"] = ((unackedMask & SENSOR_LOST_ALARM_MASK) != 0);
             JsonArray alarms = so.createNestedArray("alarms");
             for (int ai = 0; ai < N_ALARMS; ai++) {
                 JsonObject ao = alarms.createNestedObject();
@@ -1706,14 +1732,14 @@ private:
             oo["sensorForbidMask"] = _om->lastForbidMask((uint8_t)i);
             oo["safetyForbidMask"] = _om->safetyForbidMask((uint8_t)i);
             oo["effectiveForbidMask"] = effectiveForbidMask;
-            oo["forbidReasonText"] = _om->formatForbidReasons(effectiveForbidMask);
+            oo["forbidReasonText"] = _maskReasonText(effectiveForbidMask, false);
             oo["wantOnMask"] = o->wantOnMask();
             JsonArray reasons = oo.createNestedArray("forbidReasons");
             _appendForbidReasons(reasons, effectiveForbidMask);
             oo["enabled"]    = o->enabled;
             oo["autoOff"] = _om->autoOffActive((uint8_t)i);
             oo["safetyBlocked"] = _om->safetyBlocked((uint8_t)i);
-            oo["blockReason"] = _om->formatForbidReasons(effectiveForbidMask);
+            oo["blockReason"] = _maskReasonText(effectiveForbidMask, false);
             oo["manualRequest"] = _om->manualRequestOn((uint8_t)i);
             oo["finalRelayState"] = o->finalRequestedOn();
             oo["physicalRelayState"] = o->actualOn();
@@ -1769,7 +1795,7 @@ private:
         JsonObject dbg = root.createNestedObject("debug");
         dbg["autoOff"] = _om->autoOffActive(outIdx);
         dbg["safetyBlocked"] = _om->safetyBlocked(outIdx);
-        dbg["blockReason"] = _om->formatForbidReasons(_om->effectiveForbidMask(outIdx));
+        dbg["blockReason"] = _maskReasonText(_om->effectiveForbidMask(outIdx), false);
         dbg["manualRequest"] = _om->manualRequestOn(outIdx);
         dbg["finalRelayState"] = o->finalRequestedOn();
         dbg["physicalRelayState"] = o->actualOn();
@@ -1787,6 +1813,9 @@ private:
             so["sensorEnabled"] = sensor->enabled;
             so["sensorPresent"] = sensor->present;
             so["sensorError"] = sensor->error;
+            so["sensorErrorLatched"] = sensor->sensorErrorLatched;
+            so["sensorErrorReason"] = sensor->sensorErrorReasonCode();
+            so["sensorLostNotice"] = sensor->sensorLostNotice();
             so["sensorValueIsNan"] = isnan(sensor->value);
             so["affectsChannel"] = sensor->affectsOutput(outIdx);
             so["autoOff"] = _om->controlSensorAutoOff(outIdx, si);

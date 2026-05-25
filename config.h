@@ -16,7 +16,7 @@
 #define SERIAL_DEBUG_SENSOR_SNAPSHOT  0
 
 // ─── Версия прошивки / API ───────────────────────────────────────
-#define FW_VERSION      "1.6.42"
+#define FW_VERSION      "1.6.43"
 #define API_VERSION     "v1"
 #define AP_SSID_DEF     "Control_System"
 #define DEVICE_NAME     "RectColumn"
@@ -127,6 +127,11 @@ static_assert(PIN_V != PIN_WER_CH4, "PIN_V conflicts with WER_CH4");
 #define CMD_BEEP_COOLDOWN_MS 250UL
 #define TEMP_ERROR_HOLD_MS 10000UL
 #define WIFI_LED_BLINK_MS 500UL
+#define SENSOR_LOST_TIMEOUT_MS       3000UL
+#define SENSOR_LOST_TIMEOUT_DS_MS    5000UL
+#define SENSOR_HEALTHY_HYSTERESIS_MS 5000UL
+#define PRESSURE_SANITY_MIN_HPA      300.0f
+#define PRESSURE_SANITY_MAX_HPA      1100.0f
 
 // ─── Тайминги входов подтверждения ───────────────────────────────
 #define WER_DEBOUNCE_MS            80UL

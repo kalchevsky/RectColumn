@@ -28,6 +28,22 @@ struct CtrlRule {
 
 #define N_ALARMS   4
 #define N_CTRL_OUT OUT_COUNT
+static constexpr uint8_t SENSOR_LOST_ALARM_BIT  = 7;
+static constexpr uint8_t SENSOR_LOST_ALARM_MASK = (1u << SENSOR_LOST_ALARM_BIT);
+
+enum SensorErrorReason : uint8_t {
+    SENSOR_ERR_NONE = 0,
+    SENSOR_ERR_NO_RESPONSE,
+    SENSOR_ERR_OUT_OF_RANGE,
+    SENSOR_ERR_NAN,
+    SENSOR_ERR_TIMEOUT,
+};
+
+enum class SensorOperatorResetResult : uint8_t {
+    None = 0,
+    Restored,
+    Relatched,
+};
 
 class SensorBase {
 public:
@@ -38,6 +54,8 @@ public:
     bool     present  = false;
     bool     hwLimited = false;
     uint8_t  diagCode = SENSOR_DIAG_NONE;
+    SensorErrorReason sensorErrorReason = SENSOR_ERR_NONE;
+    bool     sensorErrorLatched = false;
     float    value    = NAN;
     uint32_t lastValidMs = 0;
     uint32_t maxAgeMs = 0;
@@ -82,7 +100,9 @@ public:
     }
     // === PATCH WARMUP END ===
 
-    explicit SensorBase(const String& n) : name(n) {
+    explicit SensorBase(const String& n, bool trackSensorLoss = false)
+        : name(n), _trackSensorLoss(trackSensorLoss)
+    {
         for (uint8_t i = 0; i < N_CTRL_OUT; i++) {
             ctrl[i].outIdx = i;
             _ctrlCandidateCmd[i] = 0;
@@ -102,7 +122,6 @@ public:
     bool checkAlarms() {
         bool changed = false;
         const uint32_t now = millis();
-        int primaryErrorAlarmIdx = -1;
 
         if (!enabled) {
             for (uint8_t i = 0; i < N_ALARMS; i++) {
@@ -110,18 +129,6 @@ public:
             }
             resetAlarmRuntime();
             return changed;
-        }
-
-        // Ошибка/пропадание датчика должны поднимать сигнализацию.
-        // Чтобы не зажигать сразу все уровни AL1/AL2, используем только
-        // первый включённый alarm-slot как "аварию датчика".
-        if (!externalAlarmLogic && (error || !present)) {
-            for (uint8_t i = 0; i < N_ALARMS; i++) {
-                if (alarm[i].enabled) {
-                    primaryErrorAlarmIdx = (int)i;
-                    break;
-                }
-            }
         }
 
         for (uint8_t i = 0; i < N_ALARMS; i++) {
@@ -134,8 +141,8 @@ public:
             } else if (!a.enabled) {
                 a.triggered = false;
                 _alarmCandidateSinceMs[i] = 0;
-            } else if (primaryErrorAlarmIdx >= 0) {
-                a.triggered = ((int)i == primaryErrorAlarmIdx);
+            } else if (_trackSensorLoss && sensorErrorLatched) {
+                a.triggered = false;
                 _alarmCandidateSinceMs[i] = 0;
             } else if (isnan(value)) {
                 a.triggered = false;
@@ -162,7 +169,7 @@ public:
 
     bool anyAlarmActive() const { return alarmMask() != 0; }
 
-    uint8_t alarmMask() const {
+    uint8_t userAlarmMask() const {
         uint8_t mask = 0;
         for (uint8_t i = 0; i < N_ALARMS; i++) {
             if (alarm[i].enabled && alarm[i].triggered) mask |= (1u << i);
@@ -170,8 +177,42 @@ public:
         return mask;
     }
 
+    uint8_t alarmMask() const {
+        uint8_t mask = userAlarmMask();
+        if (hasSensorLostAlarm()) mask |= SENSOR_LOST_ALARM_MASK;
+        return mask;
+    }
+
+    bool tracksSensorLoss() const { return _trackSensorLoss; }
+    bool hasSensorLostAlarm() const { return _trackSensorLoss && sensorErrorLatched; }
+    bool operatorResetArmed() const { return _operatorResetArmed; }
+    const char* sensorErrorReasonCode() const { return _sensorErrorReasonCode(sensorErrorReason); }
+
+    String sensorLostNotice() const {
+        return hasSensorLostAlarm() ? (String("Потеря датчика ") + name) : String("");
+    }
+
+    void armOperatorResetCycle() {
+        if (_trackSensorLoss) _operatorResetArmed = true;
+    }
+
+    SensorOperatorResetResult applyOperatorResetCycle() {
+        if (!_trackSensorLoss || !_operatorResetArmed) return SensorOperatorResetResult::None;
+        _operatorResetArmed = false;
+        if (!sensorErrorLatched) return SensorOperatorResetResult::None;
+
+        sensorErrorLatched = false;
+        if (_canClearLatchedErrorNow()) {
+            sensorErrorReason = SENSOR_ERR_NONE;
+            return SensorOperatorResetResult::Restored;
+        }
+
+        sensorErrorLatched = true;
+        return SensorOperatorResetResult::Relatched;
+    }
+
     bool hasUsableValue() const {
-        return enabled && present && !error && !isnan(value) && !isStale();
+        return enabled && present && !error && !sensorErrorLatched && !isnan(value) && !isStale();
     }
 
     bool controlRuleEnabled(uint8_t outIdx) const {
@@ -319,9 +360,41 @@ public:
         switch (diagCode) {
             case SENSOR_DIAG_ADC2_WIFI_CONFLICT:         return "ADC2 недоступен при активном WiFi";
             case SENSOR_DIAG_GPIO35_RESERVED_FOR_WER_CH2:return "GPIO35 зарезервирован под WER_CH2 в этой сборке";
-            case SENSOR_DIAG_TEMP_RECOVERY_HOLD:         return "Датчик температуры восстановился, удерживается индикация ошибки";
+            case SENSOR_DIAG_TEMP_RECOVERY_HOLD:         return "Датчик восстановился, удерживается индикация ошибки";
             default:                                     return "";
         }
+    }
+
+protected:
+    void markSensorFault(SensorErrorReason reason, uint32_t now, bool presentNow) {
+        (void)now;
+        present = presentNow;
+        error = true;
+        diagCode = SENSOR_DIAG_NONE;
+        if (_trackSensorLoss) {
+            sensorErrorReason = reason;
+            sensorErrorLatched = true;
+        }
+        _healthySinceMs = 0;
+    }
+
+    void markSensorHealthy(uint32_t now, bool presentNow = true) {
+        present = presentNow;
+        if (_trackSensorLoss && error) {
+            if (_healthySinceMs == 0) _healthySinceMs = now;
+            if ((now - _healthySinceMs) < SENSOR_HEALTHY_HYSTERESIS_MS) {
+                error = true;
+                diagCode = SENSOR_DIAG_TEMP_RECOVERY_HOLD;
+                return;
+            }
+            _healthySinceMs = 0;
+        } else {
+            _healthySinceMs = 0;
+        }
+
+        error = false;
+        diagCode = SENSOR_DIAG_NONE;
+        if (!_trackSensorLoss || !sensorErrorLatched) sensorErrorReason = SENSOR_ERR_NONE;
     }
 
 private:
@@ -329,12 +402,29 @@ private:
     int8_t   _ctrlCandidateCmd[N_CTRL_OUT] = {};
     uint32_t _ctrlCandidateSinceMs[N_CTRL_OUT] = {};
     uint32_t _ctrlRearmPollAfterMs[N_CTRL_OUT] = {};
+    bool     _trackSensorLoss = false;
+    bool     _operatorResetArmed = false;
+    uint32_t _healthySinceMs = 0;
 
     uint32_t _defaultMaxAgeMs() const {
         if (periodMs == 0) return 0;
         uint32_t factor = SENSOR_MAX_AGE_FACTOR;
         if (factor < 1) factor = 1;
         return periodMs * factor;
+    }
+
+    bool _canClearLatchedErrorNow() const {
+        return enabled && present && !error && !isnan(value) && !isStale();
+    }
+
+    static const char* _sensorErrorReasonCode(SensorErrorReason reason) {
+        switch (reason) {
+            case SENSOR_ERR_NO_RESPONSE: return "no_response";
+            case SENSOR_ERR_OUT_OF_RANGE:return "out_of_range";
+            case SENSOR_ERR_NAN:         return "nan";
+            case SENSOR_ERR_TIMEOUT:     return "timeout";
+            default:                     return "";
+        }
     }
 };
 
@@ -344,7 +434,7 @@ private:
 class TempSensor : public SensorBase {
 public:
     TempSensor(const String& n, uint8_t pin)
-        : SensorBase(n), _ow(pin), _dt(&_ow)
+        : SensorBase(n, true), _ow(pin), _dt(&_ow)
     {
         periodMs = DEF_T_PERIOD_MS;
     }
@@ -356,11 +446,11 @@ public:
         _conversionWaitMs = 375UL; // 11-bit DS18B20 conversion time
         present = (_dt.getDeviceCount() > 0);
         error   = !present;
+        sensorErrorReason = present ? SENSOR_ERR_NONE : SENSOR_ERR_NO_RESPONSE;
+        sensorErrorLatched = !present;
         hwLimited = false;
         diagCode = SENSOR_DIAG_NONE;
         lastValidMs = 0;
-        _recoveryHoldUntilMs = 0;
-        _faultSeen = false;
         _conversionPending = false;
         _conversionStartedMs = 0;
         _lastPollMs = millis() - periodMs; // first sample can start immediately
@@ -373,7 +463,9 @@ public:
     }
 
     bool isDueToStart(uint32_t now) const {
-        const uint32_t retryMs = present ? periodMs : 1000UL;
+        const uint32_t cappedHealthyMs =
+            (periodMs < SENSOR_LOST_TIMEOUT_DS_MS) ? periodMs : SENSOR_LOST_TIMEOUT_DS_MS;
+        const uint32_t retryMs = (error || !present) ? 1000UL : cappedHealthyMs;
         return enabled && !_conversionPending && ((uint32_t)(now - _lastPollMs) >= retryMs);
     }
 
@@ -397,20 +489,31 @@ public:
         _lastPollMs = now;
 
         if (!_ensurePresent()) {
-            _faultSeen = true;
-            _recoveryHoldUntilMs = 0;
             return true;
         }
 
         float t = _dt.getTempCByIndex(0);
         if (t == DEVICE_DISCONNECTED_C) {
             present = false;
-            error = true;
             value = NAN;
             hwLimited = false;
-            diagCode = SENSOR_DIAG_NONE;
-            _faultSeen = true;
-            _recoveryHoldUntilMs = 0;
+            markSensorFault(SENSOR_ERR_NO_RESPONSE, now, false);
+            return true;
+        }
+
+        if (isnan(t)) {
+            present = true;
+            value = NAN;
+            hwLimited = false;
+            markSensorFault(SENSOR_ERR_NAN, now, true);
+            return true;
+        }
+
+        if (t < -55.0f || t > 125.0f) {
+            present = true;
+            value = NAN;
+            hwLimited = false;
+            markSensorFault(SENSOR_ERR_OUT_OF_RANGE, now, true);
             return true;
         }
 
@@ -418,10 +521,7 @@ public:
         value = t;
         lastValidMs = now;
         hwLimited = false;
-        error = false;
-        diagCode = SENSOR_DIAG_NONE;
-        _faultSeen = false;
-        _recoveryHoldUntilMs = 0;
+        markSensorHealthy(now, true);
         return true;
     }
 
@@ -440,18 +540,15 @@ private:
         const bool ok = (_dt.getDeviceCount() > 0);
         present = ok;
         if (!ok) {
-            error = true;
             value = NAN;
             hwLimited = false;
-            diagCode = SENSOR_DIAG_NONE;
+            markSensorFault(SENSOR_ERR_NO_RESPONSE, millis(), false);
         }
         return ok;
     }
 
     OneWire           _ow;
     DallasTemperature _dt;
-    bool              _faultSeen = false;
-    uint32_t          _recoveryHoldUntilMs = 0;
     bool              _conversionPending = false;
     uint32_t          _conversionStartedMs = 0;
     uint32_t          _conversionWaitMs = 375UL;
@@ -487,6 +584,7 @@ public:
 
         if (!isnan(_t1->value) && !isnan(_t2->value) &&
             !_t1->error && !_t2->error &&
+            !_t1->sensorErrorLatched && !_t2->sensorErrorLatched &&
             _t1->present && _t2->present &&
             _t1->enabled && _t2->enabled) {
             value = _t2->value - _t1->value;
@@ -508,7 +606,7 @@ private:
 
 class PressureSensor : public SensorBase {
 public:
-    PressureSensor() : SensorBase("P") {
+    PressureSensor() : SensorBase("P", true) {
         periodMs = DEF_P_PERIOD_MS;
     }
 
@@ -516,26 +614,50 @@ public:
         Wire.begin(PIN_BMP_SDA, PIN_BMP_SCL);
         present = _bmp.begin(BMP085_ULTRALOWPOWER);
         error   = !present;
+        sensorErrorReason = present ? SENSOR_ERR_NONE : SENSOR_ERR_NO_RESPONSE;
+        sensorErrorLatched = !present;
         lastValidMs = 0;
         hwLimited = false;
         diagCode = SENSOR_DIAG_NONE;
     }
 
+    bool isDueToPoll(uint32_t now) const {
+        const uint32_t cappedHealthyMs =
+            (periodMs < SENSOR_LOST_TIMEOUT_MS) ? periodMs : SENSOR_LOST_TIMEOUT_MS;
+        const uint32_t retryMs = (error || !present) ? 1000UL : cappedHealthyMs;
+        return enabled && ((uint32_t)(now - _lastPollMs) >= retryMs);
+    }
+
     void poll() override {
-        _lastPollMs = millis();
+        const uint32_t now = millis();
+        _lastPollMs = now;
 
         if (!present) present = _bmp.begin(BMP085_ULTRALOWPOWER);
         if (!present) {
-            error = true;
             value = NAN;
+            hwLimited = false;
+            markSensorFault(SENSOR_ERR_NO_RESPONSE, now, false);
             return;
         }
 
         value = _bmp.readPressure() / 100.0f;
+        if (isnan(value)) {
+            value = NAN;
+            hwLimited = false;
+            markSensorFault(SENSOR_ERR_NAN, now, true);
+            return;
+        }
+
+        if (value < PRESSURE_SANITY_MIN_HPA || value > PRESSURE_SANITY_MAX_HPA) {
+            value = NAN;
+            hwLimited = false;
+            markSensorFault(SENSOR_ERR_OUT_OF_RANGE, now, true);
+            return;
+        }
+
         lastValidMs = _lastPollMs;
-        error = false;
         hwLimited = false;
-        diagCode = SENSOR_DIAG_NONE;
+        markSensorHealthy(now, true);
     }
 
 private:
@@ -544,8 +666,8 @@ private:
 
 class DigitalSensor : public SensorBase {
 public:
-    DigitalSensor(const String& n, uint8_t pin)
-        : SensorBase(n), _pin(pin)
+    DigitalSensor(const String& n, uint8_t pin, bool trackSensorLoss = false)
+        : SensorBase(n, trackSensorLoss), _pin(pin), _trackSensorLoss(trackSensorLoss)
     {
         periodMs = DEF_FAST_PERIOD_MS;
     }
@@ -557,20 +679,39 @@ public:
         _lastPollMs = millis();
         present = true;
         error   = false;
+        sensorErrorReason = SENSOR_ERR_NONE;
+        sensorErrorLatched = false;
         value   = (digitalRead(_pin) == HIGH) ? 1.0f : 0.0f;
         lastValidMs = _lastPollMs;
         hwLimited = false;
         diagCode = SENSOR_DIAG_NONE;
     }
 
+    bool isDueToPoll(uint32_t now) const {
+        if (!_trackSensorLoss) return enabled && ((uint32_t)(now - _lastPollMs) >= periodMs);
+        const uint32_t cappedHealthyMs =
+            (periodMs < SENSOR_LOST_TIMEOUT_MS) ? periodMs : SENSOR_LOST_TIMEOUT_MS;
+        const uint32_t retryMs = error ? 1000UL : cappedHealthyMs;
+        return enabled && ((uint32_t)(now - _lastPollMs) >= retryMs);
+    }
+
     void poll() override {
-        _lastPollMs = millis();
+        const uint32_t now = millis();
+        _lastPollMs = now;
+        const bool high = (digitalRead(_pin) == HIGH);
+        if (_trackSensorLoss && !high) {
+            present = false;
+            value = NAN;
+            hwLimited = false;
+            markSensorFault(SENSOR_ERR_NO_RESPONSE, now, false);
+            return;
+        }
+
         present = true;
-        error = false;
-        value = (digitalRead(_pin) == HIGH) ? 1.0f : 0.0f;
+        value = high ? 1.0f : 0.0f;
         lastValidMs = _lastPollMs;
         hwLimited = false;
-        diagCode = SENSOR_DIAG_NONE;
+        markSensorHealthy(now, true);
     }
 
     bool isCircuitClosed() const { return value > 0.5f; }
@@ -579,6 +720,7 @@ public:
 
 private:
     uint8_t _pin;
+    bool    _trackSensorLoss = false;
 };
 
 class AnalogSensor : public SensorBase {

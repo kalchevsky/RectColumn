@@ -454,8 +454,7 @@ public:
         for (int si = 0; si < SEN_COUNT; si++) {
             SensorBase* s = sm.s[si];
             if (!s) continue;
-            const uint8_t mask = s->alarmMask();
-            for (uint8_t ai = 0; ai < N_ALARMS; ai++) if (mask & (1u << ai)) count++;
+            count += _countAlarmBits(s->alarmMask());
         }
         return count;
     }
@@ -467,7 +466,7 @@ public:
             SensorBase* s = sm.s[si];
             if (!s) continue;
             const uint8_t mask = (uint8_t)(s->alarmMask() & (uint8_t)(~_ackedAlarmMask[si]));
-            for (uint8_t ai = 0; ai < N_ALARMS; ai++) if (mask & (1u << ai)) count++;
+            count += _countAlarmBits(mask);
         }
         return count;
     }
@@ -489,6 +488,11 @@ public:
         SensorBase* s = sm.s[sensorIdx];
         if (!s) return 0;
         return (uint8_t)(s->alarmMask() & (uint8_t)(~_ackedAlarmMask[sensorIdx]));
+    }
+
+    void clearSensorLostAcknowledgement(uint8_t sensorIdx) {
+        if (sensorIdx >= SEN_COUNT) return;
+        _ackedAlarmMask[sensorIdx] &= (uint8_t)(~SENSOR_LOST_ALARM_MASK);
     }
 
     void setSafetyForbid(uint8_t outIdx, uint8_t ruleIdx, bool active) {
@@ -872,6 +876,10 @@ private:
         outText += (s->present ? "1" : "0");
         outText += ",alarm=";
         outText += _formatAlarmLabels(s);
+        outText += ",latched=";
+        outText += s->sensorErrorLatched ? "1" : "0";
+        outText += ",reason=";
+        outText += s->sensorErrorReasonCode();
         outText += ",value=";
         if (isnan(s->value)) outText += "nan";
         else outText += String(s->value, 2);
@@ -892,14 +900,20 @@ private:
         else if (safetyMask != 0) source = "safety";
         else if (sensorMask != 0) source = "channel_control";
 
+        String humanReason = formatForbidReasons(effectiveMask);
+        const int sensorIdx = _firstSetSensorBit(sensorMask);
+        if (sensorIdx >= 0) {
+            SensorBase* sen = sm.s[sensorIdx];
+            if (sen && sen->hasSensorLostAlarm()) humanReason = sen->sensorLostNotice();
+        }
+
         String msg = String("RELAY_OFF source=") + source +
                      " channel=" + out[outIdx]->name +
-                     " reason=" + formatForbidReasons(effectiveMask) +
+                     " reason=" + humanReason +
                      " channelMask=" + String(effectiveMask) +
                      " sensorMask=" + String(sensorMask) +
                      " safetyMask=" + String(safetyMask);
 
-        const int sensorIdx = _firstSetSensorBit(sensorMask);
         if (sensorIdx >= 0) {
             SensorBase* sen = sm.s[sensorIdx];
             const CtrlRule* rule = (sen && outIdx < N_CTRL_OUT) ? &sen->ctrl[outIdx] : nullptr;
@@ -907,6 +921,10 @@ private:
             msg += SensorManager::sensorName(sensorIdx);
             msg += " sensorName=";
             msg += SensorManager::sensorName(sensorIdx);
+            if (sen && sen->hasSensorLostAlarm()) {
+                msg += " sensorLostNotice=";
+                msg += sen->sensorLostNotice();
+            }
             msg += " ruleEnabled=";
             msg += (sen && sen->controlRuleEnabled(outIdx)) ? "1" : "0";
             msg += " sensorEnabled=";
@@ -995,6 +1013,15 @@ private:
             case OUT_CH3: return RELAY_CONFIRM_TIMEOUT_CH3_MS;
             default:      return RELAY_CONFIRM_TIMEOUT_MS;
         }
+    }
+
+    static uint16_t _countAlarmBits(uint8_t mask) {
+        uint16_t count = 0;
+        for (uint8_t ai = 0; ai < N_ALARMS; ai++) {
+            if (mask & (1u << ai)) count++;
+        }
+        if (mask & SENSOR_LOST_ALARM_MASK) count++;
+        return count;
     }
 
     void _pruneAcknowledged(const SensorManager& sm) {

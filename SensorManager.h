@@ -27,8 +27,8 @@ public:
         t3 = new TempSensor("T3", PIN_T3);
         dt = new VirtualSensor(t1, t2);
         p  = new PressureSensor();
-        l  = new DigitalSensor("L", PIN_L);
-        f  = new DigitalSensor("F", PIN_F);
+        l  = new DigitalSensor("L", PIN_L, false);
+        f  = new DigitalSensor("F", PIN_F, true);
         c  = new AnalogSensor("C", PIN_C, false, false);
         v  = new AnalogSensor("V", PIN_V, false, (GPIO35_MODE == GPIO35_MODE_WER_CH2));
         c->thresholdPercentInput = true;
@@ -196,7 +196,7 @@ public:
             }
         }
 
-        if (p && p->isDue()) {
+        if (p && p->isDueToPoll(now)) {
             p->poll();
             if (p->checkAlarms()) alarmChanged |= (1u << SEN_P);
         }
@@ -204,7 +204,11 @@ public:
         for (int fi = 0; fi < 4; fi++) {
             const int idx = _fastIdx[fi];
             SensorBase* sen = s[idx];
-            if (sen && sen->isDue()) {
+            const bool due =
+                (idx == SEN_F && f)
+                    ? f->isDueToPoll(now)
+                    : (sen && sen->isDue());
+            if (sen && due) {
                 sen->poll();
                 if (sen->checkAlarms()) alarmChanged |= (1u << idx);
             }

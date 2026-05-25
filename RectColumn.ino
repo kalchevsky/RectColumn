@@ -41,6 +41,7 @@ AckButton           ackButton;
 bool    prevOutState[OUT_COUNT]    = {};
 bool    prevSenError[SEN_COUNT]    = {};
 bool    prevSenPresent[SEN_COUNT]  = {};
+bool    prevSenLatched[SEN_COUNT]  = {};
 uint8_t prevAlarmMask[SEN_COUNT]   = {};
 uint32_t lastHeartbeatMs = 0;
 uint32_t lastWifiLedBlinkMs = 0;
@@ -106,7 +107,8 @@ static void initPrevState() {
     for (int i = 0; i < SEN_COUNT; i++) {
         prevSenError[i]   = sensorMgr.s[i]->error;
         prevSenPresent[i] = sensorMgr.s[i]->present;
-        prevAlarmMask[i]  = sensorMgr.s[i]->alarmMask();
+        prevSenLatched[i] = sensorMgr.s[i]->sensorErrorLatched;
+        prevAlarmMask[i]  = sensorMgr.s[i]->userAlarmMask();
     }
 }
 
@@ -114,19 +116,31 @@ static void logSensorTransitions() {
     for (int i = 0; i < SEN_COUNT; i++) {
         SensorBase* s = sensorMgr.s[i];
 
-        if (s->present != prevSenPresent[i]) {
+        if (s->tracksSensorLoss()) {
             prevSenPresent[i] = s->present;
-            eventLog.add(s->name + (s->present ? " подключён" : " отключён"),
-                         sensorMgr.getT1(), sensorMgr.getT2(), sensorMgr.getT3(), sensorMgr.getDT());
-        }
-
-        if (s->error != prevSenError[i]) {
             prevSenError[i] = s->error;
-            eventLog.add(s->name + String(s->error ? " ошибка" : " ошибка снята"),
-                         sensorMgr.getT1(), sensorMgr.getT2(), sensorMgr.getT3(), sensorMgr.getDT());
+            if (s->sensorErrorLatched != prevSenLatched[i]) {
+                prevSenLatched[i] = s->sensorErrorLatched;
+                if (s->sensorErrorLatched) {
+                    eventLog.add(s->sensorLostNotice(),
+                                 sensorMgr.getT1(), sensorMgr.getT2(), sensorMgr.getT3(), sensorMgr.getDT());
+                }
+            }
+        } else {
+            if (s->present != prevSenPresent[i]) {
+                prevSenPresent[i] = s->present;
+                eventLog.add(s->name + (s->present ? " подключён" : " отключён"),
+                             sensorMgr.getT1(), sensorMgr.getT2(), sensorMgr.getT3(), sensorMgr.getDT());
+            }
+
+            if (s->error != prevSenError[i]) {
+                prevSenError[i] = s->error;
+                eventLog.add(s->name + String(s->error ? " ошибка" : " ошибка снята"),
+                             sensorMgr.getT1(), sensorMgr.getT2(), sensorMgr.getT3(), sensorMgr.getDT());
+            }
         }
 
-        const uint8_t curMask = s->alarmMask();
+        const uint8_t curMask = s->userAlarmMask();
         if (curMask != prevAlarmMask[i]) {
             if (prevAlarmMask[i] == 0 && curMask != 0) {
                 eventLog.add(s->name + " тревога сработала",

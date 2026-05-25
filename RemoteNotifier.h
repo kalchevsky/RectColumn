@@ -199,6 +199,7 @@ private:
     }
 
     static uint8_t _selectPrimaryAlarmBit(uint8_t bits) {
+        if (bits & SENSOR_LOST_ALARM_MASK) return SENSOR_LOST_ALARM_BIT;
         if (bits & (1u << 3)) return 3; // max2
         if (bits & (1u << 2)) return 2; // max1
         if (bits & (1u << 1)) return 1; // min2
@@ -235,10 +236,8 @@ private:
 
     String _alarmText(int si, uint8_t bitIdx) const {
         SensorBase* s = (_sm && si >= 0 && si < SEN_COUNT) ? _sm->s[si] : nullptr;
-        if (s && (!s->present || s->error)) {
-            const char* name = SensorManager::sensorName(si);
-            if (!s->present) return String("Нет датчика ") + (name ? name : "—");
-            return String("Ошибка датчика ") + (name ? name : "—");
+        if (s && bitIdx == SENSOR_LOST_ALARM_BIT && s->hasSensorLostAlarm()) {
+            return s->sensorLostNotice();
         }
         switch (si) {
             case SEN_C: {

@@ -43,16 +43,22 @@ public:
         sm.t1->value = val.T1err ? NAN : val.T1;
         sm.t1->error = val.T1err;
         sm.t1->present = !val.T1err;
+        sm.t1->sensorErrorLatched = val.T1err;
+        sm.t1->sensorErrorReason = val.T1err ? SENSOR_ERR_NO_RESPONSE : SENSOR_ERR_NONE;
         sm.t1->_lastPollMs = now;
 
         sm.t2->value = val.T2err ? NAN : val.T2;
         sm.t2->error = val.T2err;
         sm.t2->present = !val.T2err;
+        sm.t2->sensorErrorLatched = val.T2err;
+        sm.t2->sensorErrorReason = val.T2err ? SENSOR_ERR_NO_RESPONSE : SENSOR_ERR_NONE;
         sm.t2->_lastPollMs = now;
 
         sm.t3->value = val.T3err ? NAN : val.T3;
         sm.t3->error = val.T3err;
         sm.t3->present = !val.T3err;
+        sm.t3->sensorErrorLatched = val.T3err;
+        sm.t3->sensorErrorReason = val.T3err ? SENSOR_ERR_NO_RESPONSE : SENSOR_ERR_NONE;
         sm.t3->_lastPollMs = now;
 
         sm.dt->poll();
@@ -60,26 +66,36 @@ public:
         sm.p->value = val.P;
         sm.p->error = false;
         sm.p->present = true;
+        sm.p->sensorErrorLatched = false;
+        sm.p->sensorErrorReason = SENSOR_ERR_NONE;
         sm.p->_lastPollMs = now;
 
         sm.l->value = val.L ? 1.0f : 0.0f;
         sm.l->error = false;
         sm.l->present = true;
+        sm.l->sensorErrorLatched = false;
+        sm.l->sensorErrorReason = SENSOR_ERR_NONE;
         sm.l->_lastPollMs = now;
 
         sm.f->value = val.F ? 1.0f : 0.0f;
         sm.f->error = false;
         sm.f->present = true;
+        sm.f->sensorErrorLatched = false;
+        sm.f->sensorErrorReason = SENSOR_ERR_NONE;
         sm.f->_lastPollMs = now;
 
         sm.c->value = val.C;
         sm.c->error = false;
         sm.c->present = true;
+        sm.c->sensorErrorLatched = false;
+        sm.c->sensorErrorReason = SENSOR_ERR_NONE;
         sm.c->_lastPollMs = now;
 
         sm.v->value = val.V;
         sm.v->error = false;
         sm.v->present = true;
+        sm.v->sensorErrorLatched = false;
+        sm.v->sensorErrorReason = SENSOR_ERR_NONE;
         sm.v->_lastPollMs = now;
     }
 

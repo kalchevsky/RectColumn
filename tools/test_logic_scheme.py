@@ -1124,13 +1124,12 @@ class SourceGuardTests(unittest.TestCase):
         self.assertRegex(self.confirm_h, r"idx\s*==\s*1[^\n]+GPIO35_MODE\s*!=\s*GPIO35_MODE_WER_CH2")
         self.assertIn("PIN_V == PIN_WER_CH2", self.config_h)
 
-    def test_alarm_error_branch_is_before_nan_branch(self):
-        primary = self.sensors_h.find("primaryErrorAlarmIdx")
-        nan_branch = self.sensors_h.find("isnan(value)")
-        self.assertGreater(primary, -1)
-        self.assertGreater(nan_branch, -1)
-        self.assertLess(primary, nan_branch,
-                        "sensor error alarm must be handled before generic NAN clearing")
+    def test_sensor_lost_alarm_is_separate_from_user_alarm_slots(self):
+        self.assertIn("static constexpr uint8_t SENSOR_LOST_ALARM_MASK", self.sensors_h)
+        self.assertIn("uint8_t userAlarmMask() const", self.sensors_h)
+        self.assertIn("if (hasSensorLostAlarm()) mask |= SENSOR_LOST_ALARM_MASK;", self.sensors_h)
+        self.assertIn("} else if (_trackSensorLoss && sensorErrorLatched) {", self.sensors_h)
+        self.assertNotIn("primaryErrorAlarmIdx", self.sensors_h)
 
     def test_flow_loss_does_not_use_global_ch2_demand_interlock(self):
         self.assertNotIn("_flowDemandStartedMs", self.process_h)
@@ -1336,6 +1335,7 @@ class SourceGuardTests(unittest.TestCase):
         self.assertIn("resetAlarmRuntime();", virtual_poll)
         self.assertIn("resetAllControlRuntime();", virtual_poll)
         self.assertIn("_t1->enabled && _t2->enabled", virtual_poll)
+        self.assertIn("!_t1->sensorErrorLatched && !_t2->sensorErrorLatched", virtual_poll)
         self.assertIn("error = true;", virtual_poll)
 
     def test_manual_relay_button_holds_pending_until_terminal_state_and_uses_firmware_error_text(self):
