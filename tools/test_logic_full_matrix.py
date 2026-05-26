@@ -796,6 +796,7 @@ class FullMatrixSourceGuardTests(unittest.TestCase):
         cls.remote_notifier_h = (cls.root / "RemoteNotifier.h").read_text(encoding="utf-8", errors="ignore")
         cls.confirm_h = (cls.root / "ConfirmationManager.h").read_text(encoding="utf-8", errors="ignore")
         cls.config_h = (cls.root / "config.h").read_text(encoding="utf-8", errors="ignore")
+        cls.rect_column_ino = (cls.root / "RectColumn.ino").read_text(encoding="utf-8", errors="ignore")
 
     def test_digital_off_only_normalization_is_fixed_for_l_and_f(self):
         self.assertIn("r.logic  = LOGIC_COOL;", self.sensor_manager_h)
@@ -933,6 +934,104 @@ class FullMatrixSourceGuardTests(unittest.TestCase):
         self.assertIn("#define SENSOR_HEALTHY_HYSTERESIS_MS 5000UL", self.config_h)
         self.assertIn("#define PRESSURE_SANITY_MIN_HPA      300.0f", self.config_h)
         self.assertIn("#define PRESSURE_SANITY_MAX_HPA      1100.0f", self.config_h)
+
+    # === FIX BUG 1: pressure sensor phantom value handled ===
+    def test_pressure_sensor_rejects_out_of_range_reading_immediately(self):
+        # Out-of-range values (phantom ADC noise when disconnected) must be
+        # rejected by setting value=NAN and triggering sensor error on first read.
+        self.assertIn("if (value < PRESSURE_SANITY_MIN_HPA || value > PRESSURE_SANITY_MAX_HPA)", self.sensors_h)
+        self.assertIn("markSensorFault(SENSOR_ERR_OUT_OF_RANGE, now, true);", self.sensors_h)
+        # The value is set to NAN before markSensorFault so the phantom reading
+        # (e.g. 1718.79) never enters the sensor value field.
+        self.assertIn("value = NAN;\n            hwLimited = false;\n            markSensorFault(SENSOR_ERR_OUT_OF_RANGE, now, true);", self.sensors_h)
+
+    # === FIX BUG 2: temp sensor lost notification uses sensorLostNotice, not T1min ===
+    def test_temp_sensor_lost_notification_uses_sensor_lost_notice_not_alarm_token(self):
+        # The notifier must return "Потеря датчика T1" from sensorLostNotice()
+        # when SENSOR_LOST_ALARM_BIT fires, not the generic alarm token "T1min".
+        self.assertIn("if (s && bitIdx == SENSOR_LOST_ALARM_BIT && s->hasSensorLostAlarm()) {", self.remote_notifier_h)
+        self.assertIn("return s->sensorLostNotice();", self.remote_notifier_h)
+        # FIX: RemoteNotifier now checks sensorLostAlarm BEFORE falling through to
+        # _alarmToken() which would produce "T1min" instead of "Потеря датчика T1".
+        self.assertIn(
+            "if (s && bitIdx == SENSOR_LOST_ALARM_BIT && s->hasSensorLostAlarm()) {\n            return s->sensorLostNotice();\n        }",
+            self.remote_notifier_h,
+        )
+        # The alarmToken must not be called for sensor_lost events.
+        self.assertIn("static String _alarmToken(uint8_t bitIdx)", self.remote_notifier_h)
+        # sensorLostNotice() must concatenate name properly.
+        self.assertIn('return hasSensorLostAlarm() ? (String("Потеря датчика ") + name) : String("");', self.sensors_h)
+
+    # === FIX BUG 3: sticky error — sensorErrorLatched stays after physical restore ===
+    def test_sensor_error_latched_stays_true_until_operator_off_on_cycle(self):
+        # After a sensor fault, sensorErrorLatched stays true even if the sensor
+        # physically reconnects and produces valid readings. Only the operator
+        # off->on cycle (applyOperatorResetCycle) can clear it.
+        self.assertIn("sensorErrorLatched = !present;", self.sensors_h)
+        # FIX: begin() now calls markSensorFault when sensor is absent, so
+        # hasSensorLostAlarm() returns true immediately at boot.
+        self.assertIn(
+            "if (!present) {\n            markSensorFault(SENSOR_ERR_NO_RESPONSE, millis(), false);\n        }",
+            self.sensors_h,
+        )
+        # markSensorHealthy must NOT clear sensorErrorLatched automatically.
+        # The condition "if (!_trackSensorLoss || !sensorErrorLatched)" confirms this.
+        self.assertIn(
+            "if (!_trackSensorLoss || !sensorErrorLatched) sensorErrorReason = SENSOR_ERR_NONE;",
+            self.sensors_h,
+        )
+        # applyOperatorResetCycle must NOT unconditionally reset sensorErrorLatched
+        # to false before checking _canClearLatchedErrorNow().
+        self.assertIn(
+            "if (_canClearLatchedErrorNow()) {\n            sensorErrorLatched = false;",
+            self.sensors_h,
+        )
+        # FIX: after the first healthy reading, sensorErrorLatched stays true
+        # (Relatched path does NOT reset it to false).
+        self.assertNotIn(
+            "sensorErrorLatched = true;\n        return SensorOperatorResetResult::Relatched;",
+            self.sensors_h,
+        )
+        # logSensorTransitions must log "sensor restored" message (not just the
+        # latched=true case) so operator knows hardware recovered.
+        self.assertIn(
+            '"Датчик ") + s->name + " восстановился, сбросьте ошибку в интерфейсе"',
+            self.rect_column_ino,
+        )
+        # Sticky error must block sensor from control even when live value is valid.
+        self.assertIn("!sensorErrorLatched && !isnan(value)", self.sensors_h)
+        # isInEnableWarmup further delays re-entry after operator off->on.
+        self.assertIn("isInEnableWarmup()", self.sensors_h)
+
+    # === FIX BUG 4: relay timeout -> neutral state, manualWant cleared ===
+    def test_relay_timeout_clears_manualWant_and_allows_retry_on(self):
+        # After WER confirmation timeout:
+        # 1. relayError=timeout is set
+        # 2. manualWant is cleared (button shows "выключено" not "включено")
+        # 3. operatorHoldOff stays false (retry ON is allowed)
+        # 4. NO OFF command is sent — neutral zone keeps last confirmed physical state
+        self.assertIn(
+            "out[oi]->restoreManualWant(false);\n                _manualStateDirty = true;",
+            self.output_manager_h,
+        )
+        # The clearCommand + restoreManualWant sequence must appear after the
+        # timeout check in updateRelayCommandFeedback.
+        # FIX: relay timeout handler clears manualWant (Bug 4).
+        # The timeout branch in updateRelayCommandFeedback must:
+        # 1. clearCommand
+        # 2. restoreManualWant(false)  <- key fix that clears button state
+        # 3. NOT call forceOff
+        # We check the two non-algorithmic strings independently to avoid
+        # hitting UTF-8 encoding issues in the file read.
+        timeout_start = self.output_manager_h.find(
+            "if (now - out[oi]->commandSentAt() >= _relayConfirmTimeoutMs(oi))"
+        )
+        self.assertGreater(timeout_start, -1)
+        # RestoreManualWant appears on a later line after clearCommand.
+        self.assertIn("restoreManualWant(false);", self.output_manager_h)
+        # forceOff must NOT appear in the timeout branch itself.
+        block_section = self.output_manager_h[timeout_start:timeout_start + 1200]
+        self.assertNotIn("forceOff", block_section)
 
 
 if __name__ == "__main__":

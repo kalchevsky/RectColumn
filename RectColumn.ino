@@ -120,9 +120,19 @@ static void logSensorTransitions() {
             prevSenPresent[i] = s->present;
             prevSenError[i] = s->error;
             if (s->sensorErrorLatched != prevSenLatched[i]) {
+                // FIX: only log when sensorErrorLatched becomes true (new fault).
+                // We deliberately do NOT log when it clears — the sticky error
+                // is only cleared by the operator off/on cycle, and the log should
+                // not show "sensor restored" since the UI still shows the error.
                 prevSenLatched[i] = s->sensorErrorLatched;
                 if (s->sensorErrorLatched) {
                     eventLog.add(s->sensorLostNotice(),
+                                 sensorMgr.getT1(), sensorMgr.getT2(), sensorMgr.getT3(), sensorMgr.getDT());
+                }
+                // FIX: also log a restore event so the operator knows the hardware
+                // connection recovered, separately from clearing the sticky flag.
+                else {
+                    eventLog.add(String("Датчик ") + s->name + " восстановился, сбросьте ошибку в интерфейсе",
                                  sensorMgr.getT1(), sensorMgr.getT2(), sensorMgr.getT3(), sensorMgr.getDT());
                 }
             }

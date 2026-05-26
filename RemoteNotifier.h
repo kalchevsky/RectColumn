@@ -236,6 +236,11 @@ private:
 
     String _alarmText(int si, uint8_t bitIdx) const {
         SensorBase* s = (_sm && si >= 0 && si < SEN_COUNT) ? _sm->s[si] : nullptr;
+        // FIX: Priority check — sensor_lost must not fall through to generic alarm token.
+        // Previously T1min was reported instead of "Потеря датчика T1" because
+        // the SENSOR_LOST_ALARM_BIT → _alarmToken(0) path returned "min1", while
+        // _alarmToken fell through to the max1/min1 tokens for temperature sensors
+        // when hasSensorLostAlarm() was checked but the bit fell through to bitIdx=0.
         if (s && bitIdx == SENSOR_LOST_ALARM_BIT && s->hasSensorLostAlarm()) {
             return s->sensorLostNotice();
         }

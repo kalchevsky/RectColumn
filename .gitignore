@@ -13,6 +13,7 @@ arduino-cache-*/
 
 # Arduino CLI local config/cache if generated inside project
 .arduino15/
+.build-esp32/
 arduino-cli.yaml
 
 # PlatformIO, if ever used

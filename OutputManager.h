@@ -222,6 +222,17 @@ public:
 
             if (now - out[oi]->commandSentAt() >= _relayConfirmTimeoutMs(oi)) {
                 out[oi]->clearCommand();
+                // FIX: After timeout, the channel must enter a neutral state:
+                // - No OFF command should be sent (that is handled by the flowchart's
+                //   neutral zone).
+                // - manualWant must be cleared so the button shows neutral/false
+                //   on the manual-control page (not "включено" as it was before).
+                // - _operatorHoldOff stays false so the next ON retry is allowed.
+                // - _requestedOn falls to _actualOn via the neutral-zone logic
+                //   in applyResolvedHold, so the physical relay keeps its last
+                //   confirmed state while the next command can be retried.
+                out[oi]->restoreManualWant(false);
+                _manualStateDirty = true;
                 _lastCmdError[oi] = RELAY_CMDERR_TIMEOUT;
                 _lastCmdErrorMs[oi] = now;
                 _lastCmdDetail[oi] = "timeout";

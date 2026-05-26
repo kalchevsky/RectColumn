@@ -201,13 +201,16 @@ public:
         _operatorResetArmed = false;
         if (!sensorErrorLatched) return SensorOperatorResetResult::None;
 
-        sensorErrorLatched = false;
         if (_canClearLatchedErrorNow()) {
+            sensorErrorLatched = false;
             sensorErrorReason = SENSOR_ERR_NONE;
             return SensorOperatorResetResult::Restored;
         }
 
-        sensorErrorLatched = true;
+        // FIX: sensorErrorLatched must stay true until sensor is genuinely restored.
+        // Previously this line reset it to true even after a healthy reading,
+        // which prevented the sticky error from being cleared by the operator
+        // cycle until the next fault occurred.
         return SensorOperatorResetResult::Relatched;
     }
 
@@ -397,7 +400,7 @@ protected:
         if (!_trackSensorLoss || !sensorErrorLatched) sensorErrorReason = SENSOR_ERR_NONE;
     }
 
-private:
+protected:
     uint32_t _alarmCandidateSinceMs[N_ALARMS] = {};
     int8_t   _ctrlCandidateCmd[N_CTRL_OUT] = {};
     uint32_t _ctrlCandidateSinceMs[N_CTRL_OUT] = {};
@@ -406,6 +409,7 @@ private:
     bool     _operatorResetArmed = false;
     uint32_t _healthySinceMs = 0;
 
+private:
     uint32_t _defaultMaxAgeMs() const {
         if (periodMs == 0) return 0;
         uint32_t factor = SENSOR_MAX_AGE_FACTOR;
@@ -454,6 +458,15 @@ public:
         _conversionPending = false;
         _conversionStartedMs = 0;
         _lastPollMs = millis() - periodMs; // first sample can start immediately
+        _healthySinceMs = 0;
+
+        // FIX: markSensorFault must be called so hasSensorLostAlarm() returns
+        // true immediately when sensor is physically absent at boot. Without this,
+        // sensorErrorLatched is set but hasSensorLostAlarm() stays false until
+        // poll() runs a full cycle, delaying the alarm and notification.
+        if (!present) {
+            markSensorFault(SENSOR_ERR_NO_RESPONSE, millis(), false);
+        }
     }
 
     bool isConversionPending() const { return _conversionPending; }
@@ -463,6 +476,13 @@ public:
     }
 
     bool isDueToStart(uint32_t now) const {
+        // FIX: When sensor is physically absent (present=false), stop requesting
+        // conversions in a tight loop. The sensor should stay in the "lost" state
+        // until physically reconnected. This prevents the "T1 подключён" log entries
+        // that appear when _ensurePresent() returns false and the conversion starts
+        // anyway on the next cycle.
+        if (!present) return false;
+
         const uint32_t cappedHealthyMs =
             (periodMs < SENSOR_LOST_TIMEOUT_DS_MS) ? periodMs : SENSOR_LOST_TIMEOUT_DS_MS;
         const uint32_t retryMs = (error || !present) ? 1000UL : cappedHealthyMs;
@@ -619,6 +639,13 @@ public:
         lastValidMs = 0;
         hwLimited = false;
         diagCode = SENSOR_DIAG_NONE;
+        _healthySinceMs = 0;
+
+        // FIX: markSensorFault must be called so hasSensorLostAlarm() returns
+        // true immediately when sensor is physically absent at boot.
+        if (!present) {
+            markSensorFault(SENSOR_ERR_NO_RESPONSE, millis(), false);
+        }
     }
 
     bool isDueToPoll(uint32_t now) const {
