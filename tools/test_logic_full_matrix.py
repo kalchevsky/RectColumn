@@ -870,6 +870,9 @@ class FullMatrixSourceGuardTests(unittest.TestCase):
         self.assertIn("void _flushQueuedFailure()", self.remote_notifier_h)
         self.assertNotIn("self->_logSendFailure(err);", self.remote_notifier_h)
 
+    def test_state_api_keeps_active_alarm_reason_list(self):
+        self.assertIn("activeAlarmReasons", self.webapi_h)
+
     def test_level_and_pressure_alarms_do_not_add_channel_safety_forbids(self):
         self.assertNotIn("_om->setSafetyForbid(OUT_CH1, RULEIDX_SAFETY_LEVEL, true);", self.process_h)
         self.assertNotIn("_om->setSafetyForbid(OUT_CH2, RULEIDX_SAFETY_LEVEL, true);", self.process_h)

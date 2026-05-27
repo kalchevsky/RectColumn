@@ -1190,6 +1190,15 @@ class SourceGuardTests(unittest.TestCase):
         self.assertIn("Content-Disposition", self.webapi_h)
         self.assertIn("/api/v1/notify/status", self.webapi_h)
 
+    def test_active_alarm_reasons_are_exposed_to_home_ui(self):
+        self.assertIn('resp.createNestedArray("activeAlarmReasons")', self.webapi_h)
+        self.assertIn('root.createNestedArray("activeAlarmReasons")', self.webapi_h)
+        self.assertIn("function backendActiveAlarmLines()", self.app_js)
+        self.assertIn("function homeActiveAlarmBlockHtml()", self.app_js)
+        self.assertIn("Активные тревоги:", self.app_js)
+        self.assertIn("if (state.currentView === 'home') return '';", self.app_js)
+        self.assertIn("if (Array.isArray(res.activeAlarmReasons)) s.activeAlarmReasons = res.activeAlarmReasons.slice();", self.app_js)
+
     def test_output_manager_has_global_stop_short_circuit(self):
         self.assertIn("if (_mainStopLatched)", self.output_mgr_h)
         self.assertIn("_applyGlobalStop();", self.output_mgr_h)

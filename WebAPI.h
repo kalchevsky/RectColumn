@@ -289,7 +289,7 @@ private:
             if (acknowledgedCount > 0) {
                 _log->add("Оператор подтвердил тревоги", _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
             }
-            DynamicJsonDocument resp(448);
+            DynamicJsonDocument resp(768);
             resp["ok"] = true;
             resp["activeAlarmCount"] = activeBefore;
             resp["acknowledgedCount"] = acknowledgedCount;
@@ -300,6 +300,8 @@ private:
             resp["ch4Actual"] = _om->out[OUT_CH4]->actualOn();
             resp["ch5Actual"] = _om->out[OUT_CH5]->actualOn();
             resp["compatFallback"] = compatGet;
+            JsonArray activeAlarmReasons = resp.createNestedArray("activeAlarmReasons");
+            _buildActiveAlarmReasons(activeAlarmReasons, true);
             _sendDoc(req, 200, resp);
         };
 
@@ -1452,6 +1454,69 @@ private:
         }
     }
 
+    static void _addUniqueReason(JsonArray arr, const String& reason) {
+        if (reason.length() == 0) return;
+        for (JsonVariant value : arr) {
+            const char* existing = value.as<const char*>();
+            if (existing && reason.equals(existing)) return;
+        }
+        arr.add(reason);
+    }
+
+    static String _fixedAlarmLabel(uint8_t idx) {
+        switch (idx) {
+            case 0: return "Мин 1";
+            case 1: return "Мин 2";
+            case 2: return "Макс 1";
+            case 3: return "Макс 2";
+            default: return String("Уровень ") + String(idx + 1);
+        }
+    }
+
+    static String _alarmReasonSensorTitle(uint8_t sensorIdx) {
+        switch (sensorIdx) {
+            case SEN_P:  return "Давление";
+            case SEN_L:  return "Уровень";
+            case SEN_F:  return "Проток";
+            case SEN_C:  return "Ток нагрузки";
+            case SEN_V:  return "Напряжение нагрузки";
+            default:     return SensorManager::sensorName(sensorIdx);
+        }
+    }
+
+    static String _alarmReasonText(uint8_t sensorIdx, uint8_t alarmIdx) {
+        if (sensorIdx == SEN_L && alarmIdx == 0) return "Авария уровня: цепь L разомкнута";
+        if (sensorIdx == SEN_F && alarmIdx == 0) return "Авария потока: цепь F разомкнута / нет потока";
+        return _alarmReasonSensorTitle(sensorIdx) + " · " + _fixedAlarmLabel(alarmIdx);
+    }
+
+    void _buildActiveAlarmReasons(JsonArray arr, bool unackedOnly) const {
+        if (!_sm || !_om) return;
+        for (uint8_t si = 0; si < SEN_COUNT; si++) {
+            SensorBase* sensor = _sm->s[si];
+            if (!sensor || !sensor->enabled) continue;
+
+            const uint8_t activeMask = sensor->alarmMask();
+            const uint8_t relevantMask = unackedOnly
+                ? _om->unackedAlarmMaskFor(*_sm, si)
+                : activeMask;
+
+            if (relevantMask & SENSOR_LOST_ALARM_MASK) {
+                _addUniqueReason(arr, sensor->sensorLostNotice());
+            }
+
+            if (si == SEN_DT && sensor->error) {
+                _addUniqueReason(arr, "Ошибка dT: невозможно вычислить значение");
+            }
+
+            for (uint8_t ai = 0; ai < N_ALARMS; ai++) {
+                const uint8_t bit = (1u << ai);
+                if (!(relevantMask & bit)) continue;
+                _addUniqueReason(arr, _alarmReasonText(si, ai));
+            }
+        }
+    }
+
     String _relayCommandBlockReasonText(uint8_t outIdx, bool targetOn, const char* detail) const {
         if (!detail || !detail[0]) return "";
         if (strcmp(detail, "forbidden") == 0) {
@@ -1641,6 +1706,8 @@ private:
         root["stopLatched"] = _om->mainStopLatched();
         root["wifiWizardPending"] = _wifiWizardPending();
         root["notifyEnabled"] = (_notifier ? _notifier->enabled() : false);
+        JsonArray activeAlarmReasons = root.createNestedArray("activeAlarmReasons");
+        _buildActiveAlarmReasons(activeAlarmReasons, true);
 
         JsonArray sensors = root.createNestedArray("sensors");
         _buildSensors(sensors);

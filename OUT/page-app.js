@@ -309,9 +309,24 @@ function activeAlarmLineText(sensorId, idx){
   if (sensorId === 'L' || sensorId === 'F' || sensorId === 'C' || sensorId === 'V') return base;
   return base + ' · ' + fixedAlarmLabel(idx);
 }
+function backendActiveAlarmLines(){
+  var s = state.lastState || {};
+  var source = Array.isArray(s.activeAlarmReasons) ? s.activeAlarmReasons : [];
+  var seen = {};
+  var lines = [];
+  for (var i = 0; i < source.length; i++) {
+    var line = typeof source[i] === 'string' ? source[i].trim() : '';
+    if (!line || seen[line]) continue;
+    seen[line] = true;
+    lines.push(line);
+  }
+  return lines;
+}
 function collectUnackedAlarmLines(){
   var s = state.lastState || {};
   if (Number(s.unackedAlarmCount || 0) <= 0) return [];
+  var backendLines = backendActiveAlarmLines();
+  if (backendLines.length) return backendLines;
   var sensors = s.sensors || [];
   var explicitUnacked = false;
   for (var si = 0; si < sensors.length && !explicitUnacked; si++) {
@@ -353,6 +368,7 @@ function activeAlarmLinesForUi(){
   return (state.alarmLatchLines && state.alarmLatchLines.length) ? state.alarmLatchLines.slice() : [];
 }
 function activeAlarmOverlayHtml(){
+  if (state.currentView === 'home') return '';
   var lines = activeAlarmLinesForUi();
   if (!lines.length) return '';
   var html = '';
@@ -371,6 +387,17 @@ function updateActiveAlarmOverlay(){
   var html = activeAlarmOverlayHtml();
   if (!html) return;
   app.insertAdjacentHTML('beforeend', html);
+}
+function homeActiveAlarmBlockHtml(){
+  var lines = activeAlarmLinesForUi();
+  if (!lines.length) return '';
+  var html = '';
+  html += '<section class="active-alarm-card" aria-live="assertive">';
+  html += '<div class="active-alarm-title">Активные тревоги:</div>';
+  html += '<div class="active-alarm-lines">';
+  for (var i = 0; i < lines.length; i++) html += '<div class="active-alarm-line">' + esc(lines[i]) + '</div>';
+  html += '</div></section>';
+  return html;
 }
 
 function loadSchema(cb){
@@ -508,6 +535,7 @@ function mergeAckStateFromResponse(res){
   var s = state.lastState || {};
   s.activeAlarmCount = Number(res.activeAlarmCount || 0);
   s.unackedAlarmCount = Number(res.unackedAlarmCount || 0);
+  if (Array.isArray(res.activeAlarmReasons)) s.activeAlarmReasons = res.activeAlarmReasons.slice();
   if (typeof res.muted !== 'undefined') s.muted = !!res.muted;
   if (typeof res.ch4Enabled !== 'undefined') s.ch4Enabled = !!res.ch4Enabled;
   if (typeof res.ch5Enabled !== 'undefined') s.ch5Enabled = !!res.ch5Enabled;
@@ -2336,6 +2364,7 @@ function renderHome(){
     html.push('<a class="btn home-stack home-grid-btn" href="#/sensorAlarm/' + encodeURIComponent(id) + '">' + homeAlarmStack(sensor) + '</a>');
   }
   html.push('</section>');
+  html.push(homeActiveAlarmBlockHtml());
   html.push('</main>');
   html.push('<nav class="home-bottom">');
   html.push('<button type="button" id="home-ack-btn" class="home-action-btn' + (ackActive ? ' alert blink' : '') + (state.ackPending ? ' pending' : '') + '">Квитирование</button>');
@@ -2547,6 +2576,7 @@ function renderCurrentRoute(){
   var view = r[0];
   var arg = r[1] ? decodeURIComponent(r[1]) : '';
   var arg2 = r[2] ? decodeURIComponent(r[2]) : '';
+  state.currentView = view || '';
   if (view === 'home') return renderHome();
   if (view === 'menu') return renderMenu();
   if (view === 'sound') return renderSound();
