@@ -909,7 +909,11 @@ private:
         s->enabled = nextEnabled;
         // === PATCH WARMUP BEGIN ===
         if (!prevEnabled && nextEnabled) {
-            s->startEnableWarmup(3000);
+            uint32_t periodMs = s->getPollPeriodMs();
+            uint32_t warmupMs = 3000UL;
+            uint32_t fromPeriod = (2UL * periodMs) + 1000UL;
+            if (fromPeriod > warmupMs) warmupMs = fromPeriod;
+            s->startEnableWarmup(warmupMs);
             _om->clearSensorLostAcknowledgement((uint8_t)si);
             const SensorOperatorResetResult resetResult = s->applyOperatorResetCycle();
             logOperatorRestore = (resetResult == SensorOperatorResetResult::Restored);

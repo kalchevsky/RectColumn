@@ -104,6 +104,7 @@ public:
 
     bool hadPollSinceEnable() const { return _hadPollSinceEnable; }
     void markPollSuccess() { _hadPollSinceEnable = true; }
+    virtual uint32_t getPollPeriodMs() const { return 1000UL; }
     // === PATCH WARMUP END ===
 
     explicit SensorBase(const String& n, bool trackSensorLoss = false)
@@ -639,6 +640,8 @@ public:
     PressureSensor() : SensorBase("P", true) {
         periodMs = DEF_P_PERIOD_MS;
     }
+
+    uint32_t getPollPeriodMs() const override { return 10000UL; }
 
     void begin() override {
         Wire.begin(PIN_BMP_SDA, PIN_BMP_SCL);
