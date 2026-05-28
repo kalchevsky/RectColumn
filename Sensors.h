@@ -97,6 +97,8 @@ public:
 
     bool isInEnableWarmup() const {
         if (_enableWarmupUntilMs == 0) return false;
+        // Warmup завершается по первому успешному опросу или по таймауту.
+        if (_hadPollSinceEnable) return false;
         return (int32_t)(millis() - _enableWarmupUntilMs) < 0;
     }
 
