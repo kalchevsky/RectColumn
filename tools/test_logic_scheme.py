@@ -156,18 +156,40 @@ class Sensor:
     alarm_enabled: Tuple[bool, bool, bool, bool] = (False, False, False, False)
     alarm_threshold: Tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
     alarm_is_max: Tuple[bool, bool, bool, bool] = (True, True, True, True)
+    warmup_until_ms: int = 0
+    had_poll_since_enable: bool = True
 
-    def usable(self) -> bool:
-        return self.enabled and self.present and not self.error and not math.isnan(self.value)
+    def start_enable_warmup(self, duration_ms: int, *, now_ms: int = 0) -> None:
+        self.had_poll_since_enable = False
+        self.warmup_until_ms = now_ms + duration_ms
+
+    def clear_enable_warmup(self) -> None:
+        self.warmup_until_ms = 0
+
+    def is_in_enable_warmup(self, now_ms: int = 0) -> bool:
+        if self.warmup_until_ms == 0:
+            return False
+        if self.had_poll_since_enable:
+            return False
+        return now_ms < self.warmup_until_ms
+
+    def mark_poll_success(self) -> None:
+        self.had_poll_since_enable = True
+
+    def usable(self, now_ms: int = 0) -> bool:
+        return (self.enabled and self.present and not self.error and
+                not math.isnan(self.value) and not self.is_in_enable_warmup(now_ms))
 
     def effective_threshold(self, raw: float) -> float:
         if self.threshold_percent_input and 0.0 <= raw <= 100.0:
             return raw * 4095.0 / 100.0
         return raw
 
-    def alarm_mask(self) -> int:
+    def alarm_mask(self, now_ms: int = 0) -> int:
         # Target behavior: sensor loss/error/NAN triggers the first enabled alarm slot.
         if not self.enabled:
+            return 0
+        if self.is_in_enable_warmup(now_ms):
             return 0
         if self.error or not self.present or math.isnan(self.value):
             for i, enabled in enumerate(self.alarm_enabled):
@@ -184,11 +206,14 @@ class Sensor:
                 mask |= 1 << i
         return mask
 
-    def eval_ctrl(self, out_idx: int, control_gate: bool = True) -> int:
+    def eval_ctrl(self, out_idx: int, control_gate: bool = True, now_ms: int = 0) -> int:
         rule = self.ctrl.get(out_idx)
         if not rule or not rule.enabled or rule.out_idx != out_idx:
             return 0
         rule.validate()
+
+        if self.is_in_enable_warmup(now_ms):
+            return 0
 
         if not control_gate:
             return 0
@@ -196,7 +221,7 @@ class Sensor:
         if not self.enabled:
             return 0
 
-        if not self.usable():
+        if not self.usable(now_ms):
             if rule.fail_safe in (FailSafeMode.FORCE_OFF, FailSafeMode.LATCH_FAULT):
                 return -1
             if rule.fail_safe is FailSafeMode.FORCE_ON:
@@ -288,6 +313,10 @@ def eval_ctrl_with_runtime(sensor: Sensor, out_idx: int, runtime: ControlRuntime
         return 0
     rule.validate()
 
+    if sensor.is_in_enable_warmup(now_ms):
+        reset_control_runtime(runtime)
+        return 0
+
     if not control_gate:
         return 0
 
@@ -295,7 +324,7 @@ def eval_ctrl_with_runtime(sensor: Sensor, out_idx: int, runtime: ControlRuntime
         reset_control_runtime(runtime)
         return 0
 
-    if not sensor.usable():
+    if not sensor.usable(now_ms):
         reset_control_runtime(runtime)
         if rule.fail_safe in (FailSafeMode.FORCE_OFF, FailSafeMode.LATCH_FAULT):
             return -1
@@ -303,7 +332,7 @@ def eval_ctrl_with_runtime(sensor: Sensor, out_idx: int, runtime: ControlRuntime
             return 1
         return 0
 
-    cmd = sensor.eval_ctrl(out_idx, control_gate=True)
+    cmd = sensor.eval_ctrl(out_idx, control_gate=True, now_ms=now_ms)
     if cmd == 0:
         reset_control_runtime(runtime)
         return 0
@@ -390,11 +419,11 @@ class ConfirmationFSM:
         return True
 
 
-def aggregate_rules(sensors: Dict[int, Sensor], out_idx: int) -> Tuple[int, int]:
+def aggregate_rules(sensors: Dict[int, Sensor], out_idx: int, now_ms: int = 0) -> Tuple[int, int]:
     forbid = 0
     want = 0
     for sensor_idx, sensor in sensors.items():
-        cmd = sensor.eval_ctrl(out_idx)
+        cmd = sensor.eval_ctrl(out_idx, now_ms=now_ms)
         if cmd == -1:
             forbid |= 1 << sensor_idx
         elif cmd == 1:
@@ -454,7 +483,7 @@ def eval_ctrl_timed(sensor_idx: int, sensor: Sensor, out_idx: int,
     gate = True
     if sensor_idx == SEN_F:
         gate = linked_output_on if linked_output_on is not None else prev_output_on
-    cmd = sensor.eval_ctrl(out_idx, control_gate=gate)
+    cmd = sensor.eval_ctrl(out_idx, control_gate=gate, now_ms=elapsed_ms)
     rule = sensor.ctrl.get(out_idx)
     if not rule:
         return cmd

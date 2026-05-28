@@ -646,6 +646,107 @@ class MainOutputPriorityTests(unittest.TestCase):
         self._assert_enabled_sensor_error_blocks_manual_on(scheme.SEN_T3, scheme.OUT_CH3)
 
 
+class SensorEnableWarmupFunctionalTests(unittest.TestCase):
+    @staticmethod
+    def _t1_rule() -> scheme.CtrlRule:
+        return scheme.CtrlRule(
+            enabled=True,
+            out_idx=scheme.OUT_CH1,
+            logic=scheme.LOGIC_HEAT,
+            min_val=10.0,
+            max_val=30.0,
+            fail_safe=scheme.FailSafeMode.FORCE_OFF,
+        )
+
+    @classmethod
+    def _make_t1_sensor(cls, value: float, *, enabled: bool, present: bool = True,
+                        error: bool = False) -> scheme.Sensor:
+        sensor = scheme.Sensor(
+            enabled=enabled,
+            present=present,
+            error=error,
+            value=value,
+            alarm_enabled=(True, False, False, False),
+            alarm_threshold=(30.0, 0.0, 0.0, 0.0),
+            alarm_is_max=(True, True, True, True),
+        )
+        sensor.ctrl[scheme.OUT_CH1] = cls._t1_rule()
+        return sensor
+
+    def test_enabling_sensor_with_normal_value_keeps_relay_state_during_warmup(self):
+        sensor = self._make_t1_sensor(22.0, enabled=False)
+        output = HoldOutputModel(actual_on=True, requested_on=True)
+        warmup_ms = max(3000, 2 * 1000 + 1000)
+
+        sensor.enabled = True
+        sensor.start_enable_warmup(warmup_ms, now_ms=0)
+
+        forbid, want = scheme.aggregate_rules_timed(
+            {scheme.SEN_T1: sensor},
+            scheme.OUT_CH1,
+            1000,
+        )
+
+        self.assertTrue(sensor.is_in_enable_warmup(1000))
+        self.assertEqual(sensor.alarm_mask(1000), 0)
+        self.assertFalse(sensor.error)
+        self.assertEqual((forbid, want), (0, 0))
+        self.assertTrue(output.apply_resolved_hold(forbid, want))
+
+    def test_first_successful_poll_ends_warmup_and_only_then_triggers_alarm(self):
+        sensor = self._make_t1_sensor(35.0, enabled=False)
+        output = HoldOutputModel(actual_on=True, requested_on=True)
+        warmup_ms = max(3000, 2 * 1000 + 1000)
+
+        sensor.enabled = True
+        sensor.start_enable_warmup(warmup_ms, now_ms=0)
+
+        early_forbid, early_want = scheme.aggregate_rules_timed(
+            {scheme.SEN_T1: sensor},
+            scheme.OUT_CH1,
+            1000,
+        )
+        self.assertTrue(sensor.is_in_enable_warmup(1000))
+        self.assertEqual(sensor.alarm_mask(1000), 0)
+        self.assertEqual((early_forbid, early_want), (0, 0))
+        self.assertTrue(output.apply_resolved_hold(early_forbid, early_want))
+
+        sensor.mark_poll_success()
+
+        final_forbid, final_want = scheme.aggregate_rules_timed(
+            {scheme.SEN_T1: sensor},
+            scheme.OUT_CH1,
+            1001,
+        )
+        self.assertFalse(sensor.is_in_enable_warmup(1001))
+        self.assertEqual(sensor.alarm_mask(1001), 0b0001)
+        self.assertEqual(final_forbid, 1 << scheme.SEN_T1)
+        self.assertEqual(final_want, 0)
+        self.assertFalse(output.apply_resolved_hold(final_forbid, final_want))
+
+    def test_warmup_timeout_without_poll_marks_sensor_invalid_for_main_output(self):
+        sensor = self._make_t1_sensor(math.nan, enabled=False, present=False)
+        output = HoldOutputModel(actual_on=True, requested_on=True)
+        warmup_ms = max(3000, 2 * 1000 + 1000)
+
+        sensor.enabled = True
+        sensor.start_enable_warmup(warmup_ms, now_ms=0)
+
+        after_timeout_ms = warmup_ms + 1
+        forbid, want = scheme.aggregate_rules_timed(
+            {scheme.SEN_T1: sensor},
+            scheme.OUT_CH1,
+            after_timeout_ms,
+        )
+
+        self.assertFalse(sensor.is_in_enable_warmup(after_timeout_ms))
+        self.assertFalse(sensor.usable(after_timeout_ms))
+        self.assertEqual(sensor.alarm_mask(after_timeout_ms), 0b0001)
+        self.assertEqual(forbid, 1 << scheme.SEN_T1)
+        self.assertEqual(want, 0)
+        self.assertFalse(output.apply_resolved_hold(forbid, want))
+
+
 class StopAndIsolationTests(unittest.TestCase):
     def test_global_stop_turns_off_only_main_outputs_and_clears_main_masks(self):
         ctrl = StopControllerModel()
