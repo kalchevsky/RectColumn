@@ -658,6 +658,101 @@ class MainOutputPriorityTests(unittest.TestCase):
         self._assert_enabled_sensor_error_blocks_manual_on(scheme.SEN_T3, scheme.OUT_CH3)
 
 
+class PressureAlarmIsolationTests(unittest.TestCase):
+    @staticmethod
+    def _manual_on_result(forbid_mask: int = 0, want_mask: int = 0) -> tuple[bool, HoldOutputModel]:
+        out = HoldOutputModel(actual_on=False, requested_on=False)
+        out.apply_resolved_hold(forbid_mask, want_mask)
+        return out.set_manual_hold(True), out
+
+    @staticmethod
+    def _pressure_control_sensor(*, high_pressure: bool) -> scheme.Sensor:
+        sensor = scheme.Sensor(enabled=True, present=True, error=False,
+                               value=120.0 if high_pressure else 90.0)
+        sensor.ctrl[scheme.OUT_CH1] = scheme.CtrlRule(
+            enabled=True,
+            out_idx=scheme.OUT_CH1,
+            logic=scheme.LOGIC_HEAT,
+            min_val=20.0,
+            max_val=100.0,
+            fail_safe=scheme.FailSafeMode.FORCE_OFF,
+        )
+        return sensor
+
+    def test_manual_on_with_pressure_alarm_only_is_allowed(self):
+        for acked in (False, True):
+            with self.subTest(acked=acked):
+                accepted, out = self._manual_on_result(0, 0)
+                self.assertTrue(accepted)
+                self.assertTrue(out.actual_on)
+
+    def test_manual_on_with_pressure_in_normal_state_is_allowed(self):
+        accepted, out = self._manual_on_result(0, 0)
+        self.assertTrue(accepted)
+        self.assertTrue(out.actual_on)
+
+    def test_manual_on_matrix_treats_pressure_alarm_as_neutral_but_blocks_stop_level_and_linked_flow(self):
+        for pressure_alarm in (False, True):
+            for level_fault in (False, True):
+                for flow_fault in (False, True):
+                    for stop_active in (False, True):
+                        with self.subTest(
+                            pressure_alarm=pressure_alarm,
+                            level_fault=level_fault,
+                            flow_fault=flow_fault,
+                            stop_active=stop_active,
+                        ):
+                            forbid = 0
+                            want = 0
+
+                            if level_fault:
+                                level = scheme.build_control_sensor(
+                                    scheme.SEN_L,
+                                    enabled_channels=(scheme.OUT_CH1,),
+                                    fault=True,
+                                )
+                                lvl_forbid, lvl_want = scheme.aggregate_rules_timed(
+                                    {scheme.SEN_L: level},
+                                    scheme.OUT_CH1,
+                                    scheme.control_delay_ms(scheme.SEN_L),
+                                )
+                                forbid |= lvl_forbid
+                                want |= lvl_want
+
+                            if flow_fault:
+                                flow = scheme.build_control_sensor(
+                                    scheme.SEN_F,
+                                    enabled_channels=(scheme.OUT_CH1,),
+                                    fault=True,
+                                )
+                                flow_forbid, flow_want = scheme.aggregate_rules_timed(
+                                    {scheme.SEN_F: flow},
+                                    scheme.OUT_CH1,
+                                    scheme.control_delay_ms(scheme.SEN_F),
+                                    linked_output_on=True,
+                                )
+                                forbid |= flow_forbid
+                                want |= flow_want
+
+                            if stop_active:
+                                forbid |= (1 << scheme.SAFETY_STOP)
+
+                            accepted, out = self._manual_on_result(forbid, want)
+                            expected_allowed = not (level_fault or flow_fault or stop_active)
+                            self.assertEqual(accepted, expected_allowed)
+                            self.assertEqual(out.actual_on, expected_allowed)
+
+    def test_explicit_pressure_control_rule_can_block_manual_on(self):
+        pressure = self._pressure_control_sensor(high_pressure=True)
+        forbid, want = scheme.aggregate_rules({scheme.SEN_P: pressure}, scheme.OUT_CH1)
+        self.assertEqual(forbid, 1 << scheme.SEN_P)
+        self.assertEqual(want, 0)
+
+        accepted, out = self._manual_on_result(forbid, want)
+        self.assertFalse(accepted)
+        self.assertFalse(out.actual_on)
+
+
 class SensorEnableWarmupFunctionalTests(unittest.TestCase):
     @staticmethod
     def _t1_rule() -> scheme.CtrlRule:
@@ -1088,6 +1183,9 @@ class FullMatrixSourceGuardTests(unittest.TestCase):
 
     def test_pressure_sensor_fault_is_neutral_for_output_manager(self):
         self.assertIn("bool invalidMeansOff = (sensorIdx != SEN_P);", self.output_manager_h)
+        self.assertIn('case SEN_P:  return "управление по давлению P";', self.output_manager_h)
+        self.assertIn('case SEN_P:  return "управление по давлению P";', self.webapi_h)
+        self.assertIn('if (mask & (1u << RULEIDX_SAFETY_PRESSURE)) _appendHumanReason(text, "авария давления");', self.webapi_h)
 
     # === FIX BUG 2: temp sensor lost notification uses sensorLostNotice, not T1min ===
     def test_temp_sensor_lost_notification_uses_sensor_lost_notice_not_alarm_token(self):

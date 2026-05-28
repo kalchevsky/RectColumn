@@ -1414,7 +1414,7 @@ private:
             case SEN_T1: return "датчик T1";
             case SEN_T2: return "датчик T2";
             case SEN_T3: return "датчик T3";
-            case SEN_P:  return "датчик давления";
+            case SEN_P:  return "управление по давлению P";
             case SEN_L:  return "датчик уровня";
             case SEN_F:
                 if (sensor && sensor->enabled && sensor->present && !sensor->error &&
