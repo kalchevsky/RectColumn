@@ -709,7 +709,7 @@ function humanSensorValue(s, blankWhenDisabled){
   if (s.value == null) return '—';
   if (s.id === 'L') return sensorToggleAlarmTriggered(s) ? 'MAX!' : 'OK';
   if (s.id === 'F') return flowAlarmVisible(s) ? 'Нет протока!' : 'OK';
-  if (s.id === 'P') return formatValueWithUnit(s.value, 'hPa', 1);
+  if (s.id === 'P') return formatValueWithUnit(s.value, 'гПа', 1);
   if (s.id === 'T1' || s.id === 'T2' || s.id === 'T3' || s.id === 'dT') return formatValueWithUnit(s.value, '°C', 1);
   return String(Math.round(Number(s.value)));
 }

@@ -69,7 +69,7 @@ private:
                 break;
             case SEN_P:
                 Serial.print(s->value, 1);
-                Serial.print("hPa");
+                Serial.print("гПа");
                 break;
             default:
                 Serial.print(s->value, 0);

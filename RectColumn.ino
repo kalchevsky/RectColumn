@@ -102,6 +102,31 @@ static void syncCtrlLogicFromOutputModes() {
     sensorMgr.normalizeSchemeControlRules();
 }
 
+static String formatFixedNumber(float value, uint8_t decimals = 1) {
+    if (!isfinite(value)) return String("—");
+    char buf[32];
+    dtostrf(value, 0, decimals, buf);
+    String out(buf);
+    out.trim();
+    return out;
+}
+
+static const char* pressureAlarmLabel(uint8_t bitIdx) {
+    return bitIdx >= 2 ? "ALmax" : "ALmin";
+}
+
+static uint8_t selectPrimaryUserAlarmBit(uint8_t bits) {
+    if (bits & (1u << 3)) return 3;
+    if (bits & (1u << 2)) return 2;
+    if (bits & (1u << 1)) return 1;
+    return 0;
+}
+
+static String pressureAlarmLogText(const SensorBase* s, uint8_t alarmBit) {
+    const float thr = (s && alarmBit < N_ALARMS) ? s->alarm[alarmBit].threshold : NAN;
+    return String("P ") + pressureAlarmLabel(alarmBit) + " " + formatFixedNumber(thr, 1) + " гПа";
+}
+
 static void initPrevState() {
     for (int i = 0; i < OUT_COUNT; i++) prevOutState[i] = outputMgr.out[i]->isOn();
     for (int i = 0; i < SEN_COUNT; i++) {
@@ -146,7 +171,11 @@ static void logSensorTransitions() {
 
         const uint8_t curMask = s->userAlarmMask();
         if (curMask != prevAlarmMask[i]) {
-            if (prevAlarmMask[i] == 0 && curMask != 0) {
+            if (i == SEN_P && curMask != 0) {
+                const uint8_t pressureBit = selectPrimaryUserAlarmBit(curMask);
+                eventLog.add(pressureAlarmLogText(s, pressureBit),
+                             sensorMgr.getT1(), sensorMgr.getT2(), sensorMgr.getT3(), sensorMgr.getDT());
+            } else if (prevAlarmMask[i] == 0 && curMask != 0) {
                 eventLog.add(s->name + " тревога сработала",
                              sensorMgr.getT1(), sensorMgr.getT2(), sensorMgr.getT3(), sensorMgr.getDT());
             } else if (prevAlarmMask[i] != 0 && curMask == 0) {

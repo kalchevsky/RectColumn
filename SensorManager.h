@@ -223,7 +223,7 @@ public:
     }
 
     static const char* sensorUnit(int idx) {
-        static const char* units[SEN_COUNT] = {"C","C","C","C","hPa","","","",""};
+        static const char* units[SEN_COUNT] = {"C","C","C","C","гПа","","","",""};
         return (idx >= 0 && idx < SEN_COUNT) ? units[idx] : "";
     }
 

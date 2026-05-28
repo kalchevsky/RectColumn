@@ -1176,7 +1176,7 @@ class FullMatrixSourceGuardTests(unittest.TestCase):
         self.assertIn("if (rawPressureHpa < PRESSURE_SANITY_MIN_HPA || rawPressureHpa > PRESSURE_SANITY_MAX_HPA)", self.sensors_h)
         self.assertIn("_logOutOfRange(rawPressureHpa, i2cCode);", self.sensors_h)
         self.assertIn("markSensorFault(SENSOR_ERR_OUT_OF_RANGE, now, true);", self.sensors_h)
-        self.assertIn('Serial.printf("[BMP180] Давление вне диапазона: %.2f гПа (i2c=%u)\\n"', self.sensors_h)
+        self.assertIn('Serial.printf("[BMP180] Давление вне диапазона: %.1f гПа (i2c=%u)\\n"', self.sensors_h)
         self.assertIn('Serial.printf("[BMP180] Датчик не отвечает по I2C: code=%u addr=0x%02X\\n"', self.sensors_h)
         self.assertIn("markSensorFault(SENSOR_ERR_COMM, now, false);", self.sensors_h)
         self.assertIn("markSensorFault(SENSOR_ERR_COMM, now, true);", self.sensors_h)
@@ -1186,6 +1186,13 @@ class FullMatrixSourceGuardTests(unittest.TestCase):
         self.assertIn('case SEN_P:  return "управление по давлению P";', self.output_manager_h)
         self.assertIn('case SEN_P:  return "управление по давлению P";', self.webapi_h)
         self.assertIn('if (mask & (1u << RULEIDX_SAFETY_PRESSURE)) _appendHumanReason(text, "авария давления");', self.webapi_h)
+
+    def test_pressure_alarm_texts_use_gpa_and_fixed_single_decimal(self):
+        self.assertIn('return bitIdx >= 2 ? "ALmax" : "ALmin";', self.remote_notifier_h)
+        self.assertIn('return String("Давление ") + _pressureAlarmToken(bitIdx) + " (" + _formatFixedNumber(thr, 1) + " гПа)";', self.remote_notifier_h)
+        self.assertIn('return String("Давление ") + _pressureAlarmLabel(alarmIdx) +', self.webapi_h)
+        self.assertIn('" (" + _formatFixedNumber(threshold, 1) + " гПа)"', self.webapi_h)
+        self.assertIn('return String("P ") + pressureAlarmLabel(alarmBit) + " " + formatFixedNumber(thr, 1) + " гПа";', self.rect_column_ino)
 
     # === FIX BUG 2: temp sensor lost notification uses sensorLostNotice, not T1min ===
     def test_temp_sensor_lost_notification_uses_sensor_lost_notice_not_alarm_token(self):

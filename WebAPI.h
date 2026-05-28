@@ -1477,6 +1477,24 @@ private:
         }
     }
 
+    static const char* _pressureAlarmLabel(uint8_t idx) {
+        return idx >= 2 ? "ALmax" : "ALmin";
+    }
+
+    static String _formatFixedNumber(float value, uint8_t decimals = 1) {
+        if (!isfinite(value)) return String("—");
+        char buf[32];
+        dtostrf(value, 0, decimals, buf);
+        String out(buf);
+        out.trim();
+        return out;
+    }
+
+    static String _pressureAlarmText(float threshold, uint8_t alarmIdx) {
+        return String("Давление ") + _pressureAlarmLabel(alarmIdx) +
+               " (" + _formatFixedNumber(threshold, 1) + " гПа)";
+    }
+
     static String _alarmReasonSensorTitle(uint8_t sensorIdx) {
         switch (sensorIdx) {
             case SEN_P:  return "Давление";
@@ -1516,6 +1534,11 @@ private:
             for (uint8_t ai = 0; ai < N_ALARMS; ai++) {
                 const uint8_t bit = (1u << ai);
                 if (!(relevantMask & bit)) continue;
+                if (si == SEN_P) {
+                    const float thr = sensor->alarm[ai].threshold;
+                    _addUniqueReason(arr, _pressureAlarmText(thr, ai));
+                    continue;
+                }
                 _addUniqueReason(arr, _alarmReasonText(si, ai));
             }
         }

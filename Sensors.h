@@ -747,7 +747,7 @@ private:
     }
 
     void _logOutOfRange(float rawPressureHpa, uint8_t i2cCode) const {
-        Serial.printf("[BMP180] Давление вне диапазона: %.2f гПа (i2c=%u)\n",
+        Serial.printf("[BMP180] Давление вне диапазона: %.1f гПа (i2c=%u)\n",
                       rawPressureHpa, (unsigned)i2cCode);
     }
 };

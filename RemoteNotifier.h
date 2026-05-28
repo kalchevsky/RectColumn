@@ -218,6 +218,19 @@ private:
         return out;
     }
 
+    static String _formatFixedNumber(float value, uint8_t decimals = 1) {
+        if (!isfinite(value)) return String("—");
+        char buf[32];
+        dtostrf(value, 0, decimals, buf);
+        String out(buf);
+        out.trim();
+        return out;
+    }
+
+    static const char* _pressureAlarmToken(uint8_t bitIdx) {
+        return bitIdx >= 2 ? "ALmax" : "ALmin";
+    }
+
     static String _formatPercentFromRaw(float raw) {
         if (!isfinite(raw)) return String("—");
         float pct = raw * 100.0f / 4095.0f;
@@ -255,7 +268,7 @@ private:
                 return "Уровень max";
             case SEN_P: {
                 const float thr = (s && bitIdx < N_ALARMS) ? s->alarm[bitIdx].threshold : NAN;
-                return String("Давление ") + _alarmToken(bitIdx) + " (" + _formatRuNumber(thr, 1) + " гПа)";
+                return String("Давление ") + _pressureAlarmToken(bitIdx) + " (" + _formatFixedNumber(thr, 1) + " гПа)";
             }
             case SEN_T1:
             case SEN_T2:

@@ -1111,6 +1111,7 @@ class SourceGuardTests(unittest.TestCase):
         cls.webapi_h = (cls.root / "WebAPI.h").read_text(encoding="utf-8", errors="ignore")
         cls.wifi_mgr_h = (cls.root / "WiFiMgr.h").read_text(encoding="utf-8", errors="ignore")
         cls.remote_notifier_h = (cls.root / "RemoteNotifier.h").read_text(encoding="utf-8", errors="ignore")
+        cls.serial_debug_h = (cls.root / "SerialDebugReporter.h").read_text(encoding="utf-8", errors="ignore")
         cls.ack_button_h = (cls.root / "AckButton.h").read_text(encoding="utf-8", errors="ignore")
         cls.main_ino = (cls.root / "RectColumn.ino").read_text(encoding="utf-8", errors="ignore")
         cls.partitions_csv = (cls.root / "partitions.csv").read_text(encoding="utf-8", errors="ignore")
@@ -1230,6 +1231,13 @@ class SourceGuardTests(unittest.TestCase):
         self.assertIn("Активные тревоги:", self.app_js)
         self.assertIn("if (state.currentView === 'home') return '';", self.app_js)
         self.assertIn("if (Array.isArray(res.activeAlarmReasons)) s.activeAlarmReasons = res.activeAlarmReasons.slice();", self.app_js)
+
+    def test_pressure_units_are_gpa_in_ui_api_and_serial(self):
+        self.assertIn('static const char* units[SEN_COUNT] = {"C","C","C","C","гПа","","","",""};', self.sensor_manager_h)
+        self.assertIn("if (s.id === 'P') return formatValueWithUnit(s.value, 'гПа', 1);", self.app_js)
+        self.assertIn("unit: 'гПа'", self.emu_panel)
+        self.assertIn("if (sensor.id === 'P') return Number(sensor.value).toFixed(1) + ' гПа';", self.emu_panel)
+        self.assertIn('Serial.print("гПа");', self.serial_debug_h)
 
     def test_output_manager_has_global_stop_short_circuit(self):
         self.assertIn("if (_mainStopLatched)", self.output_mgr_h)
