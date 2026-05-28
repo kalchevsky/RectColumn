@@ -548,6 +548,10 @@ private:
     {
         SensorBase* sen = sm.s[sensorIdx];
         if (!sen) return 0;
+        if (!sen->enabled || sen->isInEnableWarmup()) {
+            sen->resetControlRuntime(outIdx);
+            return 0;
+        }
 
         bool invalidMeansOff = true;
         bool controlGate = true;
