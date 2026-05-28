@@ -995,11 +995,16 @@ class FullMatrixSourceGuardTests(unittest.TestCase):
             "sensorErrorLatched = true;\n        return SensorOperatorResetResult::Relatched;",
             self.sensors_h,
         )
-        # logSensorTransitions must log "sensor restored" message (not just the
-        # latched=true case) so operator knows hardware recovered.
-        self.assertIn(
+        # ERR-01: while sticky error is latched, physical recovery must NOT
+        # write a misleading "restored" entry to the web log.
+        self.assertNotIn(
             '"Датчик ") + s->name + " восстановился, сбросьте ошибку в интерфейсе"',
             self.rect_column_ino,
+        )
+        # Operator off->on restore logging remains in WebAPI and must stay.
+        self.assertIn(
+            '_log->add("Датчик " + s->name + " восстановлен оператором",',
+            self.webapi_h,
         )
         # Sticky error must block sensor from control even when live value is valid.
         self.assertIn("!sensorErrorLatched && !isnan(value)", self.sensors_h)

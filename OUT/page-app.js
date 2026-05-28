@@ -84,6 +84,7 @@ var state = {
   connectionLastOkMs: 0,
   connectionLastError: '',
   homeScrollY: 0,
+  homeTopBlockKey: '',
   notificationsCache: null,
   manualFeedback: {},
   manualPendingByCh: {},
@@ -2345,10 +2346,17 @@ function renderHome(){
   var themeCls = state.theme === 'dark' ? 'tpl-home-theme-dark' : 'tpl-home-theme-light';
   var ackActive = isAudibleAlarmActive();
   var stopActive = !!(state.lastState && state.lastState.stopLatched);
+  var alarmBlockHtml = homeActiveAlarmBlockHtml();
+  var homeTopBlockKey = (stopActive ? 'stop' : '') + '|' + alarmBlockHtml;
+  if (state.homeTopBlockKey !== homeTopBlockKey) {
+    state.homeTopBlockKey = homeTopBlockKey;
+    state.homeScrollY = 0;
+  }
   html.push('<div class="tpl-screen home-fixed-layout ' + themeCls + '"><div class="phone tpl-home-main">');
   html.push(tplHeader({home:true}));
   html.push('<main id="home-scroll" class="content home-content">');
   if (stopActive) html.push('<section class="hero">STOP активен: CH1–CH3 выключены, автоматика заблокирована до отмены стопа.</section>');
+  html.push(alarmBlockHtml);
   html.push('<section class="sensor-list compact home-grid">');
   for (var i = 0; i < tplHomeOrder.length; i++) {
     var id = tplHomeOrder[i];
@@ -2364,7 +2372,6 @@ function renderHome(){
     html.push('<a class="btn home-stack home-grid-btn" href="#/sensorAlarm/' + encodeURIComponent(id) + '">' + homeAlarmStack(sensor) + '</a>');
   }
   html.push('</section>');
-  html.push(homeActiveAlarmBlockHtml());
   html.push('</main>');
   html.push('<nav class="home-bottom">');
   html.push('<button type="button" id="home-ack-btn" class="home-action-btn' + (ackActive ? ' alert blink' : '') + (state.ackPending ? ' pending' : '') + '">Квитирование</button>');

@@ -119,11 +119,11 @@ private:
         });
 
         _server.on("/app.css", HTTP_GET, [this](AsyncWebServerRequest* req) {
-            _sendGzip(req, "text/css; charset=utf-8", PAGE_APP_CSS_GZ, PAGE_APP_CSS_GZ_LEN, "max-age=86400, immutable");
+            _sendGzip(req, "text/css; charset=utf-8", PAGE_APP_CSS_GZ, PAGE_APP_CSS_GZ_LEN, "no-cache, no-store, must-revalidate");
         });
 
         _server.on("/app.js", HTTP_GET, [this](AsyncWebServerRequest* req) {
-            _sendGzip(req, "application/javascript; charset=utf-8", PAGE_APP_JS_GZ, PAGE_APP_JS_GZ_LEN, "max-age=86400, immutable");
+            _sendGzip(req, "application/javascript; charset=utf-8", PAGE_APP_JS_GZ, PAGE_APP_JS_GZ_LEN, "no-cache, no-store, must-revalidate");
         });
     }
 
