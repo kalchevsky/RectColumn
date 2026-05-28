@@ -85,6 +85,7 @@ public:
     uint32_t _enableWarmupUntilMs = 0;
 
     void startEnableWarmup(uint32_t durationMs) {
+        _hadPollSinceEnable = false;
         uint32_t target = millis() + durationMs;
         if (target == 0) target = 1;
         _enableWarmupUntilMs = target;
@@ -98,6 +99,9 @@ public:
         if (_enableWarmupUntilMs == 0) return false;
         return (int32_t)(millis() - _enableWarmupUntilMs) < 0;
     }
+
+    bool hadPollSinceEnable() const { return _hadPollSinceEnable; }
+    void markPollSuccess() { _hadPollSinceEnable = true; }
     // === PATCH WARMUP END ===
 
     explicit SensorBase(const String& n, bool trackSensorLoss = false)
@@ -410,6 +414,8 @@ protected:
     uint32_t _healthySinceMs = 0;
 
 private:
+    bool _hadPollSinceEnable = false;
+
     uint32_t _defaultMaxAgeMs() const {
         if (periodMs == 0) return 0;
         uint32_t factor = SENSOR_MAX_AGE_FACTOR;
@@ -542,6 +548,7 @@ public:
         lastValidMs = now;
         hwLimited = false;
         markSensorHealthy(now, true);
+        markPollSuccess();
         return true;
     }
 
@@ -610,6 +617,7 @@ public:
             value = _t2->value - _t1->value;
             lastValidMs = _lastPollMs;
             error = false;
+            markPollSuccess();
         } else {
             value = NAN;
             error = true;
@@ -685,6 +693,7 @@ public:
         lastValidMs = _lastPollMs;
         hwLimited = false;
         markSensorHealthy(now, true);
+        markPollSuccess();
     }
 
 private:
@@ -799,6 +808,7 @@ public:
         error = false;
         hwLimited = false;
         diagCode = SENSOR_DIAG_NONE;
+        markPollSuccess();
     }
 
 private:
