@@ -1179,7 +1179,10 @@ class SourceGuardTests(unittest.TestCase):
         self.assertIn("void clearEnableWarmup()", self.sensors_h)
         self.assertIn("bool isInEnableWarmup() const", self.sensors_h)
         self.assertIn("if (isInEnableWarmup()) {", self.sensors_h)
-        self.assertIn("s->startEnableWarmup(3000);", self.webapi_h)
+        self.assertIn("getPollPeriodMs()", self.webapi_h)
+        self.assertIn("s->startEnableWarmup(", self.webapi_h)
+        self.assertIn("2UL * periodMs", self.webapi_h)
+        self.assertIn("3000UL", self.webapi_h)
         self.assertIn("s->clearEnableWarmup();", self.webapi_h)
         self.assertIn("so[\"warmup\"] = s->isInEnableWarmup();", self.webapi_h)
 

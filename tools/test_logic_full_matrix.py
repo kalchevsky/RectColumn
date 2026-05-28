@@ -897,7 +897,10 @@ class FullMatrixSourceGuardTests(unittest.TestCase):
         self.assertIn("notify[\"droppedCount\"]", self.webapi_h)
 
     def test_sensor_enable_warmup_and_ntfy_redirect_guard_are_present(self):
-        self.assertIn("startEnableWarmup(3000);", self.webapi_h)
+        self.assertIn("getPollPeriodMs()", self.webapi_h)
+        self.assertIn("startEnableWarmup(", self.webapi_h)
+        self.assertIn("2UL * periodMs", self.webapi_h)
+        self.assertIn("3000UL", self.webapi_h)
         self.assertIn("so[\"warmup\"] = s->isInEnableWarmup();", self.webapi_h)
         self.assertIn("if (isInEnableWarmup()) {", self.sensors_h)
         self.assertIn("sensorErrorLatched", self.webapi_h)
