@@ -34,6 +34,7 @@ static constexpr uint8_t SENSOR_LOST_ALARM_MASK = (1u << SENSOR_LOST_ALARM_BIT);
 enum SensorErrorReason : uint8_t {
     SENSOR_ERR_NONE = 0,
     SENSOR_ERR_NO_RESPONSE,
+    SENSOR_ERR_COMM,
     SENSOR_ERR_OUT_OF_RANGE,
     SENSOR_ERR_NAN,
     SENSOR_ERR_TIMEOUT,
@@ -433,6 +434,7 @@ private:
     static const char* _sensorErrorReasonCode(SensorErrorReason reason) {
         switch (reason) {
             case SENSOR_ERR_NO_RESPONSE: return "no_response";
+            case SENSOR_ERR_COMM:        return "comm";
             case SENSOR_ERR_OUT_OF_RANGE:return "out_of_range";
             case SENSOR_ERR_NAN:         return "nan";
             case SENSOR_ERR_TIMEOUT:     return "timeout";
@@ -645,9 +647,10 @@ public:
 
     void begin() override {
         Wire.begin(PIN_BMP_SDA, PIN_BMP_SCL);
-        present = _bmp.begin(BMP085_ULTRALOWPOWER);
+        const uint8_t i2cCode = _probeI2c();
+        present = (i2cCode == 0) && _bmp.begin(BMP085_ULTRALOWPOWER);
         error   = !present;
-        sensorErrorReason = present ? SENSOR_ERR_NONE : SENSOR_ERR_NO_RESPONSE;
+        sensorErrorReason = present ? SENSOR_ERR_NONE : SENSOR_ERR_COMM;
         sensorErrorLatched = !present;
         lastValidMs = 0;
         hwLimited = false;
@@ -657,7 +660,12 @@ public:
         // FIX: markSensorFault must be called so hasSensorLostAlarm() returns
         // true immediately when sensor is physically absent at boot.
         if (!present) {
-            markSensorFault(SENSOR_ERR_NO_RESPONSE, millis(), false);
+            if (i2cCode != 0) {
+                _logI2cFailure(i2cCode);
+            } else {
+                _logInitFailure();
+            }
+            markSensorFault(SENSOR_ERR_COMM, millis(), false);
         }
     }
 
@@ -672,29 +680,42 @@ public:
         const uint32_t now = millis();
         _lastPollMs = now;
 
+        const uint8_t i2cCode = _probeI2c();
+        if (i2cCode != 0) {
+            value = NAN;
+            hwLimited = false;
+            _logI2cFailure(i2cCode);
+            markSensorFault(SENSOR_ERR_COMM, now, false);
+            return;
+        }
+
         if (!present) present = _bmp.begin(BMP085_ULTRALOWPOWER);
         if (!present) {
             value = NAN;
             hwLimited = false;
-            markSensorFault(SENSOR_ERR_NO_RESPONSE, now, false);
+            _logInitFailure();
+            markSensorFault(SENSOR_ERR_COMM, now, false);
             return;
         }
 
-        value = _bmp.readPressure() / 100.0f;
-        if (isnan(value)) {
+        const float rawPressureHpa = _bmp.readPressure() / 100.0f;
+        if (isnan(rawPressureHpa)) {
             value = NAN;
             hwLimited = false;
-            markSensorFault(SENSOR_ERR_NAN, now, true);
+            _logNanReading(i2cCode);
+            markSensorFault(SENSOR_ERR_COMM, now, true);
             return;
         }
 
-        if (value < PRESSURE_SANITY_MIN_HPA || value > PRESSURE_SANITY_MAX_HPA) {
+        if (rawPressureHpa < PRESSURE_SANITY_MIN_HPA || rawPressureHpa > PRESSURE_SANITY_MAX_HPA) {
             value = NAN;
             hwLimited = false;
+            _logOutOfRange(rawPressureHpa, i2cCode);
             markSensorFault(SENSOR_ERR_OUT_OF_RANGE, now, true);
             return;
         }
 
+        value = rawPressureHpa;
         lastValidMs = _lastPollMs;
         hwLimited = false;
         markSensorHealthy(now, true);
@@ -702,7 +723,33 @@ public:
     }
 
 private:
+    static constexpr uint8_t BMP180_I2C_ADDR = 0x77;
     Adafruit_BMP085 _bmp;
+
+    uint8_t _probeI2c() const {
+        Wire.beginTransmission(BMP180_I2C_ADDR);
+        return Wire.endTransmission();
+    }
+
+    void _logI2cFailure(uint8_t i2cCode) const {
+        Serial.printf("[BMP180] Датчик не отвечает по I2C: code=%u addr=0x%02X\n",
+                      (unsigned)i2cCode, (unsigned)BMP180_I2C_ADDR);
+    }
+
+    void _logInitFailure() const {
+        Serial.printf("[BMP180] Инициализация BMP180 не удалась: addr=0x%02X\n",
+                      (unsigned)BMP180_I2C_ADDR);
+    }
+
+    void _logNanReading(uint8_t i2cCode) const {
+        Serial.printf("[BMP180] Ошибка чтения давления: NAN (i2c=%u)\n",
+                      (unsigned)i2cCode);
+    }
+
+    void _logOutOfRange(float rawPressureHpa, uint8_t i2cCode) const {
+        Serial.printf("[BMP180] Давление вне диапазона: %.2f гПа (i2c=%u)\n",
+                      rawPressureHpa, (unsigned)i2cCode);
+    }
 };
 
 class DigitalSensor : public SensorBase {

@@ -1234,7 +1234,7 @@ class SourceGuardTests(unittest.TestCase):
     def test_output_manager_has_global_stop_short_circuit(self):
         self.assertIn("if (_mainStopLatched)", self.output_mgr_h)
         self.assertIn("_applyGlobalStop();", self.output_mgr_h)
-        self.assertIn("invalidMeansOff = true;", self.output_mgr_h)
+        self.assertIn("bool invalidMeansOff = (sensorIdx != SEN_P);", self.output_mgr_h)
         self.assertIn("for (uint8_t oi = OUT_CH1; oi <= OUT_CH3; oi++)", self.output_mgr_h)
 
     def test_disabled_sensor_is_explicitly_excluded_from_eval_ctrl(self):

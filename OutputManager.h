@@ -553,12 +553,12 @@ private:
             return 0;
         }
 
-        bool invalidMeansOff = true;
+        bool invalidMeansOff = (sensorIdx != SEN_P);
         bool controlGate = true;
         if (_isMainOutput(outIdx) && SensorManager::isSchemeControlSensorIndex(sensorIdx)) {
-            // For CH1..CH3 an enabled control sensor in error/absent/NAN state
-            // must form AUTO OFF and block manual ON until the fault clears.
-            invalidMeansOff = true;
+            // Pressure sensor faults are treated as a neutral "no command":
+            // the operator still sees ERR/alarm, but relay state must not jerk
+            // because of a phantom BMP180 reading or missing I2C sensor.
             if (sensorIdx == SEN_F) {
                 controlGate = _flowControlGate(prevState, outIdx);
             }

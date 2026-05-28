@@ -29,6 +29,7 @@ except ImportError:  # pragma: no cover
 
 
 ANALOG_SENSOR_INDICES = (scheme.SEN_T1, scheme.SEN_T2, scheme.SEN_T3, scheme.SEN_P)
+TEMPERATURE_SENSOR_INDICES = (scheme.SEN_T1, scheme.SEN_T2, scheme.SEN_T3)
 DIGITAL_SENSOR_INDICES = (scheme.SEN_L, scheme.SEN_F)
 MAIN_CHANNELS = scheme.MAIN_CHANNELS
 CONTROL_SENSOR_INDICES = scheme.CONTROL_SENSOR_INDICES
@@ -52,6 +53,17 @@ def analog_sensor(value: float,
                   present: bool = True,
                   error: bool = False) -> scheme.Sensor:
     return scheme.Sensor(enabled=enabled, present=present, error=error, value=value)
+
+
+def simulate_bmp180_poll(raw_pressure_hpa: float,
+                         *,
+                         i2c_code: int = 0,
+                         init_ok: bool = True) -> tuple[float, str]:
+    if i2c_code != 0 or not init_ok or math.isnan(raw_pressure_hpa):
+        return math.nan, "comm"
+    if raw_pressure_hpa < 300.0 or raw_pressure_hpa > 1100.0:
+        return math.nan, "out_of_range"
+    return raw_pressure_hpa, ""
 
 
 @dataclass
@@ -202,8 +214,8 @@ class AnalogSchemeMatrixTests(unittest.TestCase):
                     self.assertEqual(low.eval_ctrl(out_idx), -1)
                     self.assertEqual(scheme.aggregate_rules({sensor_idx: low}, out_idx), (1 << sensor_idx, 0))
 
-    def test_disabled_analog_sensor_is_neutral_but_enabled_invalid_states_force_off_for_main_channels(self):
-        for sensor_idx in ANALOG_SENSOR_INDICES:
+    def test_disabled_analog_sensor_is_neutral_but_enabled_invalid_temp_states_force_off_for_main_channels(self):
+        for sensor_idx in TEMPERATURE_SENSOR_INDICES:
             for out_idx in MAIN_CHANNELS:
                 with self.subTest(sensor=scheme.SENSOR_NAMES[sensor_idx],
                                   channel=scheme.CHANNEL_NAMES[out_idx]):
@@ -747,6 +759,23 @@ class SensorEnableWarmupFunctionalTests(unittest.TestCase):
         self.assertFalse(output.apply_resolved_hold(forbid, want))
 
 
+class PressureSensorErrorHandlingTests(unittest.TestCase):
+    def test_bmp180_out_of_range_value_becomes_nan_with_out_of_range_error(self):
+        value, reason = simulate_bmp180_poll(1718.79)
+        self.assertTrue(math.isnan(value))
+        self.assertEqual(reason, "out_of_range")
+
+    def test_bmp180_normal_value_stays_valid(self):
+        value, reason = simulate_bmp180_poll(950.0)
+        self.assertEqual(value, 950.0)
+        self.assertEqual(reason, "")
+
+    def test_bmp180_nan_value_becomes_comm_error(self):
+        value, reason = simulate_bmp180_poll(math.nan)
+        self.assertTrue(math.isnan(value))
+        self.assertEqual(reason, "comm")
+
+
 class StopAndIsolationTests(unittest.TestCase):
     def test_global_stop_turns_off_only_main_outputs_and_clears_main_masks(self):
         ctrl = StopControllerModel()
@@ -1046,11 +1075,19 @@ class FullMatrixSourceGuardTests(unittest.TestCase):
     def test_pressure_sensor_rejects_out_of_range_reading_immediately(self):
         # Out-of-range values (phantom ADC noise when disconnected) must be
         # rejected by setting value=NAN and triggering sensor error on first read.
-        self.assertIn("if (value < PRESSURE_SANITY_MIN_HPA || value > PRESSURE_SANITY_MAX_HPA)", self.sensors_h)
+        self.assertIn("const uint8_t i2cCode = _probeI2c();", self.sensors_h)
+        self.assertIn("Wire.beginTransmission(BMP180_I2C_ADDR);", self.sensors_h)
+        self.assertIn("return Wire.endTransmission();", self.sensors_h)
+        self.assertIn("if (rawPressureHpa < PRESSURE_SANITY_MIN_HPA || rawPressureHpa > PRESSURE_SANITY_MAX_HPA)", self.sensors_h)
+        self.assertIn("_logOutOfRange(rawPressureHpa, i2cCode);", self.sensors_h)
         self.assertIn("markSensorFault(SENSOR_ERR_OUT_OF_RANGE, now, true);", self.sensors_h)
-        # The value is set to NAN before markSensorFault so the phantom reading
-        # (e.g. 1718.79) never enters the sensor value field.
-        self.assertIn("value = NAN;\n            hwLimited = false;\n            markSensorFault(SENSOR_ERR_OUT_OF_RANGE, now, true);", self.sensors_h)
+        self.assertIn('Serial.printf("[BMP180] Давление вне диапазона: %.2f гПа (i2c=%u)\\n"', self.sensors_h)
+        self.assertIn('Serial.printf("[BMP180] Датчик не отвечает по I2C: code=%u addr=0x%02X\\n"', self.sensors_h)
+        self.assertIn("markSensorFault(SENSOR_ERR_COMM, now, false);", self.sensors_h)
+        self.assertIn("markSensorFault(SENSOR_ERR_COMM, now, true);", self.sensors_h)
+
+    def test_pressure_sensor_fault_is_neutral_for_output_manager(self):
+        self.assertIn("bool invalidMeansOff = (sensorIdx != SEN_P);", self.output_manager_h)
 
     # === FIX BUG 2: temp sensor lost notification uses sensorLostNotice, not T1min ===
     def test_temp_sensor_lost_notification_uses_sensor_lost_notice_not_alarm_token(self):
