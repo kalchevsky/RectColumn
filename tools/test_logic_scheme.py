@@ -102,6 +102,8 @@ CONTROL_DELAY_MS = {
     SEN_F: 5000,
 }
 
+NEUTRAL_INVALID_SENSOR_INDICES = (SEN_T1, SEN_T2, SEN_T3, SEN_DT, SEN_P)
+
 
 # ---------------------------------------------------------------------------
 # Pure Python model of expected target behavior
@@ -112,6 +114,12 @@ class FailSafeMode(Enum):
     FORCE_OFF = auto()
     FORCE_ON = auto()
     LATCH_FAULT = auto()
+
+
+def control_fail_safe(sensor_idx: int) -> FailSafeMode:
+    if sensor_idx in NEUTRAL_INVALID_SENSOR_INDICES:
+        return FailSafeMode.NEUTRAL
+    return FailSafeMode.FORCE_OFF
 
 
 class RelayState(Enum):
@@ -460,7 +468,7 @@ def make_channel_rule(sensor_idx: int, out_idx: int, enabled: bool) -> CtrlRule:
         logic=LOGIC_HEAT,
         min_val=20.0,
         max_val=80.0,
-        fail_safe=FailSafeMode.FORCE_OFF,
+        fail_safe=control_fail_safe(sensor_idx),
         off_delay_ms=delay_ms,
     )
 
@@ -985,11 +993,11 @@ class ControlDelayRuntimeTests(unittest.TestCase):
 
 
 class SensorFaultAndAlarmTests(unittest.TestCase):
-    def test_enabled_analog_control_sensor_error_forms_auto_off(self):
+    def test_enabled_analog_control_sensor_error_is_neutral_for_main_output(self):
         t1 = Sensor(present=False, error=True, value=math.nan)
         t1.ctrl[OUT_CH1] = CtrlRule(True, OUT_CH1, LOGIC_HEAT, 70, 80,
-                                    fail_safe=FailSafeMode.FORCE_OFF)
-        self.assertEqual(t1.eval_ctrl(OUT_CH1), -1)
+                                    fail_safe=FailSafeMode.NEUTRAL)
+        self.assertEqual(t1.eval_ctrl(OUT_CH1), 0)
 
     @human_case(
         title="Отключённый аналоговый датчик полностью исключается из блокировки канала",
@@ -1223,14 +1231,23 @@ class SourceGuardTests(unittest.TestCase):
         self.assertIn("Content-Disposition", self.webapi_h)
         self.assertIn("/api/v1/notify/status", self.webapi_h)
 
-    def test_active_alarm_reasons_are_exposed_to_home_ui(self):
+    def test_active_alarms_are_exposed_to_unified_overlay(self):
         self.assertIn('resp.createNestedArray("activeAlarmReasons")', self.webapi_h)
         self.assertIn('root.createNestedArray("activeAlarmReasons")', self.webapi_h)
-        self.assertIn("function backendActiveAlarmLines()", self.app_js)
-        self.assertIn("function homeActiveAlarmBlockHtml()", self.app_js)
-        self.assertIn("Активные тревоги:", self.app_js)
-        self.assertIn("if (state.currentView === 'home') return '';", self.app_js)
-        self.assertIn("if (Array.isArray(res.activeAlarmReasons)) s.activeAlarmReasons = res.activeAlarmReasons.slice();", self.app_js)
+        self.assertIn('root.createNestedArray("activeAlarmsAll")', self.webapi_h)
+        self.assertIn("_buildActiveAlarmsAll(activeAlarmsAll);", self.webapi_h)
+        self.assertIn('item["text"] = text;', self.webapi_h)
+        self.assertIn('item["acked"] = acked;', self.webapi_h)
+        self.assertIn("function collectActiveAlarmItems()", self.app_js)
+        self.assertIn("Array.isArray(s.activeAlarmsAll) ? s.activeAlarmsAll : []", self.app_js)
+        self.assertIn("if (Array.isArray(res.activeAlarmsAll)) s.activeAlarmsAll = res.activeAlarmsAll.slice();", self.app_js)
+        self.assertIn("function collectLatchedSensorLines()", self.app_js)
+        self.assertIn("sensor.sensorErrorLatched !== true", self.app_js)
+        self.assertIn("sensor.sensorLostNotice", self.app_js)
+        self.assertIn("function updateUnifiedAlertOverlay()", self.app_js)
+        self.assertIn("function unifiedAlertOverlayHtml(activeItems, latchedLines)", self.app_js)
+        self.assertIn("Активные тревоги и ошибки", self.app_js)
+        self.assertIn("document.body.appendChild(shell);", self.app_js)
 
     def test_pressure_units_are_gpa_in_ui_api_and_serial(self):
         self.assertIn('static const char* units[SEN_COUNT] = {"C","C","C","C","гПа","","","",""};', self.sensor_manager_h)
@@ -1242,7 +1259,17 @@ class SourceGuardTests(unittest.TestCase):
     def test_output_manager_has_global_stop_short_circuit(self):
         self.assertIn("if (_mainStopLatched)", self.output_mgr_h)
         self.assertIn("_applyGlobalStop();", self.output_mgr_h)
-        self.assertIn("bool invalidMeansOff = (sensorIdx != SEN_P);", self.output_mgr_h)
+        normalized = re.sub(r"\s+", "", self.output_mgr_h)
+        start = normalized.find("invalidMeansOff=")
+        self.assertNotEqual(start, -1)
+        end = normalized.find(";", start)
+        self.assertNotEqual(end, -1)
+        expr = normalized[start + len("invalidMeansOff="):end]
+        self.assertTrue(expr.startswith("!("))
+        for token in ("SEN_T1", "SEN_T2", "SEN_T3", "SEN_DT", "SEN_P"):
+            self.assertIn(f"sensorIdx=={token}", expr)
+        for token in ("SEN_L", "SEN_F", "SEN_C", "SEN_V"):
+            self.assertNotIn(f"sensorIdx=={token}", expr)
         self.assertIn("for (uint8_t oi = OUT_CH1; oi <= OUT_CH3; oi++)", self.output_mgr_h)
 
     def test_disabled_sensor_is_explicitly_excluded_from_eval_ctrl(self):

@@ -1467,6 +1467,19 @@ private:
         arr.add(reason);
     }
 
+    static void _addOrUpdateActiveAlarmEntry(JsonArray arr, const String& text, bool acked) {
+        if (text.length() == 0) return;
+        for (JsonObject entry : arr) {
+            const char* existingText = entry["text"] | "";
+            if (!text.equals(existingText)) continue;
+            if (!acked) entry["acked"] = false;
+            return;
+        }
+        JsonObject item = arr.createNestedObject();
+        item["text"] = text;
+        item["acked"] = acked;
+    }
+
     static String _fixedAlarmLabel(uint8_t idx) {
         switch (idx) {
             case 0: return "Мин 1";
@@ -1495,6 +1508,10 @@ private:
                " (" + _formatFixedNumber(threshold, 1) + " гПа)";
     }
 
+    static String _dtAlarmErrorText() {
+        return "Ошибка dT: невозможно вычислить значение";
+    }
+
     static String _alarmReasonSensorTitle(uint8_t sensorIdx) {
         switch (sensorIdx) {
             case SEN_P:  return "Давление";
@@ -1510,6 +1527,15 @@ private:
         if (sensorIdx == SEN_L && alarmIdx == 0) return "Авария уровня: цепь L разомкнута";
         if (sensorIdx == SEN_F && alarmIdx == 0) return "Авария потока: цепь F разомкнута / нет потока";
         return _alarmReasonSensorTitle(sensorIdx) + " · " + _fixedAlarmLabel(alarmIdx);
+    }
+
+    static String _activeAlarmReasonText(const SensorBase* sensor, uint8_t sensorIdx, uint8_t alarmIdx) {
+        if (!sensor) return "";
+        if (sensorIdx == SEN_P) {
+            const float thr = sensor->alarm[alarmIdx].threshold;
+            return _pressureAlarmText(thr, alarmIdx);
+        }
+        return _alarmReasonText(sensorIdx, alarmIdx);
     }
 
     void _buildActiveAlarmReasons(JsonArray arr, bool unackedOnly) const {
@@ -1528,18 +1554,39 @@ private:
             }
 
             if (si == SEN_DT && sensor->error) {
-                _addUniqueReason(arr, "Ошибка dT: невозможно вычислить значение");
+                _addUniqueReason(arr, _dtAlarmErrorText());
             }
 
             for (uint8_t ai = 0; ai < N_ALARMS; ai++) {
                 const uint8_t bit = (1u << ai);
                 if (!(relevantMask & bit)) continue;
-                if (si == SEN_P) {
-                    const float thr = sensor->alarm[ai].threshold;
-                    _addUniqueReason(arr, _pressureAlarmText(thr, ai));
-                    continue;
-                }
-                _addUniqueReason(arr, _alarmReasonText(si, ai));
+                _addUniqueReason(arr, _activeAlarmReasonText(sensor, si, ai));
+            }
+        }
+    }
+
+    void _buildActiveAlarmsAll(JsonArray arr) const {
+        if (!_sm || !_om) return;
+        static constexpr uint8_t USER_ALARM_MASK = (1u << N_ALARMS) - 1u;
+        for (uint8_t si = 0; si < SEN_COUNT; si++) {
+            SensorBase* sensor = _sm->s[si];
+            if (!sensor || !sensor->enabled) continue;
+
+            // Latched sensor-loss is exposed separately via sensorErrorLatched /
+            // sensorLostNotice, so this list contains only the alarm subsystem.
+            const uint8_t activeAlarmMask = (uint8_t)(sensor->alarmMask() & USER_ALARM_MASK);
+            const uint8_t unackedAlarmMask =
+                (uint8_t)(_om->unackedAlarmMaskFor(*_sm, si) & USER_ALARM_MASK);
+
+            if (si == SEN_DT && sensor->error) {
+                _addOrUpdateActiveAlarmEntry(arr, _dtAlarmErrorText(), false);
+            }
+
+            for (uint8_t ai = 0; ai < N_ALARMS; ai++) {
+                const uint8_t bit = (1u << ai);
+                if (!(activeAlarmMask & bit)) continue;
+                const bool acked = ((unackedAlarmMask & bit) == 0);
+                _addOrUpdateActiveAlarmEntry(arr, _activeAlarmReasonText(sensor, si, ai), acked);
             }
         }
     }
@@ -1735,6 +1782,8 @@ private:
         root["notifyEnabled"] = (_notifier ? _notifier->enabled() : false);
         JsonArray activeAlarmReasons = root.createNestedArray("activeAlarmReasons");
         _buildActiveAlarmReasons(activeAlarmReasons, true);
+        JsonArray activeAlarmsAll = root.createNestedArray("activeAlarmsAll");
+        _buildActiveAlarmsAll(activeAlarmsAll);
 
         JsonArray sensors = root.createNestedArray("sensors");
         _buildSensors(sensors);

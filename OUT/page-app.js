@@ -60,6 +60,34 @@ function ensureManualRelayPendingStyles(){
   document.head.appendChild(style);
 }
 
+function ensureUnifiedAlertOverlayStyles(){
+  if (byId('rc-unified-alert-style')) return;
+  var style = document.createElement('style');
+  style.id = 'rc-unified-alert-style';
+  style.textContent = [
+    '.rc-unified-alert-overlay{position:fixed;top:calc(env(safe-area-inset-top,0px) + 92px);right:12px;left:12px;display:flex;justify-content:flex-end;pointer-events:none;z-index:1300;}',
+    '.rc-unified-alert-card{pointer-events:auto;width:min(420px,calc(100vw - 24px));max-height:min(46vh,420px);overflow:auto;padding:14px 14px 12px;border-radius:16px;background:rgba(8,10,18,.97);border:1px solid rgba(255,107,107,.45);box-shadow:0 18px 38px rgba(0,0,0,.46);color:#f8fafc;}',
+    '.rc-unified-alert-title{font-weight:800;font-size:16px;line-height:1.2;margin:0 0 10px;}',
+    '.rc-unified-alert-section + .rc-unified-alert-section{margin-top:12px;}',
+    '.rc-unified-alert-section-title{font-size:12px;line-height:1.25;text-transform:uppercase;letter-spacing:.04em;color:#fca5a5;margin:0 0 8px;}',
+    '.rc-unified-alert-lines{display:flex;flex-direction:column;gap:6px;}',
+    '.rc-unified-alert-line{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:8px 10px;border-radius:12px;font-size:14px;line-height:1.3;}',
+    '.rc-unified-alert-line-text{flex:1 1 auto;min-width:0;word-break:break-word;}',
+    '.rc-unified-alert-line-unacked{background:rgba(127,29,29,.48);border:1px solid rgba(252,165,165,.38);color:#fee2e2;}',
+    '.rc-unified-alert-line-acked{background:rgba(120,53,15,.32);border:1px solid rgba(251,191,36,.28);color:#fed7aa;}',
+    '.rc-unified-alert-line-latched{background:rgba(69,26,3,.34);border:1px solid rgba(253,186,116,.28);color:#ffedd5;}',
+    '.rc-unified-alert-mark{flex:0 0 auto;font-size:11px;line-height:1.2;color:#fcd34d;white-space:nowrap;padding-top:2px;}',
+    '.rc-unified-alert-actions{display:flex;gap:8px;margin-top:14px;}',
+    '.rc-unified-alert-btn{pointer-events:auto;appearance:none;border:1px solid rgba(248,250,252,.18);background:#111827;color:#f8fafc;border-radius:12px;padding:10px 12px;font-size:14px;font-weight:700;line-height:1.1;}',
+    '.rc-unified-alert-btn:disabled{opacity:.6;}',
+    '.rc-unified-alert-btn-primary{border-color:rgba(248,113,113,.42);background:#7f1d1d;}',
+    '.rc-unified-alert-badge{pointer-events:auto;display:inline-flex;align-items:center;gap:8px;max-width:min(260px,calc(100vw - 24px));padding:10px 12px;border-radius:999px;border:1px solid rgba(248,113,113,.42);background:rgba(15,23,42,.96);box-shadow:0 12px 28px rgba(0,0,0,.4);color:#f8fafc;font-size:13px;font-weight:700;line-height:1.1;}',
+    '.rc-unified-alert-badge-count{display:inline-flex;align-items:center;justify-content:center;min-width:24px;height:24px;padding:0 7px;border-radius:999px;background:#7f1d1d;color:#fee2e2;font-size:12px;font-weight:800;}',
+    '@media (min-width: 720px){.rc-unified-alert-overlay{left:auto;max-width:420px;}}'
+  ].join('');
+  document.head.appendChild(style);
+}
+
 function routeParts(){
   var h = location.hash || '#/home';
   if (h.indexOf('#/') !== 0) h = '#/home';
@@ -93,7 +121,8 @@ var state = {
   relayErrorSeen: {},
   currentView: '',
   ackPending: false,
-  alarmLatchLines: []
+  alertOverlayCollapsed: false,
+  alertOverlaySignature: ''
 };
 
 function esc(s){
@@ -297,108 +326,177 @@ function headerBadgeList(s){
 function fixedAlarmLabel(idx){
   return ['Мин 1','Мин 2','Макс 1','Макс 2'][idx] || ('Уровень ' + (idx + 1));
 }
-function isFixedAlarmMax(idx){
-  return idx >= 2;
-}
-function activeAlarmSensorTitle(sensorId){
-  if (sensorId === 'P' || sensorId === 'L' || sensorId === 'F' || sensorId === 'C' || sensorId === 'V') return tplSensorLabel(sensorId);
-  return sensorId || '';
-}
-function activeAlarmLineText(sensorId, idx){
-  var base = activeAlarmSensorTitle(sensorId);
-  if (!base) return '';
-  if (sensorId === 'L' || sensorId === 'F' || sensorId === 'C' || sensorId === 'V') return base;
-  return base + ' · ' + fixedAlarmLabel(idx);
-}
-function backendActiveAlarmLines(){
+function collectActiveAlarmItems(){
   var s = state.lastState || {};
-  var source = Array.isArray(s.activeAlarmReasons) ? s.activeAlarmReasons : [];
+  var source = Array.isArray(s.activeAlarmsAll) ? s.activeAlarmsAll : [];
+  var seen = {};
+  var items = [];
+  for (var i = 0; i < source.length; i++) {
+    var src = source[i] || {};
+    var text = typeof src.text === 'string' ? src.text.trim() : '';
+    if (!text) continue;
+    var acked = !!src.acked;
+    if (Object.prototype.hasOwnProperty.call(seen, text)) {
+      if (!acked) items[seen[text]].acked = false;
+      continue;
+    }
+    seen[text] = items.length;
+    items.push({ text:text, acked:acked });
+  }
+  return items;
+}
+function collectLatchedSensorLines(){
+  var s = state.lastState || {};
+  var sensors = Array.isArray(s.sensors) ? s.sensors : [];
   var seen = {};
   var lines = [];
-  for (var i = 0; i < source.length; i++) {
-    var line = typeof source[i] === 'string' ? source[i].trim() : '';
-    if (!line || seen[line]) continue;
+  for (var i = 0; i < sensors.length; i++) {
+    var sensor = sensors[i] || {};
+    if (!sensor.enabled || sensor.sensorErrorLatched !== true) continue;
+    var id = sensor.id || '';
+    var line = typeof sensor.sensorLostNotice === 'string' ? sensor.sensorLostNotice.trim() : '';
+    if (!line) line = 'Ошибка датчика ' + tplSensorLabel(id || '?');
+    if (seen[line]) continue;
     seen[line] = true;
     lines.push(line);
   }
   return lines;
 }
-function collectUnackedAlarmLines(){
-  var s = state.lastState || {};
-  if (Number(s.unackedAlarmCount || 0) <= 0) return [];
-  var backendLines = backendActiveAlarmLines();
-  if (backendLines.length) return backendLines;
-  var sensors = s.sensors || [];
-  var explicitUnacked = false;
-  for (var si = 0; si < sensors.length && !explicitUnacked; si++) {
-    var checkAlarms = (sensors[si] && sensors[si].alarms) ? sensors[si].alarms : [];
-    for (var cai = 0; cai < checkAlarms.length; cai++) {
-      if (checkAlarms[cai] && Object.prototype.hasOwnProperty.call(checkAlarms[cai], 'unacked')) {
-        explicitUnacked = true;
+function hasAnyAlert(){
+  return collectActiveAlarmItems().length > 0 || collectLatchedSensorLines().length > 0;
+}
+function currentAlertPresenceSignature(){
+  var tokens = [];
+  var seen = {};
+  var activeItems = collectActiveAlarmItems();
+  for (var i = 0; i < activeItems.length; i++) {
+    var alertToken = 'A|' + activeItems[i].text;
+    if (!seen[alertToken]) {
+      seen[alertToken] = true;
+      tokens.push(alertToken);
+    }
+  }
+  var sensors = (state.lastState && Array.isArray(state.lastState.sensors)) ? state.lastState.sensors : [];
+  for (var si = 0; si < sensors.length; si++) {
+    var sensor = sensors[si] || {};
+    if (!sensor.enabled || sensor.sensorErrorLatched !== true) continue;
+    var sensorToken = 'S|' + (sensor.id || ('idx' + si));
+    if (!seen[sensorToken]) {
+      seen[sensorToken] = true;
+      tokens.push(sensorToken);
+    }
+  }
+  tokens.sort();
+  return tokens.join('\n');
+}
+function syncUnifiedAlertOverlayState(){
+  var signature = currentAlertPresenceSignature();
+  if (!signature) {
+    state.alertOverlaySignature = '';
+    state.alertOverlayCollapsed = false;
+    return;
+  }
+  var prevSignature = state.alertOverlaySignature || '';
+  if (prevSignature) {
+    var prevSeen = {};
+    var prevTokens = prevSignature.split('\n');
+    for (var i = 0; i < prevTokens.length; i++) {
+      if (prevTokens[i]) prevSeen[prevTokens[i]] = true;
+    }
+    var tokens = signature.split('\n');
+    for (var ti = 0; ti < tokens.length; ti++) {
+      if (!tokens[ti]) continue;
+      if (!prevSeen[tokens[ti]]) {
+        state.alertOverlayCollapsed = false;
         break;
       }
     }
+  } else {
+    state.alertOverlayCollapsed = false;
   }
-  var seen = {};
-  var lines = [];
-  for (var i = 0; i < sensors.length; i++) {
-    var sensor = sensors[i] || {};
-    var alarms = sensor.alarms || [];
-    for (var ai = 0; ai < alarms.length; ai++) {
-      var alarm = alarms[ai];
-      if (!alarm || !alarm.enabled || !alarm.triggered) continue;
-      if (explicitUnacked && !alarm.unacked) continue;
-      var line = activeAlarmLineText(sensor.id, ai);
-      if (!line || seen[line]) continue;
-      seen[line] = true;
-      lines.push(line);
+  state.alertOverlaySignature = signature;
+}
+function unifiedAlertBadgeCount(activeItems, latchedLines){
+  var count = activeItems.length + latchedLines.length;
+  if (count > 99) return '99+';
+  return String(count || 0);
+}
+function unifiedAlertOverlayHtml(activeItems, latchedLines){
+  var html = '';
+  html += '<div class="rc-unified-alert-card" role="status" aria-live="assertive">';
+  html += '<div class="rc-unified-alert-title">Активные тревоги и ошибки</div>';
+  if (activeItems.length) {
+    html += '<section class="rc-unified-alert-section">';
+    html += '<div class="rc-unified-alert-section-title">Тревоги</div>';
+    html += '<div class="rc-unified-alert-lines">';
+    for (var i = 0; i < activeItems.length; i++) {
+      var item = activeItems[i];
+      html += '<div class="rc-unified-alert-line ' + (item.acked ? 'rc-unified-alert-line-acked' : 'rc-unified-alert-line-unacked') + '">';
+      html += '<div class="rc-unified-alert-line-text">' + esc(item.text) + '</div>';
+      if (item.acked) html += '<div class="rc-unified-alert-mark">квитирована</div>';
+      html += '</div>';
     }
+    html += '</div></section>';
   }
-  return lines;
-}
-function syncAlarmLatchFromState(){
-  var lines = collectUnackedAlarmLines();
-  if (lines.length) state.alarmLatchLines = lines.slice();
-}
-function clearAlarmLatch(){
-  state.alarmLatchLines = [];
-}
-function activeAlarmLinesForUi(){
-  var lines = collectUnackedAlarmLines();
-  if (lines.length) return lines;
-  return (state.alarmLatchLines && state.alarmLatchLines.length) ? state.alarmLatchLines.slice() : [];
-}
-function activeAlarmOverlayHtml(){
-  if (state.currentView === 'home') return '';
-  var lines = activeAlarmLinesForUi();
-  if (!lines.length) return '';
-  var html = '';
-  html += '<div id="active-alarm-overlay" class="active-alarm-overlay" aria-live="assertive">';
-  html += '<div class="active-alarm-card">';
-  html += '<div class="active-alarm-title">Сработала сигнализация</div>';
-  html += '<div class="active-alarm-lines">';
-  for (var i = 0; i < lines.length; i++) html += '<div class="active-alarm-line">' + esc(lines[i]) + '</div>';
-  html += '</div></div>';
+  if (latchedLines.length) {
+    html += '<section class="rc-unified-alert-section">';
+    html += '<div class="rc-unified-alert-section-title">Ошибки датчиков (требуют сброса оператором)</div>';
+    html += '<div class="rc-unified-alert-lines">';
+    for (var li = 0; li < latchedLines.length; li++) {
+      html += '<div class="rc-unified-alert-line rc-unified-alert-line-latched">';
+      html += '<div class="rc-unified-alert-line-text">' + esc(latchedLines[li]) + '</div>';
+      html += '</div>';
+    }
+    html += '</div></section>';
+  }
+  html += '<div class="rc-unified-alert-actions">';
+  html += '<button type="button" id="rc-unified-alert-ack-btn" class="rc-unified-alert-btn rc-unified-alert-btn-primary"' + (state.ackPending ? ' disabled' : '') + '>' + esc(state.ackPending ? 'Квитируется...' : 'Квитировать') + '</button>';
+  html += '<button type="button" id="rc-unified-alert-hide-btn" class="rc-unified-alert-btn">Скрыть</button>';
+  html += '</div>';
+  html += '</div>';
   return html;
 }
-function updateActiveAlarmOverlay(){
-  var existing = byId('active-alarm-overlay');
+function unifiedAlertBadgeHtml(activeItems, latchedLines){
+  return '<button type="button" id="rc-unified-alert-badge-btn" class="rc-unified-alert-badge"><span class="rc-unified-alert-badge-count">' + esc(unifiedAlertBadgeCount(activeItems, latchedLines)) + '</span><span>Тревоги и ошибки</span></button>';
+}
+function updateUnifiedAlertOverlay(){
+  var existing = byId('rc-unified-alert-overlay');
   if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
-  if (!app) return;
-  var html = activeAlarmOverlayHtml();
-  if (!html) return;
-  app.insertAdjacentHTML('beforeend', html);
-}
-function homeActiveAlarmBlockHtml(){
-  var lines = activeAlarmLinesForUi();
-  if (!lines.length) return '';
-  var html = '';
-  html += '<section class="active-alarm-card" aria-live="assertive">';
-  html += '<div class="active-alarm-title">Активные тревоги:</div>';
-  html += '<div class="active-alarm-lines">';
-  for (var i = 0; i < lines.length; i++) html += '<div class="active-alarm-line">' + esc(lines[i]) + '</div>';
-  html += '</div></section>';
-  return html;
+  if (!document.body || !hasAnyAlert()) return;
+  ensureUnifiedAlertOverlayStyles();
+  var activeItems = collectActiveAlarmItems();
+  var latchedLines = collectLatchedSensorLines();
+  var shell = document.createElement('div');
+  shell.id = 'rc-unified-alert-overlay';
+  shell.className = 'rc-unified-alert-overlay';
+  shell.innerHTML = state.alertOverlayCollapsed
+    ? unifiedAlertBadgeHtml(activeItems, latchedLines)
+    : unifiedAlertOverlayHtml(activeItems, latchedLines);
+  document.body.appendChild(shell);
+
+  var ackBtn = byId('rc-unified-alert-ack-btn');
+  if (ackBtn) {
+    ackBtn.addEventListener('click', function(ev){
+      if (ev) ev.preventDefault();
+      acknowledgeAlarms();
+    });
+  }
+  var hideBtn = byId('rc-unified-alert-hide-btn');
+  if (hideBtn) {
+    hideBtn.addEventListener('click', function(ev){
+      if (ev) ev.preventDefault();
+      state.alertOverlayCollapsed = true;
+      updateUnifiedAlertOverlay();
+    });
+  }
+  var badgeBtn = byId('rc-unified-alert-badge-btn');
+  if (badgeBtn) {
+    badgeBtn.addEventListener('click', function(ev){
+      if (ev) ev.preventDefault();
+      state.alertOverlayCollapsed = false;
+      updateUnifiedAlertOverlay();
+    });
+  }
 }
 
 function loadSchema(cb){
@@ -419,7 +517,6 @@ function loadState(cb){
       state.lastState = res;
       clearError();
       syncManualRelayState();
-      syncAlarmLatchFromState();
       if (!res.synced) setTimeout(autoSyncTimeIfNeeded, 0);
     } else {
       setError((res && (res.error || res.err)) ? (res.error || res.err) : 'Не удалось получить состояние устройства.');
@@ -529,7 +626,7 @@ function muteAll(){ setMute(true); }
 function isAudibleAlarmActiveRaw(){
   var s = state.lastState || {};
   var unacked = Number(s.unackedAlarmCount || 0);
-  return unacked > 0 || ((state.alarmLatchLines || []).length > 0);
+  return unacked > 0 || collectLatchedSensorLines().length > 0;
 }
 function mergeAckStateFromResponse(res){
   if (!res || !res.ok) return;
@@ -537,6 +634,7 @@ function mergeAckStateFromResponse(res){
   s.activeAlarmCount = Number(res.activeAlarmCount || 0);
   s.unackedAlarmCount = Number(res.unackedAlarmCount || 0);
   if (Array.isArray(res.activeAlarmReasons)) s.activeAlarmReasons = res.activeAlarmReasons.slice();
+  if (Array.isArray(res.activeAlarmsAll)) s.activeAlarmsAll = res.activeAlarmsAll.slice();
   if (typeof res.muted !== 'undefined') s.muted = !!res.muted;
   if (typeof res.ch4Enabled !== 'undefined') s.ch4Enabled = !!res.ch4Enabled;
   if (typeof res.ch5Enabled !== 'undefined') s.ch5Enabled = !!res.ch5Enabled;
@@ -564,7 +662,6 @@ function mergeAckStateFromResponse(res){
     }
   }
   state.lastState = s;
-  clearAlarmLatch();
 }
 function sendAckRequest(cb){
   var postOpts = {
@@ -1326,7 +1423,6 @@ function renderOutputConfigView(cfg){
     var el = byId('out_mode_' + id);
     if (el) el.value = modeOf(id);
   });
-  updateActiveAlarmOverlay();
 }
 function renderOutputConfig(){
   stopPoll();
@@ -1685,7 +1781,6 @@ function renderManual(){
   html += '<button class="btn light" onclick="go(\'#/home\')">Назад</button>';
   html += '</div></div>';
   app.innerHTML = html;
-  updateActiveAlarmOverlay();
   startLiveStatePoll('manual');
 }
 
@@ -1739,7 +1834,8 @@ function render(){
     return;
   }
   renderCurrentRoute();
-  updateActiveAlarmOverlay();
+  syncUnifiedAlertOverlayState();
+  updateUnifiedAlertOverlay();
   updateConnectionOverlay();
 }
 
@@ -1782,6 +1878,7 @@ function tplHomeSensorLabel(id){
 }
 function tplHomeSensorErrorText(sensor){
   if (!sensor || !sensor.enabled) return '';
+  if (sensor.sensorErrorLatched === true) return 'Ошибка датчика';
   if (sensor.present === false) return 'Ошибка датчика';
   return '';
 }
@@ -2346,8 +2443,7 @@ function renderHome(){
   var themeCls = state.theme === 'dark' ? 'tpl-home-theme-dark' : 'tpl-home-theme-light';
   var ackActive = isAudibleAlarmActive();
   var stopActive = !!(state.lastState && state.lastState.stopLatched);
-  var alarmBlockHtml = homeActiveAlarmBlockHtml();
-  var homeTopBlockKey = (stopActive ? 'stop' : '') + '|' + alarmBlockHtml;
+  var homeTopBlockKey = stopActive ? 'stop' : '';
   if (state.homeTopBlockKey !== homeTopBlockKey) {
     state.homeTopBlockKey = homeTopBlockKey;
     state.homeScrollY = 0;
@@ -2356,7 +2452,6 @@ function renderHome(){
   html.push(tplHeader({home:true}));
   html.push('<main id="home-scroll" class="content home-content">');
   if (stopActive) html.push('<section class="hero">STOP активен: CH1–CH3 выключены, автоматика заблокирована до отмены стопа.</section>');
-  html.push(alarmBlockHtml);
   html.push('<section class="sensor-list compact home-grid">');
   for (var i = 0; i < tplHomeOrder.length; i++) {
     var id = tplHomeOrder[i];

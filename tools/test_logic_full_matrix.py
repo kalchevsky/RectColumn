@@ -43,7 +43,7 @@ def analog_rule(out_idx: int, *, logic: int, enabled: bool = True) -> scheme.Ctr
         logic=logic,
         min_val=70.0,
         max_val=80.0,
-        fail_safe=scheme.FailSafeMode.FORCE_OFF,
+        fail_safe=scheme.FailSafeMode.NEUTRAL,
     )
 
 
@@ -214,7 +214,7 @@ class AnalogSchemeMatrixTests(unittest.TestCase):
                     self.assertEqual(low.eval_ctrl(out_idx), -1)
                     self.assertEqual(scheme.aggregate_rules({sensor_idx: low}, out_idx), (1 << sensor_idx, 0))
 
-    def test_disabled_analog_sensor_is_neutral_but_enabled_invalid_temp_states_force_off_for_main_channels(self):
+    def test_disabled_analog_sensor_and_enabled_invalid_temp_states_are_neutral_for_main_channels(self):
         for sensor_idx in TEMPERATURE_SENSOR_INDICES:
             for out_idx in MAIN_CHANNELS:
                 with self.subTest(sensor=scheme.SENSOR_NAMES[sensor_idx],
@@ -229,15 +229,15 @@ class AnalogSchemeMatrixTests(unittest.TestCase):
 
                     missing_sensor = analog_sensor(75.0, present=False)
                     missing_sensor.ctrl[out_idx] = analog_rule(out_idx, logic=scheme.LOGIC_HEAT)
-                    self.assertEqual(missing_sensor.eval_ctrl(out_idx), -1)
+                    self.assertEqual(missing_sensor.eval_ctrl(out_idx), 0)
 
                     error_sensor = analog_sensor(75.0, error=True)
                     error_sensor.ctrl[out_idx] = analog_rule(out_idx, logic=scheme.LOGIC_HEAT)
-                    self.assertEqual(error_sensor.eval_ctrl(out_idx), -1)
+                    self.assertEqual(error_sensor.eval_ctrl(out_idx), 0)
 
                     nan_sensor = analog_sensor(math.nan)
                     nan_sensor.ctrl[out_idx] = analog_rule(out_idx, logic=scheme.LOGIC_HEAT)
-                    self.assertEqual(nan_sensor.eval_ctrl(out_idx), -1)
+                    self.assertEqual(nan_sensor.eval_ctrl(out_idx), 0)
 
 
 class DigitalSchemeMatrixTests(unittest.TestCase):
@@ -413,17 +413,17 @@ class DigitalSchemeMatrixTests(unittest.TestCase):
 
 
 class MainOutputPriorityTests(unittest.TestCase):
-    def _assert_enabled_sensor_error_blocks_manual_on(self, sensor_idx: int, out_idx: int) -> None:
+    def _assert_enabled_sensor_error_keeps_manual_on_available(self, sensor_idx: int, out_idx: int) -> None:
         sensor = analog_sensor(75.0, error=True)
         sensor.ctrl[out_idx] = analog_rule(out_idx, logic=scheme.LOGIC_HEAT)
         forbid, want = scheme.aggregate_rules({sensor_idx: sensor}, out_idx)
-        self.assertNotEqual(forbid, 0)
+        self.assertEqual(forbid, 0)
         self.assertEqual(want, 0)
 
         out = HoldOutputModel(actual_on=False, requested_on=False)
         out.apply_resolved_hold(forbid, want)
-        self.assertFalse(out.set_manual_hold(True))
-        self.assertFalse(out.actual_on)
+        self.assertTrue(out.set_manual_hold(True))
+        self.assertTrue(out.actual_on)
         self.assertFalse(out.manual_want)
 
     def test_auto_off_priority_over_auto_on(self):
@@ -560,21 +560,21 @@ class MainOutputPriorityTests(unittest.TestCase):
         self.assertFalse(out.manual_want)
 
     @human_case(
-        title="Ошибка активного датчика выключает уже включённый канал",
+        title="Ошибка активного датчика температуры не выключает уже включённый канал",
         situation="T1 управляет CH1, канал уже включён, затем датчик T1 уходит в error.",
         steps=[
             "Создать sensor error для T1 при ruleEnabled=true.",
-            "Собрать forbid mask для CH1.",
-            "Применить маски к уже включённому hold-resolver.",
+            "Собрать forbid/want masks для CH1.",
+            "Применить нейтральные маски к уже включённому hold-resolver.",
         ],
-        expected="CH1 выключается, actual_on=false и причина автоотключения исходит от T1.",
+        expected="CH1 остаётся включённым, потому что потеря T1 трактуется как нейтральная команда.",
     )
-    def test_active_sensor_error_turns_already_enabled_channel_off(self):
+    def test_active_temperature_sensor_error_keeps_already_enabled_channel_on(self):
         sensor = analog_sensor(75.0, error=True)
         sensor.ctrl[scheme.OUT_CH1] = analog_rule(scheme.OUT_CH1, logic=scheme.LOGIC_HEAT)
         forbid, want = scheme.aggregate_rules({scheme.SEN_T1: sensor}, scheme.OUT_CH1)
         record_human_detail(self, "runtime_masks", {"forbid": forbid, "want": want})
-        self.assertNotEqual(forbid, 0)
+        self.assertEqual(forbid, 0)
         self.assertEqual(want, 0)
 
         out = HoldOutputModel(actual_on=True, requested_on=True)
@@ -582,11 +582,31 @@ class MainOutputPriorityTests(unittest.TestCase):
             "actual_on": out.actual_on,
             "requested_on": out.requested_on,
         })
-        self.assertFalse(out.apply_resolved_hold(forbid, want))
+        self.assertTrue(out.apply_resolved_hold(forbid, want))
         record_human_detail(self, "output_after_apply", {
             "actual_on": out.actual_on,
             "requested_on": out.requested_on,
         })
+        self.assertTrue(out.actual_on)
+
+    @human_case(
+        title="Ошибка активного датчика температуры не включает и не выключает выключенный канал",
+        situation="T1 управляет CH1, канал уже выключен, затем датчик T1 уходит в error.",
+        steps=[
+            "Создать sensor error для T1 при ruleEnabled=true.",
+            "Собрать forbid/want masks для CH1.",
+            "Применить нейтральные маски к выключенному hold-resolver.",
+        ],
+        expected="CH1 остаётся выключённым, потому что потеря T1 не формирует ни want, ни forbid.",
+    )
+    def test_active_temperature_sensor_error_keeps_disabled_channel_off(self):
+        sensor = analog_sensor(75.0, error=True)
+        sensor.ctrl[scheme.OUT_CH1] = analog_rule(scheme.OUT_CH1, logic=scheme.LOGIC_HEAT)
+        forbid, want = scheme.aggregate_rules({scheme.SEN_T1: sensor}, scheme.OUT_CH1)
+        self.assertEqual((forbid, want), (0, 0))
+
+        out = HoldOutputModel(actual_on=False, requested_on=False)
+        self.assertFalse(out.apply_resolved_hold(forbid, want))
         self.assertFalse(out.actual_on)
 
     @human_case(
@@ -622,20 +642,21 @@ class MainOutputPriorityTests(unittest.TestCase):
         self.assertFalse(out.manual_want)
 
     @human_case(
-        title="Manual OFF остаётся разрешённым во время auto-off",
-        situation="T1 держит CH1 в auto-off из-за ошибки датчика, но оператор всё равно может отправить команду выключения.",
+        title="Manual OFF остаётся разрешённым при нейтральной ошибке датчика температуры",
+        situation="T1 находится в error, но его потеря не формирует auto-off и оператор отправляет manual OFF.",
         steps=[
             "Создать sensor error для T1 при активном правиле CH1 <- T1.",
-            "Применить forbid mask к hold-resolver.",
+            "Применить нейтральные masks к hold-resolver.",
             "Отправить manual OFF в модели.",
         ],
-        expected="Команда manual OFF принимается и CH1 остаётся выключенным без дополнительных побочных эффектов.",
+        expected="Команда manual OFF принимается и CH1 остаётся выключенным без побочных эффектов.",
     )
-    def test_manual_off_remains_allowed_during_auto_off(self):
+    def test_manual_off_remains_allowed_during_neutral_temperature_fault(self):
         sensor = analog_sensor(75.0, error=True)
         sensor.ctrl[scheme.OUT_CH1] = analog_rule(scheme.OUT_CH1, logic=scheme.LOGIC_HEAT)
         forbid, want = scheme.aggregate_rules({scheme.SEN_T1: sensor}, scheme.OUT_CH1)
         record_human_detail(self, "runtime_masks", {"forbid": forbid, "want": want})
+        self.assertEqual((forbid, want), (0, 0))
 
         out = HoldOutputModel(actual_on=False, requested_on=False)
         out.apply_resolved_hold(forbid, want)
@@ -648,14 +669,42 @@ class MainOutputPriorityTests(unittest.TestCase):
         self.assertTrue(out.set_manual_hold(False))
         self.assertFalse(out.actual_on)
 
-    def test_enabled_t1_error_blocks_manual_on_for_affected_channel(self):
-        self._assert_enabled_sensor_error_blocks_manual_on(scheme.SEN_T1, scheme.OUT_CH1)
+    def test_enabled_t1_error_keeps_manual_on_available_for_affected_channel(self):
+        self._assert_enabled_sensor_error_keeps_manual_on_available(scheme.SEN_T1, scheme.OUT_CH1)
 
-    def test_enabled_t2_error_blocks_manual_on_for_affected_channel(self):
-        self._assert_enabled_sensor_error_blocks_manual_on(scheme.SEN_T2, scheme.OUT_CH2)
+    def test_enabled_t2_error_keeps_manual_on_available_for_affected_channel(self):
+        self._assert_enabled_sensor_error_keeps_manual_on_available(scheme.SEN_T2, scheme.OUT_CH2)
 
-    def test_enabled_t3_error_blocks_manual_on_for_affected_channel(self):
-        self._assert_enabled_sensor_error_blocks_manual_on(scheme.SEN_T3, scheme.OUT_CH3)
+    def test_enabled_t3_error_keeps_manual_on_available_for_affected_channel(self):
+        self._assert_enabled_sensor_error_keeps_manual_on_available(scheme.SEN_T3, scheme.OUT_CH3)
+
+    def test_level_and_flow_faults_still_form_forbid_masks(self):
+        level = scheme.build_control_sensor(
+            scheme.SEN_L,
+            enabled_channels=(scheme.OUT_CH1,),
+            fault=True,
+        )
+        level_forbid, level_want = scheme.aggregate_rules_timed(
+            {scheme.SEN_L: level},
+            scheme.OUT_CH1,
+            scheme.control_delay_ms(scheme.SEN_L),
+        )
+        self.assertEqual(level_want, 0)
+        self.assertEqual(level_forbid, 1 << scheme.SEN_L)
+
+        flow = scheme.build_control_sensor(
+            scheme.SEN_F,
+            enabled_channels=(scheme.OUT_CH1,),
+            fault=True,
+        )
+        flow_forbid, flow_want = scheme.aggregate_rules_timed(
+            {scheme.SEN_F: flow},
+            scheme.OUT_CH1,
+            scheme.control_delay_ms(scheme.SEN_F),
+            linked_output_on=True,
+        )
+        self.assertEqual(flow_want, 0)
+        self.assertEqual(flow_forbid, 1 << scheme.SEN_F)
 
 
 class PressureAlarmIsolationTests(unittest.TestCase):
@@ -762,7 +811,7 @@ class SensorEnableWarmupFunctionalTests(unittest.TestCase):
             logic=scheme.LOGIC_HEAT,
             min_val=10.0,
             max_val=30.0,
-            fail_safe=scheme.FailSafeMode.FORCE_OFF,
+            fail_safe=scheme.FailSafeMode.NEUTRAL,
         )
 
     @classmethod
@@ -831,7 +880,7 @@ class SensorEnableWarmupFunctionalTests(unittest.TestCase):
         self.assertEqual(final_want, 0)
         self.assertFalse(output.apply_resolved_hold(final_forbid, final_want))
 
-    def test_warmup_timeout_without_poll_marks_sensor_invalid_for_main_output(self):
+    def test_warmup_timeout_without_poll_keeps_main_output_state_neutral(self):
         sensor = self._make_t1_sensor(math.nan, enabled=False, present=False)
         output = HoldOutputModel(actual_on=True, requested_on=True)
         warmup_ms = max(3000, 2 * 1000 + 1000)
@@ -849,9 +898,9 @@ class SensorEnableWarmupFunctionalTests(unittest.TestCase):
         self.assertFalse(sensor.is_in_enable_warmup(after_timeout_ms))
         self.assertFalse(sensor.usable(after_timeout_ms))
         self.assertEqual(sensor.alarm_mask(after_timeout_ms), 0b0001)
-        self.assertEqual(forbid, 1 << scheme.SEN_T1)
+        self.assertEqual(forbid, 0)
         self.assertEqual(want, 0)
-        self.assertFalse(output.apply_resolved_hold(forbid, want))
+        self.assertTrue(output.apply_resolved_hold(forbid, want))
 
 
 class PressureSensorErrorHandlingTests(unittest.TestCase):
@@ -1097,6 +1146,10 @@ class FullMatrixSourceGuardTests(unittest.TestCase):
 
     def test_state_api_keeps_active_alarm_reason_list(self):
         self.assertIn("activeAlarmReasons", self.webapi_h)
+        self.assertIn("activeAlarmsAll", self.webapi_h)
+        self.assertIn("_buildActiveAlarmsAll(", self.webapi_h)
+        self.assertIn('item["text"] = text;', self.webapi_h)
+        self.assertIn('item["acked"] = acked;', self.webapi_h)
 
     def test_level_and_pressure_alarms_do_not_add_channel_safety_forbids(self):
         self.assertNotIn("_om->setSafetyForbid(OUT_CH1, RULEIDX_SAFETY_LEVEL, true);", self.process_h)
@@ -1181,8 +1234,18 @@ class FullMatrixSourceGuardTests(unittest.TestCase):
         self.assertIn("markSensorFault(SENSOR_ERR_COMM, now, false);", self.sensors_h)
         self.assertIn("markSensorFault(SENSOR_ERR_COMM, now, true);", self.sensors_h)
 
-    def test_pressure_sensor_fault_is_neutral_for_output_manager(self):
-        self.assertIn("bool invalidMeansOff = (sensorIdx != SEN_P);", self.output_manager_h)
+    def test_temperature_and_pressure_sensor_faults_are_neutral_while_level_and_flow_stay_forbid(self):
+        normalized = "".join(self.output_manager_h.split())
+        start = normalized.find("invalidMeansOff=")
+        self.assertNotEqual(start, -1)
+        end = normalized.find(";", start)
+        self.assertNotEqual(end, -1)
+        expr = normalized[start + len("invalidMeansOff="):end]
+        self.assertTrue(expr.startswith("!("))
+        for token in ("SEN_T1", "SEN_T2", "SEN_T3", "SEN_DT", "SEN_P"):
+            self.assertIn(f"sensorIdx=={token}", expr)
+        for token in ("SEN_L", "SEN_F", "SEN_C", "SEN_V"):
+            self.assertNotIn(f"sensorIdx=={token}", expr)
         self.assertIn('case SEN_P:  return "управление по давлению P";', self.output_manager_h)
         self.assertIn('case SEN_P:  return "управление по давлению P";', self.webapi_h)
         self.assertIn('if (mask & (1u << RULEIDX_SAFETY_PRESSURE)) _appendHumanReason(text, "авария давления");', self.webapi_h)

@@ -553,12 +553,15 @@ private:
             return 0;
         }
 
-        bool invalidMeansOff = (sensorIdx != SEN_P);
+        const bool invalidMeansOff =
+            !(sensorIdx == SEN_T1 || sensorIdx == SEN_T2 ||
+              sensorIdx == SEN_T3 || sensorIdx == SEN_DT ||
+              sensorIdx == SEN_P);
         bool controlGate = true;
         if (_isMainOutput(outIdx) && SensorManager::isSchemeControlSensorIndex(sensorIdx)) {
-            // Pressure sensor faults are treated as a neutral "no command":
-            // the operator still sees ERR/alarm, but relay state must not jerk
-            // because of a phantom BMP180 reading or missing I2C sensor.
+            // Temperature/dT/pressure sensor faults are treated as a neutral
+            // "no command": the operator still sees ERR/alarm, but relay
+            // state must not jerk. L/F keep their explicit forbid behavior.
             if (sensorIdx == SEN_F) {
                 controlGate = _flowControlGate(prevState, outIdx);
             }
