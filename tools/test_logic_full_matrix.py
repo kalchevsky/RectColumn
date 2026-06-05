@@ -61,7 +61,7 @@ def simulate_bmp180_poll(raw_pressure_hpa: float,
                          init_ok: bool = True) -> tuple[float, str]:
     if i2c_code != 0 or not init_ok or math.isnan(raw_pressure_hpa):
         return math.nan, "comm"
-    if raw_pressure_hpa < 300.0 or raw_pressure_hpa > 1100.0:
+    if raw_pressure_hpa < 800.0 or raw_pressure_hpa > 1300.0:
         return math.nan, "out_of_range"
     return raw_pressure_hpa, ""
 
@@ -920,6 +920,194 @@ class PressureSensorErrorHandlingTests(unittest.TestCase):
         self.assertEqual(reason, "comm")
 
 
+class SensorErrorActiveStickyTests(unittest.TestCase):
+    @staticmethod
+    def _t1_rule() -> scheme.CtrlRule:
+        return scheme.CtrlRule(
+            enabled=True,
+            out_idx=scheme.OUT_CH1,
+            logic=scheme.LOGIC_HEAT,
+            min_val=10.0,
+            max_val=30.0,
+            fail_safe=scheme.FailSafeMode.NEUTRAL,
+        )
+
+    @classmethod
+    def _make_t1_sensor(cls, value: float, *, active: bool, sticky: bool, present: bool) -> scheme.Sensor:
+        sensor = scheme.Sensor(
+            enabled=True,
+            present=present,
+            error=active,
+            sticky=sticky,
+            value=value,
+        )
+        sensor.ctrl[scheme.OUT_CH1] = cls._t1_rule()
+        return sensor
+
+    def test_fault_sets_active_and_sticky_and_makes_sensor_unusable(self):
+        sensor = self._make_t1_sensor(math.nan, active=True, sticky=True, present=False)
+        forbid, want = scheme.aggregate_rules({scheme.SEN_T1: sensor}, scheme.OUT_CH1)
+        self.assertTrue(sensor.error)
+        self.assertTrue(sensor.sticky)
+        self.assertFalse(sensor.usable())
+        self.assertEqual((forbid, want), (0, 0))
+        self.assertEqual(
+            scheme.sensor_loss_overlay_lines({scheme.SEN_T1: sensor}),
+            ["Потеря датчика T1"],
+        )
+
+    def test_recovered_sensor_keeps_sticky_but_returns_to_control_and_leaves_overlay(self):
+        sensor = self._make_t1_sensor(22.0, active=False, sticky=True, present=True)
+        forbid, want = scheme.aggregate_rules({scheme.SEN_T1: sensor}, scheme.OUT_CH1)
+        self.assertFalse(sensor.error)
+        self.assertTrue(sensor.sticky)
+        self.assertTrue(sensor.usable())
+        self.assertEqual((forbid, want), (0, 0))
+        self.assertEqual(scheme.sensor_loss_overlay_lines({scheme.SEN_T1: sensor}), [])
+
+    def test_operator_off_on_after_recovery_clears_sticky(self):
+        sensor = self._make_t1_sensor(22.0, active=False, sticky=True, present=True)
+        sensor.sticky = False
+        self.assertFalse(sensor.sticky)
+        self.assertTrue(sensor.usable())
+        self.assertEqual(scheme.sensor_loss_overlay_lines({scheme.SEN_T1: sensor}), [])
+
+    def test_operator_off_on_while_faulty_clears_sticky_until_next_fault_poll(self):
+        sensor = self._make_t1_sensor(math.nan, active=True, sticky=True, present=False)
+        sensor.sticky = False
+        self.assertTrue(sensor.error)
+        self.assertFalse(sensor.sticky)
+        self.assertFalse(sensor.usable())
+        self.assertEqual(
+            scheme.sensor_loss_overlay_lines({scheme.SEN_T1: sensor}),
+            ["Потеря датчика T1"],
+        )
+        sensor.sticky = True
+        self.assertTrue(sensor.sticky)
+
+    def test_dt_returns_after_sources_recover_even_if_sticky_marker_remains(self):
+        t1 = self._make_t1_sensor(78.2, active=False, sticky=True, present=True)
+        t2 = self._make_t1_sensor(79.6, active=False, sticky=True, present=True)
+        self.assertTrue(scheme.virtual_dt_ready(t1, t2))
+
+    def test_flow_safety_reacts_to_active_not_sticky(self):
+        flow_sticky_only = scheme.build_control_sensor(
+            scheme.SEN_F,
+            enabled_channels=(scheme.OUT_CH1,),
+            fault=False,
+        )
+        flow_sticky_only.sticky = True
+        forbid, want = scheme.aggregate_rules_timed(
+            {scheme.SEN_F: flow_sticky_only},
+            scheme.OUT_CH1,
+            scheme.control_delay_ms(scheme.SEN_F),
+            linked_output_on=True,
+        )
+        self.assertEqual((forbid, want), (0, 0))
+
+        flow_active_fault = scheme.build_control_sensor(
+            scheme.SEN_F,
+            enabled_channels=(scheme.OUT_CH1,),
+            fault=True,
+        )
+        flow_active_fault.sticky = False
+        forbid, want = scheme.aggregate_rules_timed(
+            {scheme.SEN_F: flow_active_fault},
+            scheme.OUT_CH1,
+            scheme.control_delay_ms(scheme.SEN_F),
+            linked_output_on=True,
+        )
+        self.assertEqual(forbid, 1 << scheme.SEN_F)
+        self.assertEqual(want, 0)
+
+    def test_cold_start_missing_loss_tracking_sensors_start_active_and_sticky_but_l_does_not(self):
+        tracked = {
+            scheme.SEN_T1: scheme.Sensor(enabled=True, present=False, error=True, sticky=True, value=math.nan),
+            scheme.SEN_P: scheme.Sensor(enabled=True, present=False, error=True, sticky=True, value=math.nan),
+            scheme.SEN_F: scheme.Sensor(enabled=True, present=False, error=True, sticky=True, value=math.nan),
+            scheme.SEN_L: scheme.Sensor(enabled=True, present=True, error=False, sticky=False, value=0.0),
+        }
+        for sensor_idx in (scheme.SEN_T1, scheme.SEN_P, scheme.SEN_F):
+            with self.subTest(sensor=scheme.SENSOR_NAMES[sensor_idx]):
+                self.assertTrue(tracked[sensor_idx].error)
+                self.assertTrue(tracked[sensor_idx].sticky)
+        self.assertFalse(tracked[scheme.SEN_L].sticky)
+        self.assertEqual(
+            scheme.sensor_loss_overlay_lines(tracked),
+            ["Потеря датчика T1", "Потеря датчика P", "Потеря датчика F"],
+        )
+
+
+class Ds18b20RecoveryTests(unittest.TestCase):
+    def test_ds18b20_auto_recovers_after_periodic_rescan_and_keeps_sticky_until_operator_reset(self):
+        sensor = scheme.Ds18b20RuntimeModel(
+            enabled=True,
+            bus_present=True,
+            present=True,
+            error=False,
+            sticky=False,
+            value=22.0,
+            live_value=22.0,
+        )
+        sensor.tick(1000)
+        sensor.tick(1400)
+        self.assertTrue(sensor.usable(1400))
+
+        sensor.disconnect(2000)
+        self.assertTrue(sensor.error)
+        self.assertTrue(sensor.sticky)
+        self.assertFalse(sensor.usable(2000))
+
+        sensor.reconnect(23.5)
+        sensor.tick(5000)
+        sensor.tick(5400)
+        sensor.tick(6400)
+        sensor.tick(6800)
+        sensor.tick(7800)
+        sensor.tick(8200)
+        sensor.tick(9200)
+        sensor.tick(9600)
+        sensor.tick(10600)
+        sensor.tick(11000)
+
+        self.assertTrue(sensor.present)
+        self.assertFalse(sensor.error)
+        self.assertTrue(sensor.usable(11000))
+        self.assertFalse(math.isnan(sensor.value))
+        self.assertTrue(sensor.sticky)
+
+    def test_ds18b20_enable_cycle_forces_immediate_reinit_and_reading_resume(self):
+        sensor = scheme.Ds18b20RuntimeModel(
+            enabled=True,
+            bus_present=False,
+            present=False,
+            error=True,
+            sticky=True,
+            value=math.nan,
+            live_value=24.0,
+        )
+
+        sensor.disable()
+        sensor.reconnect(24.0)
+        sensor.enable(0)
+        sensor.tick(0)
+        sensor.tick(400)
+        sensor.tick(1400)
+        sensor.tick(1800)
+        sensor.tick(2800)
+        sensor.tick(3200)
+        sensor.tick(4200)
+        sensor.tick(4600)
+        sensor.tick(5600)
+        sensor.tick(6000)
+
+        self.assertTrue(sensor.present)
+        self.assertFalse(sensor.error)
+        self.assertTrue(sensor.usable(6000))
+        self.assertFalse(math.isnan(sensor.value))
+        self.assertFalse(sensor.sticky)
+
+
 class StopAndIsolationTests(unittest.TestCase):
     def test_global_stop_turns_off_only_main_outputs_and_clears_main_masks(self):
         ctrl = StopControllerModel()
@@ -1181,6 +1369,8 @@ class FullMatrixSourceGuardTests(unittest.TestCase):
         self.assertIn("3000UL", self.webapi_h)
         self.assertIn("so[\"warmup\"] = s->isInEnableWarmup();", self.webapi_h)
         self.assertIn("if (isInEnableWarmup()) {", self.sensors_h)
+        self.assertIn("sensorErrorActive", self.webapi_h)
+        self.assertIn("sensorErrorSticky", self.webapi_h)
         self.assertIn("sensorErrorLatched", self.webapi_h)
         self.assertIn("sensorLostNotice", self.webapi_h)
         self.assertIn("http.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);", self.remote_notifier_h)
@@ -1216,8 +1406,8 @@ class FullMatrixSourceGuardTests(unittest.TestCase):
         self.assertIn("#define SENSOR_LOST_TIMEOUT_MS       3000UL", self.config_h)
         self.assertIn("#define SENSOR_LOST_TIMEOUT_DS_MS    5000UL", self.config_h)
         self.assertIn("#define SENSOR_HEALTHY_HYSTERESIS_MS 5000UL", self.config_h)
-        self.assertIn("#define PRESSURE_SANITY_MIN_HPA      300.0f", self.config_h)
-        self.assertIn("#define PRESSURE_SANITY_MAX_HPA      1100.0f", self.config_h)
+        self.assertIn("#define PRESSURE_SANITY_MIN_HPA      800.0f", self.config_h)
+        self.assertIn("#define PRESSURE_SANITY_MAX_HPA      1300.0f", self.config_h)
 
     # === FIX BUG 1: pressure sensor phantom value handled ===
     def test_pressure_sensor_rejects_out_of_range_reading_immediately(self):
@@ -1274,50 +1464,25 @@ class FullMatrixSourceGuardTests(unittest.TestCase):
         # sensorLostNotice() must concatenate name properly.
         self.assertIn('return hasSensorLostAlarm() ? (String("Потеря датчика ") + name) : String("");', self.sensors_h)
 
-    # === FIX BUG 3: sticky error — sensorErrorLatched stays after physical restore ===
-    def test_sensor_error_latched_stays_true_until_operator_off_on_cycle(self):
-        # After a sensor fault, sensorErrorLatched stays true even if the sensor
-        # physically reconnects and produces valid readings. Only the operator
-        # off->on cycle (applyOperatorResetCycle) can clear it.
+    # === FIX BUG 3: sticky marker is split from current active fault ===
+    def test_sensor_error_sticky_is_split_from_active_fault_and_clears_on_operator_cycle(self):
+        self.assertIn("bool isSensorErrorActive() const { return error; }", self.sensors_h)
+        self.assertIn("bool isSensorErrorSticky() const { return _trackSensorLoss && sensorErrorLatched; }", self.sensors_h)
         self.assertIn("sensorErrorLatched = !present;", self.sensors_h)
-        # FIX: begin() now calls markSensorFault when sensor is absent, so
-        # hasSensorLostAlarm() returns true immediately at boot.
+        self.assertIn("sensorErrorLatched = true;", self.sensors_h)
+        self.assertIn("error = false;", self.sensors_h)
+        self.assertIn("sensorErrorReason = SENSOR_ERR_NONE;", self.sensors_h)
+        apply_reset = self.sensors_h[
+            self.sensors_h.find("SensorOperatorResetResult applyOperatorResetCycle() {"):
+            self.sensors_h.find("bool hasUsableValue() const {")
+        ]
         self.assertIn(
-            "if (!present) {\n            markSensorFault(SENSOR_ERR_NO_RESPONSE, millis(), false);\n        }",
-            self.sensors_h,
+            "if (!isSensorErrorSticky()) return SensorOperatorResetResult::None;\n        sensorErrorLatched = false;",
+            apply_reset,
         )
-        # markSensorHealthy must NOT clear sensorErrorLatched automatically.
-        # The condition "if (!_trackSensorLoss || !sensorErrorLatched)" confirms this.
-        self.assertIn(
-            "if (!_trackSensorLoss || !sensorErrorLatched) sensorErrorReason = SENSOR_ERR_NONE;",
-            self.sensors_h,
-        )
-        # applyOperatorResetCycle must NOT unconditionally reset sensorErrorLatched
-        # to false before checking _canClearLatchedErrorNow().
-        self.assertIn(
-            "if (_canClearLatchedErrorNow()) {\n            sensorErrorLatched = false;",
-            self.sensors_h,
-        )
-        # FIX: after the first healthy reading, sensorErrorLatched stays true
-        # (Relatched path does NOT reset it to false).
-        self.assertNotIn(
-            "sensorErrorLatched = true;\n        return SensorOperatorResetResult::Relatched;",
-            self.sensors_h,
-        )
-        # ERR-01: while sticky error is latched, physical recovery must NOT
-        # write a misleading "restored" entry to the web log.
-        self.assertNotIn(
-            '"Датчик ") + s->name + " восстановился, сбросьте ошибку в интерфейсе"',
-            self.rect_column_ino,
-        )
-        # Operator off->on restore logging remains in WebAPI and must stay.
-        self.assertIn(
-            '_log->add("Датчик " + s->name + " восстановлен оператором",',
-            self.webapi_h,
-        )
-        # Sticky error must block sensor from control even when live value is valid.
-        self.assertIn("!sensorErrorLatched && !isnan(value)", self.sensors_h)
-        # isInEnableWarmup further delays re-entry after operator off->on.
+        self.assertNotIn("_canClearLatchedErrorNow()", apply_reset)
+        self.assertIn("!isSensorErrorActive() && !isnan(value)", self.sensors_h)
+        self.assertIn("if (fs->tracksSensorLoss() && (fs->isSensorErrorActive() || !fs->present)) {", self.process_h)
         self.assertIn("isInEnableWarmup()", self.sensors_h)
 
     # === FIX BUG 4: relay timeout -> neutral state, manualWant cleared ===

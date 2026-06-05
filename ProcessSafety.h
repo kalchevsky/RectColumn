@@ -110,7 +110,7 @@ private:
         fs->externalAlarmMaskBits = 0;
         for (uint8_t ai = 1; ai < N_ALARMS; ai++) fs->alarm[ai].triggered = false;
 
-        if (fs->tracksSensorLoss() && (fs->error || fs->sensorErrorLatched || !fs->present)) {
+        if (fs->tracksSensorLoss() && (fs->isSensorErrorActive() || !fs->present)) {
             fs->alarm[0].triggered = false;
             _flowConditionLatched = false;
             _flowAlarmLatched = false;

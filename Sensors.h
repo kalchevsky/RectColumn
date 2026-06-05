@@ -149,7 +149,7 @@ public:
             } else if (!a.enabled) {
                 a.triggered = false;
                 _alarmCandidateSinceMs[i] = 0;
-            } else if (_trackSensorLoss && sensorErrorLatched) {
+            } else if (_trackSensorLoss && isSensorErrorActive()) {
                 a.triggered = false;
                 _alarmCandidateSinceMs[i] = 0;
             } else if (isnan(value)) {
@@ -192,7 +192,9 @@ public:
     }
 
     bool tracksSensorLoss() const { return _trackSensorLoss; }
-    bool hasSensorLostAlarm() const { return _trackSensorLoss && sensorErrorLatched; }
+    bool isSensorErrorActive() const { return error; }
+    bool isSensorErrorSticky() const { return _trackSensorLoss && sensorErrorLatched; }
+    bool hasSensorLostAlarm() const { return _trackSensorLoss && isSensorErrorActive(); }
     bool operatorResetArmed() const { return _operatorResetArmed; }
     const char* sensorErrorReasonCode() const { return _sensorErrorReasonCode(sensorErrorReason); }
 
@@ -207,23 +209,14 @@ public:
     SensorOperatorResetResult applyOperatorResetCycle() {
         if (!_trackSensorLoss || !_operatorResetArmed) return SensorOperatorResetResult::None;
         _operatorResetArmed = false;
-        if (!sensorErrorLatched) return SensorOperatorResetResult::None;
-
-        if (_canClearLatchedErrorNow()) {
-            sensorErrorLatched = false;
-            sensorErrorReason = SENSOR_ERR_NONE;
-            return SensorOperatorResetResult::Restored;
-        }
-
-        // FIX: sensorErrorLatched must stay true until sensor is genuinely restored.
-        // Previously this line reset it to true even after a healthy reading,
-        // which prevented the sticky error from being cleared by the operator
-        // cycle until the next fault occurred.
-        return SensorOperatorResetResult::Relatched;
+        if (!isSensorErrorSticky()) return SensorOperatorResetResult::None;
+        sensorErrorLatched = false;
+        if (!isSensorErrorActive()) sensorErrorReason = SENSOR_ERR_NONE;
+        return SensorOperatorResetResult::Restored;
     }
 
     bool hasUsableValue() const {
-        return enabled && present && !error && !sensorErrorLatched && !isnan(value) && !isStale();
+        return enabled && present && !isSensorErrorActive() && !isnan(value) && !isStale();
     }
 
     bool controlRuleEnabled(uint8_t outIdx) const {
@@ -366,6 +359,7 @@ public:
 
     virtual void begin() = 0;
     virtual void poll()  = 0;
+    virtual void onEnabledByOperator(uint32_t now) { (void)now; }
 
     virtual const char* diagText() const {
         switch (diagCode) {
@@ -405,7 +399,7 @@ protected:
 
         error = false;
         diagCode = SENSOR_DIAG_NONE;
-        if (!_trackSensorLoss || !sensorErrorLatched) sensorErrorReason = SENSOR_ERR_NONE;
+        sensorErrorReason = SENSOR_ERR_NONE;
     }
 
 protected:
@@ -468,13 +462,11 @@ public:
         lastValidMs = 0;
         _conversionPending = false;
         _conversionStartedMs = 0;
+        _lastReconnectAttemptMs = millis();
         _lastPollMs = millis() - periodMs; // first sample can start immediately
         _healthySinceMs = 0;
 
-        // FIX: markSensorFault must be called so hasSensorLostAlarm() returns
-        // true immediately when sensor is physically absent at boot. Without this,
-        // sensorErrorLatched is set but hasSensorLostAlarm() stays false until
-        // poll() runs a full cycle, delaying the alarm and notification.
+        // Поддерживаем active/sticky в едином состоянии уже на старте.
         if (!present) {
             markSensorFault(SENSOR_ERR_NO_RESPONSE, millis(), false);
         }
@@ -487,20 +479,19 @@ public:
     }
 
     bool isDueToStart(uint32_t now) const {
-        // FIX: When sensor is physically absent (present=false), stop requesting
-        // conversions in a tight loop. The sensor should stay in the "lost" state
-        // until physically reconnected. This prevents the "T1 подключён" log entries
-        // that appear when _ensurePresent() returns false and the conversion starts
-        // anyway on the next cycle.
-        if (!present) return false;
+        if (!enabled || _conversionPending) return false;
+        if (!present) {
+            return ((uint32_t)(now - _lastReconnectAttemptMs) >= SENSOR_RECONNECT_INTERVAL_MS);
+        }
 
         const uint32_t cappedHealthyMs =
             (periodMs < SENSOR_LOST_TIMEOUT_DS_MS) ? periodMs : SENSOR_LOST_TIMEOUT_DS_MS;
         const uint32_t retryMs = (error || !present) ? 1000UL : cappedHealthyMs;
-        return enabled && !_conversionPending && ((uint32_t)(now - _lastPollMs) >= retryMs);
+        return ((uint32_t)(now - _lastPollMs) >= retryMs);
     }
 
     bool startConversion(uint32_t now) {
+        if (!present) _lastReconnectAttemptMs = now;
         if (!_ensurePresent()) {
             _lastPollMs = now;
             _conversionPending = false;
@@ -528,6 +519,7 @@ public:
             present = false;
             value = NAN;
             hwLimited = false;
+            _lastReconnectAttemptMs = now;
             markSensorFault(SENSOR_ERR_NO_RESPONSE, now, false);
             return true;
         }
@@ -540,7 +532,7 @@ public:
             return true;
         }
 
-        if (t < -55.0f || t > 125.0f) {
+        if (t < -50.0f || t > 125.0f) {
             present = true;
             value = NAN;
             hwLimited = false;
@@ -566,6 +558,28 @@ public:
         }
     }
 
+    void onEnabledByOperator(uint32_t now) override {
+        _dt.begin();
+        _dt.setResolution(11);
+        _dt.setWaitForConversion(false);
+        _conversionPending = false;
+        _conversionStartedMs = 0;
+        _healthySinceMs = 0;
+        _lastPollMs = now;
+        _lastReconnectAttemptMs = now;
+
+        if (_dt.getDeviceCount() > 0) {
+            present = true;
+            _dt.requestTemperatures();
+            _conversionPending = true;
+            _conversionStartedMs = now;
+        } else {
+            present = false;
+            value = NAN;
+            hwLimited = false;
+        }
+    }
+
 private:
     bool _ensurePresent() {
         if (_dt.getDeviceCount() == 0) _dt.begin();
@@ -574,6 +588,7 @@ private:
         if (!ok) {
             value = NAN;
             hwLimited = false;
+            _lastReconnectAttemptMs = millis();
             markSensorFault(SENSOR_ERR_NO_RESPONSE, millis(), false);
         }
         return ok;
@@ -584,6 +599,7 @@ private:
     bool              _conversionPending = false;
     uint32_t          _conversionStartedMs = 0;
     uint32_t          _conversionWaitMs = 375UL;
+    uint32_t          _lastReconnectAttemptMs = 0;
 };
 
 class VirtualSensor : public SensorBase {
@@ -616,7 +632,7 @@ public:
 
         if (!isnan(_t1->value) && !isnan(_t2->value) &&
             !_t1->error && !_t2->error &&
-            !_t1->sensorErrorLatched && !_t2->sensorErrorLatched &&
+            !_t1->isSensorErrorActive() && !_t2->isSensorErrorActive() &&
             _t1->present && _t2->present &&
             _t1->enabled && _t2->enabled) {
             value = _t2->value - _t1->value;
@@ -657,8 +673,7 @@ public:
         diagCode = SENSOR_DIAG_NONE;
         _healthySinceMs = 0;
 
-        // FIX: markSensorFault must be called so hasSensorLostAlarm() returns
-        // true immediately when sensor is physically absent at boot.
+        // Поддерживаем active/sticky в едином состоянии уже на старте.
         if (!present) {
             if (i2cCode != 0) {
                 _logI2cFailure(i2cCode);
@@ -765,14 +780,25 @@ public:
         // Для GPIO19 и GPIO23 используем внутреннюю подтяжку к GND.
         pinMode(_pin, INPUT_PULLDOWN);
         _lastPollMs = millis();
-        present = true;
-        error   = false;
-        sensorErrorReason = SENSOR_ERR_NONE;
-        sensorErrorLatched = false;
-        value   = (digitalRead(_pin) == HIGH) ? 1.0f : 0.0f;
-        lastValidMs = _lastPollMs;
+        const bool high = (digitalRead(_pin) == HIGH);
+        value = high ? 1.0f : 0.0f;
+        if (_trackSensorLoss && !high) {
+            present = false;
+            error = true;
+            sensorErrorReason = SENSOR_ERR_NO_RESPONSE;
+            sensorErrorLatched = true;
+            value = NAN;
+            lastValidMs = 0;
+        } else {
+            present = true;
+            error = false;
+            sensorErrorReason = SENSOR_ERR_NONE;
+            sensorErrorLatched = false;
+            lastValidMs = _lastPollMs;
+        }
         hwLimited = false;
         diagCode = SENSOR_DIAG_NONE;
+        _healthySinceMs = 0;
     }
 
     bool isDueToPoll(uint32_t now) const {

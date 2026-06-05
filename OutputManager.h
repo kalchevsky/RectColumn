@@ -890,12 +890,14 @@ private:
         String outText = String("enabled=") + (s->enabled ? "1" : "0");
         outText += ",error=";
         outText += (s->error ? "1" : "0");
+        outText += ",active=";
+        outText += s->isSensorErrorActive() ? "1" : "0";
         outText += ",present=";
         outText += (s->present ? "1" : "0");
         outText += ",alarm=";
         outText += _formatAlarmLabels(s);
-        outText += ",latched=";
-        outText += s->sensorErrorLatched ? "1" : "0";
+        outText += ",sticky=";
+        outText += s->isSensorErrorSticky() ? "1" : "0";
         outText += ",reason=";
         outText += s->sensorErrorReasonCode();
         outText += ",value=";

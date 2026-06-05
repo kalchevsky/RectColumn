@@ -282,16 +282,19 @@ private:
             const bool compatGet = (req->method() == HTTP_GET);
 
             const uint16_t activeBefore = _om->activeAlarmCount(*_sm);
+            const uint16_t unackedBefore = _om->unackedAlarmCount(*_sm);
             _om->acknowledgeCurrentAlarms(*_sm);
             _om->loop(*_sm);
+            const uint16_t activeAfter = _om->activeAlarmCount(*_sm);
             const uint16_t unackedAfter = _om->unackedAlarmCount(*_sm);
-            const uint16_t acknowledgedCount = (activeBefore >= unackedAfter) ? (activeBefore - unackedAfter) : 0;
+            const uint16_t acknowledgedCount =
+                (unackedBefore >= unackedAfter) ? (unackedBefore - unackedAfter) : 0;
             if (acknowledgedCount > 0) {
                 _log->add("Оператор подтвердил тревоги", _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
             }
-            DynamicJsonDocument resp(768);
+            DynamicJsonDocument resp(1536);
             resp["ok"] = true;
-            resp["activeAlarmCount"] = activeBefore;
+            resp["activeAlarmCount"] = activeAfter;
             resp["acknowledgedCount"] = acknowledgedCount;
             resp["unackedAlarmCount"] = unackedAfter;
             resp["muted"] = _om->soundMuted;
@@ -302,6 +305,8 @@ private:
             resp["compatFallback"] = compatGet;
             JsonArray activeAlarmReasons = resp.createNestedArray("activeAlarmReasons");
             _buildActiveAlarmReasons(activeAlarmReasons, true);
+            JsonArray activeAlarmsAll = resp.createNestedArray("activeAlarmsAll");
+            _buildActiveAlarmsAll(activeAlarmsAll);
             _sendDoc(req, 200, resp);
         };
 
@@ -916,7 +921,9 @@ private:
             s->startEnableWarmup(warmupMs);
             _om->clearSensorLostAcknowledgement((uint8_t)si);
             const SensorOperatorResetResult resetResult = s->applyOperatorResetCycle();
-            logOperatorRestore = (resetResult == SensorOperatorResetResult::Restored);
+            s->onEnabledByOperator(millis());
+            logOperatorRestore =
+                (resetResult == SensorOperatorResetResult::Restored) && !s->isSensorErrorActive();
             logOperatorRelatch = (resetResult == SensorOperatorResetResult::Relatched);
         } else if (prevEnabled && !nextEnabled) {
             s->clearEnableWarmup();
@@ -1572,7 +1579,7 @@ private:
             SensorBase* sensor = _sm->s[si];
             if (!sensor || !sensor->enabled) continue;
 
-            // Latched sensor-loss is exposed separately via sensorErrorLatched /
+            // Active sensor-loss is exposed separately via sensorErrorActive /
             // sensorLostNotice, so this list contains only the alarm subsystem.
             const uint8_t activeAlarmMask = (uint8_t)(sensor->alarmMask() & USER_ALARM_MASK);
             const uint8_t unackedAlarmMask =
@@ -1811,6 +1818,8 @@ private:
             so["error"]   = s->error;
             so["present"] = s->present;
             so["sensorError"] = s->error;
+            so["sensorErrorActive"] = s->isSensorErrorActive();
+            so["sensorErrorSticky"] = s->isSensorErrorSticky();
             so["sensorErrorLatched"] = s->sensorErrorLatched;
             so["sensorErrorReason"] = s->sensorErrorReasonCode();
             so["sensorLostNotice"] = s->sensorLostNotice();
@@ -1956,6 +1965,8 @@ private:
             so["sensorEnabled"] = sensor->enabled;
             so["sensorPresent"] = sensor->present;
             so["sensorError"] = sensor->error;
+            so["sensorErrorActive"] = sensor->isSensorErrorActive();
+            so["sensorErrorSticky"] = sensor->isSensorErrorSticky();
             so["sensorErrorLatched"] = sensor->sensorErrorLatched;
             so["sensorErrorReason"] = sensor->sensorErrorReasonCode();
             so["sensorLostNotice"] = sensor->sensorLostNotice();

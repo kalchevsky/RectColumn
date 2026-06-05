@@ -73,6 +73,7 @@ GPIO35_MODE_WER_CH2 = 1
 MAIN_CHANNELS = (OUT_CH1, OUT_CH2, OUT_CH3)
 CONTROL_SENSOR_INDICES = (SEN_T1, SEN_T2, SEN_T3, SEN_DT, SEN_P, SEN_L, SEN_F)
 NON_CONTROL_SENSOR_INDICES = (SEN_C, SEN_V)
+LOSS_TRACKING_SENSOR_INDICES = (SEN_T1, SEN_T2, SEN_T3, SEN_P, SEN_F)
 
 CHANNEL_NAMES = {
     OUT_CH1: "CH1",
@@ -103,6 +104,8 @@ CONTROL_DELAY_MS = {
 }
 
 NEUTRAL_INVALID_SENSOR_INDICES = (SEN_T1, SEN_T2, SEN_T3, SEN_DT, SEN_P)
+SENSOR_HEALTHY_HYSTERESIS_MS = 5000
+SENSOR_RECONNECT_INTERVAL_MS = 3000
 
 
 # ---------------------------------------------------------------------------
@@ -158,6 +161,7 @@ class Sensor:
     enabled: bool = True
     present: bool = True
     error: bool = False
+    sticky: bool = False
     value: float = math.nan
     threshold_percent_input: bool = False
     ctrl: Dict[int, CtrlRule] = field(default_factory=dict)
@@ -247,6 +251,132 @@ class Sensor:
             if self.value < rule.min_val:
                 return -1
         return 0
+
+
+@dataclass
+class Ds18b20RuntimeModel:
+    enabled: bool = True
+    bus_present: bool = True
+    present: bool = True
+    error: bool = False
+    sticky: bool = False
+    value: float = 20.0
+    live_value: float = 20.0
+    period_ms: int = 1000
+    conversion_wait_ms: int = 375
+    healthy_hysteresis_ms: int = SENSOR_HEALTHY_HYSTERESIS_MS
+    conversion_pending: bool = False
+    conversion_started_ms: int = 0
+    last_poll_ms: int = 0
+    healthy_since_ms: int = 0
+    last_reconnect_attempt_ms: int = 0
+    warmup_until_ms: int = 0
+    had_poll_since_enable: bool = True
+
+    def is_in_enable_warmup(self, now_ms: int = 0) -> bool:
+        if self.warmup_until_ms == 0:
+            return False
+        if self.had_poll_since_enable:
+            return False
+        return now_ms < self.warmup_until_ms
+
+    def usable(self, now_ms: int = 0) -> bool:
+        return (
+            self.enabled and self.present and not self.error and
+            not math.isnan(self.value) and not self.is_in_enable_warmup(now_ms)
+        )
+
+    def start_enable_warmup(self, duration_ms: int, *, now_ms: int = 0) -> None:
+        self.had_poll_since_enable = False
+        self.warmup_until_ms = now_ms + duration_ms
+
+    def disconnect(self, now_ms: int) -> None:
+        self.bus_present = False
+        self.present = False
+        self.error = True
+        self.sticky = True
+        self.value = math.nan
+        self.conversion_pending = False
+        self.healthy_since_ms = 0
+        self.last_poll_ms = now_ms
+        self.last_reconnect_attempt_ms = now_ms
+
+    def reconnect(self, value: float) -> None:
+        self.bus_present = True
+        self.live_value = value
+
+    def disable(self) -> None:
+        self.enabled = False
+        self.conversion_pending = False
+
+    def enable(self, now_ms: int) -> None:
+        self.enabled = True
+        self.sticky = False
+        self.start_enable_warmup(max(3000, (2 * self.period_ms) + 1000), now_ms=now_ms)
+        self.force_reinit(now_ms)
+
+    def force_reinit(self, now_ms: int) -> None:
+        self.present = False
+        self.conversion_pending = False
+        self.conversion_started_ms = 0
+        self.last_poll_ms = now_ms
+        self.healthy_since_ms = 0
+        self.last_reconnect_attempt_ms = now_ms
+        if self.bus_present:
+            self.present = True
+            self.conversion_pending = True
+            self.conversion_started_ms = now_ms
+
+    def _start_conversion(self, now_ms: int) -> bool:
+        if not self.bus_present:
+            self.disconnect(now_ms)
+            return False
+        self.present = True
+        self.conversion_pending = True
+        self.conversion_started_ms = now_ms
+        return True
+
+    def _advance_one(self, now_ms: int) -> bool:
+        if not self.enabled:
+            return False
+
+        if self.conversion_pending and (now_ms - self.conversion_started_ms) >= self.conversion_wait_ms:
+            self.conversion_pending = False
+            self.last_poll_ms = now_ms
+            if not self.bus_present:
+                self.disconnect(now_ms)
+                return True
+            self.present = True
+            self.value = self.live_value
+            if not self.error:
+                self.healthy_since_ms = 0
+                self.had_poll_since_enable = True
+                return True
+            if self.healthy_since_ms == 0:
+                self.healthy_since_ms = now_ms
+            if (now_ms - self.healthy_since_ms) < self.healthy_hysteresis_ms:
+                self.error = True
+                self.had_poll_since_enable = True
+                return True
+            self.error = False
+            self.healthy_since_ms = 0
+            self.had_poll_since_enable = True
+            return True
+
+        if not self.present:
+            if (now_ms - self.last_reconnect_attempt_ms) < SENSOR_RECONNECT_INTERVAL_MS:
+                return False
+            self.last_reconnect_attempt_ms = now_ms
+            return self._start_conversion(now_ms)
+
+        if not self.conversion_pending and (now_ms - self.last_poll_ms) >= self.period_ms:
+            return self._start_conversion(now_ms)
+        return False
+
+    def tick(self, now_ms: int) -> None:
+        progressed = True
+        while progressed:
+            progressed = self._advance_one(now_ms)
 
 
 def normalize_lf_off_only(rule: CtrlRule, out_idx: int) -> CtrlRule:
@@ -477,12 +607,32 @@ def build_control_sensor(sensor_idx: int,
                          enabled_channels: Tuple[int, ...] = (),
                          fault: bool = False) -> Sensor:
     if sensor_idx in (SEN_L, SEN_F):
-        sensor = Sensor(value=0.0 if fault else 1.0)
+        sensor = Sensor(value=0.0 if fault else 1.0, sticky=fault and sensor_idx == SEN_F)
     else:
-        sensor = Sensor(value=90.0 if fault else 50.0)
+        sensor = Sensor(value=90.0 if fault else 50.0, sticky=fault and sensor_idx in LOSS_TRACKING_SENSOR_INDICES)
     for out_idx in MAIN_CHANNELS:
         sensor.ctrl[out_idx] = make_channel_rule(sensor_idx, out_idx, out_idx in enabled_channels)
     return sensor
+
+
+def virtual_dt_ready(t1: Sensor, t2: Sensor) -> bool:
+    return (
+        not math.isnan(t1.value) and not math.isnan(t2.value) and
+        not t1.error and not t2.error and
+        t1.present and t2.present and
+        t1.enabled and t2.enabled
+    )
+
+
+def sensor_loss_overlay_lines(sensors: Dict[int, Sensor]) -> list[str]:
+    lines = []
+    for sensor_idx, sensor in sensors.items():
+        if sensor_idx not in LOSS_TRACKING_SENSOR_INDICES:
+            continue
+        if not sensor.enabled or not sensor.error:
+            continue
+        lines.append(f"Потеря датчика {SENSOR_NAMES[sensor_idx]}")
+    return lines
 
 
 def eval_ctrl_timed(sensor_idx: int, sensor: Sensor, out_idx: int,
@@ -1166,7 +1316,7 @@ class SourceGuardTests(unittest.TestCase):
         self.assertIn("static constexpr uint8_t SENSOR_LOST_ALARM_MASK", self.sensors_h)
         self.assertIn("uint8_t userAlarmMask() const", self.sensors_h)
         self.assertIn("if (hasSensorLostAlarm()) mask |= SENSOR_LOST_ALARM_MASK;", self.sensors_h)
-        self.assertIn("} else if (_trackSensorLoss && sensorErrorLatched) {", self.sensors_h)
+        self.assertIn("} else if (_trackSensorLoss && isSensorErrorActive()) {", self.sensors_h)
         self.assertNotIn("primaryErrorAlarmIdx", self.sensors_h)
 
     def test_flow_loss_does_not_use_global_ch2_demand_interlock(self):
@@ -1241,9 +1391,10 @@ class SourceGuardTests(unittest.TestCase):
         self.assertIn("function collectActiveAlarmItems()", self.app_js)
         self.assertIn("Array.isArray(s.activeAlarmsAll) ? s.activeAlarmsAll : []", self.app_js)
         self.assertIn("if (Array.isArray(res.activeAlarmsAll)) s.activeAlarmsAll = res.activeAlarmsAll.slice();", self.app_js)
-        self.assertIn("function collectLatchedSensorLines()", self.app_js)
-        self.assertIn("sensor.sensorErrorLatched !== true", self.app_js)
+        self.assertIn("function collectActiveSensorLossLines()", self.app_js)
+        self.assertIn("sensor.sensorErrorActive !== true", self.app_js)
         self.assertIn("sensor.sensorLostNotice", self.app_js)
+        self.assertIn("sensor.sensorErrorSticky === true", self.app_js)
         self.assertIn("function updateUnifiedAlertOverlay()", self.app_js)
         self.assertIn("function unifiedAlertOverlayHtml(activeItems, latchedLines)", self.app_js)
         self.assertIn("Активные тревоги и ошибки", self.app_js)
@@ -1411,7 +1562,7 @@ class SourceGuardTests(unittest.TestCase):
         self.assertIn("resetAlarmRuntime();", virtual_poll)
         self.assertIn("resetAllControlRuntime();", virtual_poll)
         self.assertIn("_t1->enabled && _t2->enabled", virtual_poll)
-        self.assertIn("!_t1->sensorErrorLatched && !_t2->sensorErrorLatched", virtual_poll)
+        self.assertIn("!_t1->isSensorErrorActive() && !_t2->isSensorErrorActive()", virtual_poll)
         self.assertIn("error = true;", virtual_poll)
 
     def test_manual_relay_button_holds_pending_until_terminal_state_and_uses_firmware_error_text(self):

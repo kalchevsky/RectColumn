@@ -66,7 +66,7 @@ function ensureUnifiedAlertOverlayStyles(){
   style.id = 'rc-unified-alert-style';
   style.textContent = [
     '.rc-unified-alert-overlay{position:fixed;top:calc(env(safe-area-inset-top,0px) + 92px);right:12px;left:12px;display:flex;justify-content:flex-end;pointer-events:none;z-index:1300;}',
-    '.rc-unified-alert-card{pointer-events:auto;width:min(420px,calc(100vw - 24px));max-height:min(46vh,420px);overflow:auto;padding:14px 14px 12px;border-radius:16px;background:rgba(8,10,18,.97);border:1px solid rgba(255,107,107,.45);box-shadow:0 18px 38px rgba(0,0,0,.46);color:#f8fafc;}',
+    '.rc-unified-alert-card{pointer-events:none;width:min(420px,calc(100vw - 24px));max-height:min(46vh,420px);overflow:auto;padding:14px 14px 12px;border-radius:16px;background:rgba(8,10,18,.97);border:1px solid rgba(255,107,107,.45);box-shadow:0 18px 38px rgba(0,0,0,.46);color:#f8fafc;}',
     '.rc-unified-alert-title{font-weight:800;font-size:16px;line-height:1.2;margin:0 0 10px;}',
     '.rc-unified-alert-section + .rc-unified-alert-section{margin-top:12px;}',
     '.rc-unified-alert-section-title{font-size:12px;line-height:1.25;text-transform:uppercase;letter-spacing:.04em;color:#fca5a5;margin:0 0 8px;}',
@@ -77,12 +77,6 @@ function ensureUnifiedAlertOverlayStyles(){
     '.rc-unified-alert-line-acked{background:rgba(120,53,15,.32);border:1px solid rgba(251,191,36,.28);color:#fed7aa;}',
     '.rc-unified-alert-line-latched{background:rgba(69,26,3,.34);border:1px solid rgba(253,186,116,.28);color:#ffedd5;}',
     '.rc-unified-alert-mark{flex:0 0 auto;font-size:11px;line-height:1.2;color:#fcd34d;white-space:nowrap;padding-top:2px;}',
-    '.rc-unified-alert-actions{display:flex;gap:8px;margin-top:14px;}',
-    '.rc-unified-alert-btn{pointer-events:auto;appearance:none;border:1px solid rgba(248,250,252,.18);background:#111827;color:#f8fafc;border-radius:12px;padding:10px 12px;font-size:14px;font-weight:700;line-height:1.1;}',
-    '.rc-unified-alert-btn:disabled{opacity:.6;}',
-    '.rc-unified-alert-btn-primary{border-color:rgba(248,113,113,.42);background:#7f1d1d;}',
-    '.rc-unified-alert-badge{pointer-events:auto;display:inline-flex;align-items:center;gap:8px;max-width:min(260px,calc(100vw - 24px));padding:10px 12px;border-radius:999px;border:1px solid rgba(248,113,113,.42);background:rgba(15,23,42,.96);box-shadow:0 12px 28px rgba(0,0,0,.4);color:#f8fafc;font-size:13px;font-weight:700;line-height:1.1;}',
-    '.rc-unified-alert-badge-count{display:inline-flex;align-items:center;justify-content:center;min-width:24px;height:24px;padding:0 7px;border-radius:999px;background:#7f1d1d;color:#fee2e2;font-size:12px;font-weight:800;}',
     '@media (min-width: 720px){.rc-unified-alert-overlay{left:auto;max-width:420px;}}'
   ].join('');
   document.head.appendChild(style);
@@ -120,9 +114,7 @@ var state = {
   manualVisualTimers: {},
   relayErrorSeen: {},
   currentView: '',
-  ackPending: false,
-  alertOverlayCollapsed: false,
-  alertOverlaySignature: ''
+  ackPending: false
 };
 
 function esc(s){
@@ -345,81 +337,31 @@ function collectActiveAlarmItems(){
   }
   return items;
 }
-function collectLatchedSensorLines(){
+function collectActiveSensorLossLines(){
   var s = state.lastState || {};
   var sensors = Array.isArray(s.sensors) ? s.sensors : [];
   var seen = {};
   var lines = [];
   for (var i = 0; i < sensors.length; i++) {
     var sensor = sensors[i] || {};
-    if (!sensor.enabled || sensor.sensorErrorLatched !== true) continue;
-    var id = sensor.id || '';
+    if (!sensor.enabled || sensor.sensorErrorActive !== true) continue;
     var line = typeof sensor.sensorLostNotice === 'string' ? sensor.sensorLostNotice.trim() : '';
-    if (!line) line = 'Ошибка датчика ' + tplSensorLabel(id || '?');
+    if (!line) continue;
     if (seen[line]) continue;
     seen[line] = true;
     lines.push(line);
   }
   return lines;
 }
+function isAlarmSoundActive(){
+  var ch4 = findOutput('CH4') || {};
+  var ch5 = findOutput('CH5') || {};
+  return !!(ch4.actual || ch5.actual);
+}
 function hasAnyAlert(){
-  return collectActiveAlarmItems().length > 0 || collectLatchedSensorLines().length > 0;
-}
-function currentAlertPresenceSignature(){
-  var tokens = [];
-  var seen = {};
-  var activeItems = collectActiveAlarmItems();
-  for (var i = 0; i < activeItems.length; i++) {
-    var alertToken = 'A|' + activeItems[i].text;
-    if (!seen[alertToken]) {
-      seen[alertToken] = true;
-      tokens.push(alertToken);
-    }
-  }
-  var sensors = (state.lastState && Array.isArray(state.lastState.sensors)) ? state.lastState.sensors : [];
-  for (var si = 0; si < sensors.length; si++) {
-    var sensor = sensors[si] || {};
-    if (!sensor.enabled || sensor.sensorErrorLatched !== true) continue;
-    var sensorToken = 'S|' + (sensor.id || ('idx' + si));
-    if (!seen[sensorToken]) {
-      seen[sensorToken] = true;
-      tokens.push(sensorToken);
-    }
-  }
-  tokens.sort();
-  return tokens.join('\n');
-}
-function syncUnifiedAlertOverlayState(){
-  var signature = currentAlertPresenceSignature();
-  if (!signature) {
-    state.alertOverlaySignature = '';
-    state.alertOverlayCollapsed = false;
-    return;
-  }
-  var prevSignature = state.alertOverlaySignature || '';
-  if (prevSignature) {
-    var prevSeen = {};
-    var prevTokens = prevSignature.split('\n');
-    for (var i = 0; i < prevTokens.length; i++) {
-      if (prevTokens[i]) prevSeen[prevTokens[i]] = true;
-    }
-    var tokens = signature.split('\n');
-    for (var ti = 0; ti < tokens.length; ti++) {
-      if (!tokens[ti]) continue;
-      if (!prevSeen[tokens[ti]]) {
-        state.alertOverlayCollapsed = false;
-        break;
-      }
-    }
-  } else {
-    state.alertOverlayCollapsed = false;
-  }
-  state.alertOverlaySignature = signature;
-}
-function unifiedAlertBadgeCount(activeItems, latchedLines){
-  var count = activeItems.length + latchedLines.length;
-  if (count > 99) return '99+';
-  return String(count || 0);
+  var s = state.lastState || {};
+  var unacked = Number(s.unackedAlarmCount || 0);
+  return unacked > 0 || isAlarmSoundActive();
 }
 function unifiedAlertOverlayHtml(activeItems, latchedLines){
   var html = '';
@@ -440,7 +382,7 @@ function unifiedAlertOverlayHtml(activeItems, latchedLines){
   }
   if (latchedLines.length) {
     html += '<section class="rc-unified-alert-section">';
-    html += '<div class="rc-unified-alert-section-title">Ошибки датчиков (требуют сброса оператором)</div>';
+    html += '<div class="rc-unified-alert-section-title">Ошибки датчиков</div>';
     html += '<div class="rc-unified-alert-lines">';
     for (var li = 0; li < latchedLines.length; li++) {
       html += '<div class="rc-unified-alert-line rc-unified-alert-line-latched">';
@@ -449,15 +391,8 @@ function unifiedAlertOverlayHtml(activeItems, latchedLines){
     }
     html += '</div></section>';
   }
-  html += '<div class="rc-unified-alert-actions">';
-  html += '<button type="button" id="rc-unified-alert-ack-btn" class="rc-unified-alert-btn rc-unified-alert-btn-primary"' + (state.ackPending ? ' disabled' : '') + '>' + esc(state.ackPending ? 'Квитируется...' : 'Квитировать') + '</button>';
-  html += '<button type="button" id="rc-unified-alert-hide-btn" class="rc-unified-alert-btn">Скрыть</button>';
-  html += '</div>';
   html += '</div>';
   return html;
-}
-function unifiedAlertBadgeHtml(activeItems, latchedLines){
-  return '<button type="button" id="rc-unified-alert-badge-btn" class="rc-unified-alert-badge"><span class="rc-unified-alert-badge-count">' + esc(unifiedAlertBadgeCount(activeItems, latchedLines)) + '</span><span>Тревоги и ошибки</span></button>';
 }
 function updateUnifiedAlertOverlay(){
   var existing = byId('rc-unified-alert-overlay');
@@ -465,38 +400,12 @@ function updateUnifiedAlertOverlay(){
   if (!document.body || !hasAnyAlert()) return;
   ensureUnifiedAlertOverlayStyles();
   var activeItems = collectActiveAlarmItems();
-  var latchedLines = collectLatchedSensorLines();
+  var latchedLines = collectActiveSensorLossLines();
   var shell = document.createElement('div');
   shell.id = 'rc-unified-alert-overlay';
   shell.className = 'rc-unified-alert-overlay';
-  shell.innerHTML = state.alertOverlayCollapsed
-    ? unifiedAlertBadgeHtml(activeItems, latchedLines)
-    : unifiedAlertOverlayHtml(activeItems, latchedLines);
+  shell.innerHTML = unifiedAlertOverlayHtml(activeItems, latchedLines);
   document.body.appendChild(shell);
-
-  var ackBtn = byId('rc-unified-alert-ack-btn');
-  if (ackBtn) {
-    ackBtn.addEventListener('click', function(ev){
-      if (ev) ev.preventDefault();
-      acknowledgeAlarms();
-    });
-  }
-  var hideBtn = byId('rc-unified-alert-hide-btn');
-  if (hideBtn) {
-    hideBtn.addEventListener('click', function(ev){
-      if (ev) ev.preventDefault();
-      state.alertOverlayCollapsed = true;
-      updateUnifiedAlertOverlay();
-    });
-  }
-  var badgeBtn = byId('rc-unified-alert-badge-btn');
-  if (badgeBtn) {
-    badgeBtn.addEventListener('click', function(ev){
-      if (ev) ev.preventDefault();
-      state.alertOverlayCollapsed = false;
-      updateUnifiedAlertOverlay();
-    });
-  }
 }
 
 function loadSchema(cb){
@@ -626,7 +535,7 @@ function muteAll(){ setMute(true); }
 function isAudibleAlarmActiveRaw(){
   var s = state.lastState || {};
   var unacked = Number(s.unackedAlarmCount || 0);
-  return unacked > 0 || collectLatchedSensorLines().length > 0;
+  return unacked > 0 || isAlarmSoundActive();
 }
 function mergeAckStateFromResponse(res){
   if (!res || !res.ok) return;
@@ -1834,7 +1743,6 @@ function render(){
     return;
   }
   renderCurrentRoute();
-  syncUnifiedAlertOverlayState();
   updateUnifiedAlertOverlay();
   updateConnectionOverlay();
 }
@@ -1878,8 +1786,8 @@ function tplHomeSensorLabel(id){
 }
 function tplHomeSensorErrorText(sensor){
   if (!sensor || !sensor.enabled) return '';
+  if (sensor.sensorErrorSticky === true) return 'Ошибка датчика';
   if (sensor.sensorErrorLatched === true) return 'Ошибка датчика';
-  if (sensor.present === false) return 'Ошибка датчика';
   return '';
 }
 function tplComma2(num){
