@@ -14,8 +14,10 @@ var MANUAL_RELAY_POLL_MS = 500;
 var MANUAL_VISUAL_FEEDBACK_MS = 150;
 var MANUAL_PENDING_HARD_TIMEOUT_MS = 8000;
 var CONNECTION_STALE_MS = 5000;
+var HEADER_CLOCK_STALE_MS = 3000;
 var TIME_SYNC_RETRY_MS = 30000;
 var NTFY_HTTP_PREFIX = 'http://ntfy.sh/';
+var STATE_FETCH_ERROR_TEXT = 'Не удалось получить состояние устройства.';
 
 /* ===== UI font config ===== */
 var uiFontConfig = {
@@ -82,6 +84,22 @@ function ensureUnifiedAlertOverlayStyles(){
   document.head.appendChild(style);
 }
 
+function ensureHeaderClockStyles(){
+  if (byId('rc-header-clock-style')) return;
+  var style = document.createElement('style');
+  style.id = 'rc-header-clock-style';
+  style.textContent = [
+    '.home-topbar .wifi-left,.home-topbar .wifi-side{flex:1 1 0;min-width:0;}',
+    '.home-topbar .wifi-left{align-items:flex-start;}',
+    '.home-topbar .wifi-side{display:flex;flex-direction:column;align-items:flex-end;gap:2px;}',
+    '.home-topbar .wifi-row{display:flex;align-items:center;gap:8px;}',
+    '.home-topbar .wifi-side .clock{margin-top:0;font-family:\"Courier New\",monospace;font-size:12px;line-height:1.1;font-variant-numeric:tabular-nums;letter-spacing:.04em;white-space:nowrap;}',
+    '.home-topbar .wifi-side .clock.stale{opacity:.4;}',
+    '.home-topbar .ip{font-size:10.5px;}'
+  ].join('');
+  document.head.appendChild(style);
+}
+
 function routeParts(){
   var h = location.hash || '#/home';
   if (h.indexOf('#/') !== 0) h = '#/home';
@@ -104,7 +122,9 @@ var state = {
   connectionLost: false,
   connectionOfflineSince: 0,
   connectionLastOkMs: 0,
+  lastValidStateMs: 0,
   connectionLastError: '',
+  stateFailCount: 0,
   homeScrollY: 0,
   homeTopBlockKey: '',
   notificationsCache: null,
@@ -189,6 +209,22 @@ function connectionLostText(){
   var tail = seconds ? (' ' + seconds + ' с.') : '';
   return 'Связь с контроллером прервана. Показаны последние полученные данные.' + tail;
 }
+function headerClockText(rawTime){
+  var match = String(rawTime || '').match(/(\d{2}:\d{2}:\d{2})$/);
+  return match ? match[1] : '--:--:--';
+}
+function isHeaderClockStale(){
+  if (!state.lastValidStateMs) return true;
+  return (Date.now() - state.lastValidStateMs) > HEADER_CLOCK_STALE_MS;
+}
+function updateHeaderClock(){
+  var el = byId('hdrClock');
+  if (!el) return;
+  var s = state.lastState || {};
+  el.textContent = headerClockText(s.time);
+  if (isHeaderClockStale()) el.classList.add('stale');
+  else el.classList.remove('stale');
+}
 function updateConnectionOverlay(){
   var existing = byId('connection-lost-overlay');
   if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
@@ -201,10 +237,11 @@ function updateConnectionOverlay(){
   document.body.appendChild(div);
 }
 function updateConnectionWatchdog(){
+  updateHeaderClock();
   if (document.hidden) return;
   if (!isLiveStateRoute(routeParts()[0])) return;
-  if (!state.connectionLastOkMs) return;
-  if (Date.now() - state.connectionLastOkMs > CONNECTION_STALE_MS) {
+  if (!state.lastValidStateMs) return;
+  if (Date.now() - state.lastValidStateMs > CONNECTION_STALE_MS) {
     markConnectionLost('stale');
   } else {
     updateConnectionOverlay();
@@ -424,11 +461,18 @@ function loadState(cb){
   api('/api/v1/state', null, function(res){
     if (res && res.sensors) {
       state.lastState = res;
+      state.stateFailCount = 0;
+      state.lastValidStateMs = Date.now();
       clearError();
       syncManualRelayState();
       if (!res.synced) setTimeout(autoSyncTimeIfNeeded, 0);
     } else {
-      setError((res && (res.error || res.err)) ? (res.error || res.err) : 'Не удалось получить состояние устройства.');
+      state.stateFailCount += 1;
+      if (res && (res.error || res.err)) {
+        setError(res.error || res.err);
+      } else if (state.stateFailCount >= 3) {
+        setError(STATE_FETCH_ERROR_TEXT);
+      }
     }
     cb && cb(state.lastState);
   });
@@ -1743,6 +1787,7 @@ function render(){
     return;
   }
   renderCurrentRoute();
+  updateHeaderClock();
   updateUnifiedAlertOverlay();
   updateConnectionOverlay();
 }
@@ -1799,12 +1844,41 @@ function tplParseComma(text){
   var normalized = String(text || '').replace(/\s+/g, '').replace(',', '.');
   return Number(normalized);
 }
-function tplPercentFromRaw(raw){
+var CURRENT_SENSOR_CAL_ZERO_PERCENT = 31.27;
+var CURRENT_SENSOR_CAL_SLOPE_PERCENT_PER_AMP = 1.67;
+var CURRENT_SENSOR_CAL_MIN_AMPS = 0.05;
+
+function currentPercentFromRaw(raw){
   var n = Number(raw);
-  if (!isFinite(n)) return '—';
+  if (!isFinite(n)) return NaN;
   if (n < 0) n = 0;
   if (n > 4095) n = 4095;
-  return tplComma2((n * 100) / 4095) + '%';
+  return (n * 100) / 4095;
+}
+function ampsFromPercent(percent){
+  var n = Number(percent);
+  if (!isFinite(n)) return NaN;
+  var amps = (n - CURRENT_SENSOR_CAL_ZERO_PERCENT) / CURRENT_SENSOR_CAL_SLOPE_PERCENT_PER_AMP;
+  return amps < CURRENT_SENSOR_CAL_MIN_AMPS ? 0 : amps;
+}
+function ampsFromRaw(raw){
+  return ampsFromPercent(currentPercentFromRaw(raw));
+}
+function percentFromAmps(amps){
+  var n = Number(amps);
+  if (!isFinite(n)) return NaN;
+  if (n < CURRENT_SENSOR_CAL_MIN_AMPS) return CURRENT_SENSOR_CAL_ZERO_PERCENT;
+  return (n * CURRENT_SENSOR_CAL_SLOPE_PERCENT_PER_AMP) + CURRENT_SENSOR_CAL_ZERO_PERCENT;
+}
+function tplCurrentFromRaw(raw){
+  var amps = ampsFromRaw(raw);
+  if (!isFinite(amps)) return '—';
+  return tplComma2(amps) + ' А';
+}
+function tplCurrentFromPercent(percent){
+  var amps = ampsFromPercent(percent);
+  if (!isFinite(amps)) return '—';
+  return tplComma2(amps) + ' А';
 }
 function tplValueText(sensor, blankWhenDisabled){
   if (!sensor) return blankWhenDisabled ? '' : '—';
@@ -1812,7 +1886,7 @@ function tplValueText(sensor, blankWhenDisabled){
   if (sensor.error || sensor.value == null) return '—';
   if (sensor.id === 'L') return sensorToggleAlarmTriggered(sensor) ? 'MAX!' : 'OK';
   if (sensor.id === 'F') return flowAlarmVisible(sensor) ? 'Нет протока!' : 'OK';
-  if (sensor.id === 'C') return tplPercentFromRaw(sensor.value);
+  if (sensor.id === 'C') return tplCurrentFromRaw(sensor.value);
   return tplComma2(sensor.value);
 }
 function tplHomeValueClass(sensor){
@@ -1822,12 +1896,13 @@ function tplHomeValueClass(sensor){
 function tplHeader(opts){
   opts = opts || {};
   var s = state.lastState || {};
+  ensureHeaderClockStyles();
   var html = '';
   html += '<header class="topbar' + (opts.home ? ' home-topbar' : '') + '">';
   html += '<div class="wifi-line">';
   html += '<div class="wifi-left"><div class="ip">IP: ' + esc(primaryIp(s)) + '</div><div class="wifi-note inline">' + esc(wifiModeNote(s)) + '</div></div>';
   if (opts.home) html += headerManualButtonHtml(true);
-  html += '<div class="wifi-side"><span>Wi‑Fi</span>';
+  html += '<div class="wifi-side"><div class="wifi-row"><span>Wi‑Fi</span>';
   if (wifiBarsVisible(s)) {
     html += '<div class="wifi-bars" aria-label="Уровень WiFi">';
     var level = wifiBarsLevel(wifiSignalRssi(s));
@@ -1836,6 +1911,8 @@ function tplHeader(opts){
     }
     html += '</div>';
   }
+  html += '</div>';
+  if (opts.home) html += '<div class="clock' + (isHeaderClockStale() ? ' stale' : '') + '" id="hdrClock">' + esc(headerClockText(s.time)) + '</div>';
   html += '</div></div>';
   html += '</header>';
   return html;
@@ -2125,10 +2202,15 @@ function editAlarmThreshold(id, key, which){
   else if (ui.toggleOnly) value = ui.toggle.threshold;
   else if (key === 'al1') value = (which === 'min') ? ui.al1.min : ui.al1.max;
   else value = (which === 'min') ? ui.al2.min : ui.al2.max;
+  var title = 'Введите значение (формат XX,XX)';
+  if (id === 'C') {
+    value = ampsFromPercent(value);
+    title = 'Введите ток, А (формат XX,XX)';
+  }
   openNumEditor({
     mode: 'alarm-' + key + '-' + which,
     sensorId: id,
-    title: 'Введите значение (формат XX,XX)',
+    title: title,
     value: tplComma2(value),
     returnHash: '#/sensorAlarm/' + encodeURIComponent(id)
   });
@@ -2313,6 +2395,9 @@ function saveNumEditor(){
       idx = 1; enabled = ui.al2.enabled; isMax = false;
     } else if (ctx.mode === 'alarm-al2-max') {
       idx = 3; enabled = ui.al2.enabled; isMax = true;
+    }
+    if (ctx.sensorId === 'C') {
+      value = percentFromAmps(value);
     }
     postAlarm(ctx.sensorId, idx, enabled, value, isMax, function(res){
       state.numEdit = null;
@@ -2518,7 +2603,7 @@ function renderSensorAlarm(id){
 
   if (ui.cMinOnly) {
     html.push('<section class="alarm-row">');
-    if (ui.al1.enabled) html.push('<a class="cell value' + alarmValueClass(ui.al1.enabled, ui.al1.minTriggered) + '" href="#" onclick="event.preventDefault();editAlarmThreshold(\'' + esc(id) + '\',\'al1\',\'min\')">' + esc(tplComma2(ui.al1.min)) + '</a>');
+    if (ui.al1.enabled) html.push('<a class="cell value' + alarmValueClass(ui.al1.enabled, ui.al1.minTriggered) + '" href="#" onclick="event.preventDefault();editAlarmThreshold(\'' + esc(id) + '\',\'al1\',\'min\')">' + esc(tplCurrentFromPercent(ui.al1.min)) + '</a>');
     else html.push('<a class="cell empty" href="#" onclick="event.preventDefault();editAlarmThreshold(\'' + esc(id) + '\',\'al1\',\'min\')">—</a>');
     html.push('<a class="cell center" href="#" onclick="event.preventDefault();toggleAlarmPref(\'' + esc(id) + '\',\'al1\')"><div class="al-name' + alarmNameClass(ui.al1.enabled, ui.al1.minTriggered) + '">ALmin</div></a>');
     html.push('<div class="cell empty">—</div>');

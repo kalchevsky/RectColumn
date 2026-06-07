@@ -16,7 +16,7 @@
 #define SERIAL_DEBUG_SENSOR_SNAPSHOT  0
 
 // ─── Версия прошивки / API ───────────────────────────────────────
-#define FW_VERSION      "1.6.49"
+#define FW_VERSION      "1.6.56"
 #define API_VERSION     "v1"
 #define AP_SSID_DEF     "Control_System"
 #define DEVICE_NAME     "RectColumn"

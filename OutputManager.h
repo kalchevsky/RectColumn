@@ -572,20 +572,56 @@ private:
         if (sensorIdx == SEN_F && outIdx == OUT_CH1 &&
             sen->controlRuleEnabled(outIdx) && controlGate &&
             (cmd != 0 || !sen->hasUsableValue())) {
+            static constexpr uint32_t FLOW_CTRL_DEBUG_HEARTBEAT_MS = 2000UL;
+            static bool flowCtrlLogSeen = false;
+            static int8_t flowCtrlLastCmd = 0;
+            static bool flowCtrlLastGate = false;
+            static bool flowCtrlLastUsable = false;
+            static bool flowCtrlLastStale = false;
+            static bool flowCtrlLastCh2Actual = false;
+            static bool flowCtrlLastCh2Wanted = false;
+            static uint32_t flowCtrlLastPrintMs = 0;
+
+            const bool usable = sen->hasUsableValue();
+            const bool stale = sen->isStale();
+            const bool ch2Actual = prevState[OUT_CH2];
             const bool ch2Wanted =
-                prevState[OUT_CH2] ||
+                ch2Actual ||
                 (out[OUT_CH2] && out[OUT_CH2]->manualWant()) ||
                 (_lastWant[OUT_CH2] != 0);
-            Serial.printf("[CTRL][F->CH1] gate=%d usable=%d stale=%d pollMs=%lu val=%.2f delay=%lu cmd=%d ch2Actual=%d ch2Wanted=%d\n",
-                          controlGate ? 1 : 0,
-                          sen->hasUsableValue() ? 1 : 0,
-                          sen->isStale() ? 1 : 0,
-                          (unsigned long)sen->_lastPollMs,
-                          isnan(sen->value) ? -9999.0 : sen->value,
-                          (unsigned long)sen->ctrlDelayMs,
-                          cmd,
-                          prevState[OUT_CH2] ? 1 : 0,
-                          ch2Wanted ? 1 : 0);
+            const bool stateChanged =
+                !flowCtrlLogSeen ||
+                flowCtrlLastCmd != cmd ||
+                flowCtrlLastGate != controlGate ||
+                flowCtrlLastUsable != usable ||
+                flowCtrlLastStale != stale ||
+                flowCtrlLastCh2Actual != ch2Actual ||
+                flowCtrlLastCh2Wanted != ch2Wanted;
+            const uint32_t now = millis();
+            const bool heartbeatDue =
+                !flowCtrlLogSeen ||
+                ((uint32_t)(now - flowCtrlLastPrintMs) >= FLOW_CTRL_DEBUG_HEARTBEAT_MS);
+
+            if (stateChanged || heartbeatDue) {
+                Serial.printf("[CTRL][F->CH1] gate=%d usable=%d stale=%d pollMs=%lu val=%.2f delay=%lu cmd=%d ch2Actual=%d ch2Wanted=%d\n",
+                              controlGate ? 1 : 0,
+                              usable ? 1 : 0,
+                              stale ? 1 : 0,
+                              (unsigned long)sen->_lastPollMs,
+                              isnan(sen->value) ? -9999.0 : sen->value,
+                              (unsigned long)sen->ctrlDelayMs,
+                              cmd,
+                              ch2Actual ? 1 : 0,
+                              ch2Wanted ? 1 : 0);
+                flowCtrlLogSeen = true;
+                flowCtrlLastCmd = (int8_t)cmd;
+                flowCtrlLastGate = controlGate;
+                flowCtrlLastUsable = usable;
+                flowCtrlLastStale = stale;
+                flowCtrlLastCh2Actual = ch2Actual;
+                flowCtrlLastCh2Wanted = ch2Wanted;
+                flowCtrlLastPrintMs = now;
+            }
         }
 #endif
         return cmd;

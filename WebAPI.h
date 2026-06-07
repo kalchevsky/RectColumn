@@ -5,6 +5,7 @@
 
 #include <ESPAsyncWebServer.h>
 #include <ArduinoJson.h>
+#include <esp_heap_caps.h>
 #include <string.h>
 
 #include "config.h"
@@ -336,6 +337,8 @@ private:
 
         _server.on("/api/v1/log/download", HTTP_GET, [this](AsyncWebServerRequest* req) {
             _log->refreshTimeStrings();
+            const size_t need = _estimateLogPlainTextBytes();
+            if (!_allowLargeResponse(req, "/api/v1/log/download", need)) return;
             const String filename = _logDownloadFilename();
             const String body = _log->toPlainText(true);
             AsyncWebServerResponse* resp = req->beginResponse(200, "text/plain; charset=utf-8", body);
@@ -348,6 +351,8 @@ private:
 
         _server.on("/api/v1/log", HTTP_GET, [this](AsyncWebServerRequest* req) {
             _log->refreshTimeStrings();
+            const size_t need = _estimateLogJsonBytes();
+            if (!_allowLargeResponse(req, "/api/v1/log", need)) return;
             String json = "[";
             const int logCount = _log->count();
             for (int displayIdx = 0; displayIdx < logCount; displayIdx++) {
@@ -2023,9 +2028,12 @@ private:
         root["storageReady"] = (_stor ? _stor->ready() : false);
         root["storageRecovered"] = (_stor ? _stor->recovered() : false);
         root["storageStatus"] = (_stor ? _stor->statusText() : String("недоступно"));
+        root["saveOutputsLastMs"] = (_stor ? _stor->saveOutputsLastMs() : 0);
+        root["saveOutputsMaxMs"] = (_stor ? _stor->saveOutputsMaxMs() : 0);
         root["stopLatched"] = _om->mainStopLatched();
         root["freeHeap"] = ESP.getFreeHeap();
         root["minFreeHeap"] = ESP.getMinFreeHeap();
+        root["largestFreeBlock"] = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
         root["notifyWorkerReady"] = (_notifier ? _notifier->workerReady() : false);
         root["notifyQueueDepth"] = (_notifier ? _notifier->queueDepth() : 0);
         root["notifyDroppedCount"] = (_notifier ? _notifier->droppedCount() : 0);
@@ -2133,6 +2141,8 @@ private:
     }
 
     void _sendDoc(AsyncWebServerRequest* req, int status, DynamicJsonDocument& doc) {
+        size_t need = doc.memoryUsage();
+        if (!_allowLargeResponse(req, req->url().c_str(), need)) return;
         String json;
         serializeJson(doc, json);
         AsyncWebServerResponse* resp = req->beginResponse(status, "application/json; charset=utf-8", json);
@@ -2150,6 +2160,50 @@ private:
     static String _fmtVal(float v) {
         if (isnan(v)) return "null";
         return String(v, 2);
+    }
+
+    bool _allowLargeResponse(AsyncWebServerRequest* req, const char* endpoint, size_t need) const {
+        const size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+        const size_t required = need * 2 + 1024;
+        if (largest >= required) return true;
+        Serial.printf("[MEMGUARD] 503 endpoint=%s need=%u largest=%u\n",
+                      endpoint ? endpoint : "?",
+                      (unsigned)need,
+                      (unsigned)largest);
+        // 503-ответ сам делает мелкую аллокацию - остаточный риск при
+        // экстремальном дефиците памяти, приемлемо.
+        req->send(503, "text/plain", "low-mem");
+        return false;
+    }
+
+    size_t _estimateLogPlainTextBytes() const {
+        if (!_log) return 0;
+        size_t need = 0;
+        const int logCount = _log->count();
+        for (int displayIdx = 0; displayIdx < logCount; displayIdx++) {
+            const int i = logCount - 1 - displayIdx;
+            const LogEntry& e = _log->get(i);
+            if (displayIdx > 0) need += 4;  // \r\n\r\n
+            need += e.timeStr.length();
+            need += e.event.length();
+            need += 96;  // labels, separators and numeric fields
+        }
+        return need + 1;
+    }
+
+    size_t _estimateLogJsonBytes() const {
+        if (!_log) return 2;
+        size_t need = 2;  // []
+        const int logCount = _log->count();
+        for (int displayIdx = 0; displayIdx < logCount; displayIdx++) {
+            const int i = logCount - 1 - displayIdx;
+            const LogEntry& e = _log->get(i);
+            if (displayIdx > 0) need += 1;  // comma
+            need += _jsonEscapedLength(e.timeStr);
+            need += _jsonEscapedLength(e.event);
+            need += 128;  // field names, ms, braces, commas and numeric fields
+        }
+        return need + 1;
     }
 
     String _logDownloadFilename() const {
@@ -2199,6 +2253,25 @@ private:
             }
         }
         return out;
+    }
+
+    static size_t _jsonEscapedLength(const String& s) {
+        size_t outLen = 0;
+        for (size_t i = 0; i < s.length(); i++) {
+            switch (s[i]) {
+                case '\\':
+                case '\"':
+                case '\n':
+                case '\r':
+                case '\t':
+                    outLen += 2;
+                    break;
+                default:
+                    outLen += 1;
+                    break;
+            }
+        }
+        return outLen;
     }
 
     bool _wifiWizardPending() const {

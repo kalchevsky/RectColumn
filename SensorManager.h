@@ -28,7 +28,7 @@ public:
         dt = new VirtualSensor(t1, t2);
         p  = new PressureSensor();
         l  = new DigitalSensor("L", PIN_L, false);
-        f  = new DigitalSensor("F", PIN_F, true);
+        f  = new DigitalSensor("F", PIN_F, false);
         c  = new AnalogSensor("C", PIN_C, false, false);
         v  = new AnalogSensor("V", PIN_V, false, (GPIO35_MODE == GPIO35_MODE_WER_CH2));
         c->thresholdPercentInput = true;

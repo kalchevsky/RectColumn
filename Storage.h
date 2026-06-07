@@ -11,10 +11,17 @@ class Storage {
 public:
     bool ready() const { return _nvsReady; }
     bool recovered() const { return _nvsRecovered; }
+    uint32_t saveOutputsLastMs() const { return _saveOutputsLastMs; }
+    uint32_t saveOutputsMaxMs() const { return _saveOutputsMaxMs; }
     String statusText() const {
         if (_lastStatus.length() > 0) return _lastStatus;
         if (_nvsReady) return "ok";
         return "not initialized";
+    }
+
+    void noteSaveOutputsDuration(uint32_t durationMs) {
+        _saveOutputsLastMs = durationMs;
+        if (durationMs > _saveOutputsMaxMs) _saveOutputsMaxMs = durationMs;
     }
 
     void saveWifiSTA(const String& ssid, const String& pass) {
@@ -303,6 +310,8 @@ private:
     bool   _nvsChecked = false;
     bool   _nvsReady = false;
     bool   _nvsRecovered = false;
+    uint32_t _saveOutputsLastMs = 0;
+    uint32_t _saveOutputsMaxMs = 0;
     String _lastStatus = "";
 
     template <typename BlobT>

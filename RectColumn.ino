@@ -4,6 +4,7 @@
 
 #include <Arduino.h>
 #include <esp_core_dump.h>
+#include <esp_heap_caps.h>
 #include <esp_system.h>
 #include "config.h"
 #include "TimeBase.h"
@@ -213,6 +214,8 @@ static void printHeartbeat() {
     Serial.print(ESP.getFreeHeap());
     Serial.print(" minFreeHeap=");
     Serial.print(ESP.getMinFreeHeap());
+    Serial.print(" largest8=");
+    Serial.print(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
     Serial.print(" sta=");
     Serial.print(wifiMgr.staConnected ? "ON" : "OFF");
     Serial.print(" staIP=");
@@ -222,7 +225,11 @@ static void printHeartbeat() {
     Serial.print(" rssi=");
     Serial.print(wifiMgr.rssi());
     Serial.print(" synced=");
-    Serial.println(timeBase.isSynced() ? "YES" : "NO");
+    Serial.print(timeBase.isSynced() ? "YES" : "NO");
+    Serial.print(" saveOutLastMs=");
+    Serial.print(storage.saveOutputsLastMs());
+    Serial.print(" saveOutMaxMs=");
+    Serial.println(storage.saveOutputsMaxMs());
 }
 
 static void initWiFiLed() {
@@ -344,7 +351,9 @@ void loop() {
     remoteNotifier.loop();
 
     if (outputMgr.consumeManualStateDirty()) {
+        const uint32_t saveStartedMs = millis();
         storage.saveOutputs(outputMgr);
+        storage.noteSaveOutputsDuration(millis() - saveStartedMs);
     }
 
     wifiMgr.loop();

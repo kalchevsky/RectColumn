@@ -990,7 +990,7 @@ class SensorErrorActiveStickyTests(unittest.TestCase):
         t2 = self._make_t1_sensor(79.6, active=False, sticky=True, present=True)
         self.assertTrue(scheme.virtual_dt_ready(t1, t2))
 
-    def test_flow_safety_reacts_to_active_not_sticky(self):
+    def test_flow_forbid_is_driven_by_no_flow_value_not_sticky_marker(self):
         flow_sticky_only = scheme.build_control_sensor(
             scheme.SEN_F,
             enabled_channels=(scheme.OUT_CH1,),
@@ -1005,14 +1005,14 @@ class SensorErrorActiveStickyTests(unittest.TestCase):
         )
         self.assertEqual((forbid, want), (0, 0))
 
-        flow_active_fault = scheme.build_control_sensor(
+        flow_no_flow = scheme.build_control_sensor(
             scheme.SEN_F,
             enabled_channels=(scheme.OUT_CH1,),
             fault=True,
         )
-        flow_active_fault.sticky = False
+        flow_no_flow.sticky = False
         forbid, want = scheme.aggregate_rules_timed(
-            {scheme.SEN_F: flow_active_fault},
+            {scheme.SEN_F: flow_no_flow},
             scheme.OUT_CH1,
             scheme.control_delay_ms(scheme.SEN_F),
             linked_output_on=True,
@@ -1020,22 +1020,92 @@ class SensorErrorActiveStickyTests(unittest.TestCase):
         self.assertEqual(forbid, 1 << scheme.SEN_F)
         self.assertEqual(want, 0)
 
-    def test_cold_start_missing_loss_tracking_sensors_start_active_and_sticky_but_l_does_not(self):
+    def test_cold_start_missing_loss_tracking_sensors_stay_on_t_and_p_only(self):
         tracked = {
             scheme.SEN_T1: scheme.Sensor(enabled=True, present=False, error=True, sticky=True, value=math.nan),
             scheme.SEN_P: scheme.Sensor(enabled=True, present=False, error=True, sticky=True, value=math.nan),
-            scheme.SEN_F: scheme.Sensor(enabled=True, present=False, error=True, sticky=True, value=math.nan),
+            scheme.SEN_F: scheme.Sensor(enabled=True, present=True, error=False, sticky=False, value=0.0),
             scheme.SEN_L: scheme.Sensor(enabled=True, present=True, error=False, sticky=False, value=0.0),
         }
-        for sensor_idx in (scheme.SEN_T1, scheme.SEN_P, scheme.SEN_F):
+        for sensor_idx in (scheme.SEN_T1, scheme.SEN_P):
             with self.subTest(sensor=scheme.SENSOR_NAMES[sensor_idx]):
                 self.assertTrue(tracked[sensor_idx].error)
                 self.assertTrue(tracked[sensor_idx].sticky)
+        self.assertFalse(tracked[scheme.SEN_F].error)
+        self.assertFalse(tracked[scheme.SEN_F].sticky)
         self.assertFalse(tracked[scheme.SEN_L].sticky)
         self.assertEqual(
             scheme.sensor_loss_overlay_lines(tracked),
-            ["Потеря датчика T1", "Потеря датчика P", "Потеря датчика F"],
+            ["Потеря датчика T1", "Потеря датчика P"],
         )
+
+
+class FlowSensorDiscreteBehaviorTests(unittest.TestCase):
+    def test_flow_open_circuit_is_valid_state_not_sensor_fault(self):
+        flow = scheme.runtime_digital_sensor(scheme.SEN_F, circuit_closed=False)
+
+        self.assertFalse(flow.error)
+        self.assertTrue(flow.present)
+        self.assertEqual(flow.value, 0.0)
+        self.assertFalse(flow.sticky)
+        self.assertEqual(
+            scheme.sensor_loss_overlay_lines({scheme.SEN_F: flow}),
+            [],
+        )
+
+    def test_flow_protection_and_process_alarm_are_preserved_without_sensor_fault(self):
+        flow = scheme.runtime_digital_sensor(scheme.SEN_F, circuit_closed=False)
+        for out_idx in (scheme.OUT_CH1, scheme.OUT_CH2, scheme.OUT_CH3):
+            flow.ctrl[out_idx] = scheme.make_channel_rule(scheme.SEN_F, out_idx, True)
+
+        forbid, want = scheme.aggregate_rules_timed(
+            {scheme.SEN_F: flow},
+            scheme.OUT_CH1,
+            scheme.control_delay_ms(scheme.SEN_F),
+            linked_output_on=True,
+        )
+
+        self.assertEqual(forbid, 1 << scheme.SEN_F)
+        self.assertEqual(want, 0)
+        self.assertTrue(
+            scheme.flow_process_alarm_raw(
+                flow,
+                flow_control_enabled=True,
+                ch2_actual_on=True,
+            )
+        )
+
+    def test_flow_restore_clears_no_flow_without_sensor_error(self):
+        flow = scheme.runtime_digital_sensor(scheme.SEN_F, circuit_closed=True)
+        flow.ctrl[scheme.OUT_CH1] = scheme.make_channel_rule(scheme.SEN_F, scheme.OUT_CH1, True)
+
+        forbid, want = scheme.aggregate_rules_timed(
+            {scheme.SEN_F: flow},
+            scheme.OUT_CH1,
+            scheme.control_delay_ms(scheme.SEN_F),
+            linked_output_on=True,
+        )
+
+        self.assertFalse(flow.error)
+        self.assertTrue(flow.present)
+        self.assertEqual(flow.value, 1.0)
+        self.assertFalse(flow.sticky)
+        self.assertEqual((forbid, want), (0, 0))
+        self.assertFalse(
+            scheme.flow_process_alarm_raw(
+                flow,
+                flow_control_enabled=True,
+                ch2_actual_on=True,
+            )
+        )
+
+    def test_level_open_circuit_behavior_stays_unchanged(self):
+        level = scheme.runtime_digital_sensor(scheme.SEN_L, circuit_closed=False)
+
+        self.assertFalse(level.error)
+        self.assertTrue(level.present)
+        self.assertEqual(level.value, 0.0)
+        self.assertFalse(level.sticky)
 
 
 class Ds18b20RecoveryTests(unittest.TestCase):
@@ -1261,6 +1331,7 @@ class FullMatrixSourceGuardTests(unittest.TestCase):
         cls.rect_column_ino = (cls.root / "RectColumn.ino").read_text(encoding="utf-8", errors="ignore")
 
     def test_digital_off_only_normalization_is_fixed_for_l_and_f(self):
+        self.assertIn('f  = new DigitalSensor("F", PIN_F, false);', self.sensor_manager_h)
         self.assertIn("r.logic  = LOGIC_COOL;", self.sensor_manager_h)
         self.assertIn("r.minVal = 0.5f;", self.sensor_manager_h)
         self.assertIn("r.maxVal = 2.0f;", self.sensor_manager_h)
