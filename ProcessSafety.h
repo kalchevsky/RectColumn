@@ -118,8 +118,15 @@ private:
             return;
         }
 
+        bool flowControlEnabled = false;
+        for (uint8_t oi = OUT_CH1; oi <= OUT_CH3; oi++) {
+            if (fs->controlRuleEnabled(oi)) {
+                flowControlEnabled = true;
+                break;
+            }
+        }
         const bool ch2ActualOn = _om->out[OUT_CH2] && _om->out[OUT_CH2]->actualOn();
-        const bool flowFault = fs->enabled && ch2ActualOn && !_sm->flowActive();
+        const bool flowFault = fs->enabled && flowControlEnabled && ch2ActualOn && !_sm->flowActive();
         const uint32_t alarmDelayMs = fs->alarmDelayMs;
         bool alarmActive = false;
 

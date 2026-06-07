@@ -189,6 +189,7 @@ private:
         char url[sizeof(_publishUrlSnap)] = {};
         _copyConfigSnapshot(&enabledSnap, url, sizeof(url), nullptr, 0);
         if (!enabledSnap || url[0] == '\0') return 0;
+        if (_om->soundMuted || !_om->ch5Enabled) return 0;
 
         SensorBase* s = _sm->s[si];
         if (!s || !s->enabled) return 0;
@@ -230,18 +231,10 @@ private:
         return bitIdx >= 2 ? "ALmax" : "ALmin";
     }
 
-    static constexpr float CURRENT_SENSOR_CAL_ZERO_PERCENT = 31.27f;
-    static constexpr float CURRENT_SENSOR_CAL_SLOPE_PERCENT_PER_AMP = 1.67f;
-    static constexpr float CURRENT_SENSOR_CAL_MIN_AMPS = 0.05f;
-
-    static float _ampsFromPercent(float percent) {
-        if (!isfinite(percent)) return NAN;
-        const float amps = (percent - CURRENT_SENSOR_CAL_ZERO_PERCENT) / CURRENT_SENSOR_CAL_SLOPE_PERCENT_PER_AMP;
-        return amps < CURRENT_SENSOR_CAL_MIN_AMPS ? 0.0f : amps;
-    }
-
-    static String _formatCurrentAmpsFromPercent(float percent) {
-        return _formatRuNumber(_ampsFromPercent(percent), 2);
+    static String _formatPercentFromRaw(float raw) {
+        if (!isfinite(raw)) return String("—");
+        float pct = raw * 100.0f / 4095.0f;
+        return _formatRuNumber(pct, 1);
     }
 
     static String _alarmToken(uint8_t bitIdx) {
@@ -267,7 +260,7 @@ private:
         switch (si) {
             case SEN_C: {
                 const float thr = (s && bitIdx < N_ALARMS) ? s->alarm[bitIdx].threshold : NAN;
-                return String("Ток нагрузки min (") + _formatCurrentAmpsFromPercent(thr) + " А)";
+                return String("Ток нагрузки min (") + _formatPercentFromRaw(thr) + "%)";
             }
             case SEN_F:
                 return "Проток min";

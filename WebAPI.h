@@ -2176,6 +2176,9 @@ private:
         return false;
     }
 
+    // known limitation: get() делает snapshot-копию LogEntry (мелкая
+    // аллокация на итерацию); приемлемо, т.к. временный объект сразу
+    // разрушается. Будет устранено вместе с переводом EventLog на char[].
     size_t _estimateLogPlainTextBytes() const {
         if (!_log) return 0;
         size_t need = 0;

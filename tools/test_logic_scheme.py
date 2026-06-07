@@ -73,8 +73,7 @@ GPIO35_MODE_WER_CH2 = 1
 MAIN_CHANNELS = (OUT_CH1, OUT_CH2, OUT_CH3)
 CONTROL_SENSOR_INDICES = (SEN_T1, SEN_T2, SEN_T3, SEN_DT, SEN_P, SEN_L, SEN_F)
 NON_CONTROL_SENSOR_INDICES = (SEN_C, SEN_V)
-LOSS_TRACKING_SENSOR_INDICES = (SEN_T1, SEN_T2, SEN_T3, SEN_P)
-FLOW_TRACKS_SENSOR_LOSS = False
+LOSS_TRACKING_SENSOR_INDICES = (SEN_T1, SEN_T2, SEN_T3, SEN_P, SEN_F)
 
 CHANNEL_NAMES = {
     OUT_CH1: "CH1",
@@ -616,18 +615,6 @@ def build_control_sensor(sensor_idx: int,
     return sensor
 
 
-def runtime_digital_sensor(sensor_idx: int, *, circuit_closed: bool) -> Sensor:
-    if sensor_idx == SEN_F and FLOW_TRACKS_SENSOR_LOSS and not circuit_closed:
-        return Sensor(enabled=True, present=False, error=True, sticky=True, value=math.nan)
-    return Sensor(
-        enabled=True,
-        present=True,
-        error=False,
-        sticky=False,
-        value=1.0 if circuit_closed else 0.0,
-    )
-
-
 def virtual_dt_ready(t1: Sensor, t2: Sensor) -> bool:
     return (
         not math.isnan(t1.value) and not math.isnan(t2.value) and
@@ -646,12 +633,6 @@ def sensor_loss_overlay_lines(sensors: Dict[int, Sensor]) -> list[str]:
             continue
         lines.append(f"Потеря датчика {SENSOR_NAMES[sensor_idx]}")
     return lines
-
-
-def flow_process_alarm_raw(sensor: Sensor, *, flow_control_enabled: bool, ch2_actual_on: bool) -> bool:
-    if sensor.error or not sensor.present:
-        return False
-    return sensor.enabled and flow_control_enabled and ch2_actual_on and sensor.value <= 0.5
 
 
 def eval_ctrl_timed(sensor_idx: int, sensor: Sensor, out_idx: int,
@@ -1345,7 +1326,6 @@ class SourceGuardTests(unittest.TestCase):
         self.assertNotIn("_flowEmergencyLatched", self.process_h)
 
     def test_main_channel_control_sensor_set_matches_sensor_manager(self):
-        self.assertIn('f  = new DigitalSensor("F", PIN_F, false);', self.sensor_manager_h)
         self.assertIn("return sensorIdx == SEN_T1 || sensorIdx == SEN_T2 ||", self.sensor_manager_h)
         self.assertIn("sensorIdx == SEN_T3 || sensorIdx == SEN_DT ||", self.sensor_manager_h)
         self.assertIn("sensorIdx == SEN_P;", self.sensor_manager_h)
