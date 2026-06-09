@@ -353,7 +353,29 @@ void loop() {
     if (outputMgr.consumeManualStateDirty()) {
         const uint32_t saveStartedMs = millis();
         storage.saveOutputs(outputMgr);
-        storage.noteSaveOutputsDuration(millis() - saveStartedMs);
+        const uint32_t dur = millis() - saveStartedMs;
+        storage.noteSaveOutputsDuration(dur);
+
+        static uint32_t s_saveCount = 0;
+        static uint32_t s_saveDurSum = 0;
+        static uint32_t s_saveDurMax = 0;
+        static uint32_t s_lastReportMs = 0;
+        s_saveCount++;
+        s_saveDurSum += dur;
+        if (dur > s_saveDurMax) s_saveDurMax = dur;
+
+        const uint32_t nowMs = millis();
+        if ((uint32_t)(nowMs - s_lastReportMs) >= 5000UL) {
+            Serial.printf("[NVS_SAVE] count=%lu in5s avgMs=%lu maxMs=%lu lastMs=%lu\n",
+                          (unsigned long)s_saveCount,
+                          (unsigned long)(s_saveCount ? s_saveDurSum / s_saveCount : 0),
+                          (unsigned long)s_saveDurMax,
+                          (unsigned long)dur);
+            s_saveCount = 0;
+            s_saveDurSum = 0;
+            s_saveDurMax = 0;
+            s_lastReportMs = nowMs;
+        }
     }
 
     wifiMgr.loop();

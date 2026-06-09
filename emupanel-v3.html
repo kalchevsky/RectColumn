@@ -1007,7 +1007,7 @@ function renderSensors() {
     const ctrl = (sensor.ctrl || []).map(rule => {
       if (!rule.enabled) return null;
       const outId = getOutputIds()[rule.outIdx] || ('#' + rule.outIdx);
-      if (rule.fixedOffOnly) return `${outId} ${rule.purposeText || 'Защита канала'}`;
+      if (rule.fixedOffOnly) return `${outId} Защита канала`;
       return `${outId} ${rule.logic} [${rule.min};${rule.max}]`;
     }).filter(Boolean).join(' | ') || '—';
     return `

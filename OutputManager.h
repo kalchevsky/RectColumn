@@ -791,7 +791,13 @@ private:
         out[outIdx]->setFinalOnAllowed(true);
         const bool prevManual = out[outIdx]->manualWant();
         out[outIdx]->applyResolved(_effectiveForbidMask(outIdx), _lastWant[outIdx]);
-        if (out[outIdx]->manualWant() != prevManual) _manualStateDirty = true;
+        if (out[outIdx]->manualWant() != prevManual) {
+            _manualStateDirty = true;
+            Serial.printf("[DIRTY] aux out=%u manual:%d->%d\n",
+                          outIdx,
+                          prevManual ? 1 : 0,
+                          out[outIdx]->manualWant() ? 1 : 0);
+        }
     }
 
     void _applyCurrentMain(uint8_t outIdx) {
@@ -830,6 +836,12 @@ private:
 
         if (out[outIdx]->manualWant() != prevManual || _operatorHoldOff[outIdx] != prevHoldOff) {
             _manualStateDirty = true;
+            Serial.printf("[DIRTY] main out=%u manual:%d->%d hold:%d->%d\n",
+                          outIdx,
+                          prevManual ? 1 : 0,
+                          out[outIdx]->manualWant() ? 1 : 0,
+                          prevHoldOff ? 1 : 0,
+                          _operatorHoldOff[outIdx] ? 1 : 0);
         }
     }
 

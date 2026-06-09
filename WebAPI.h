@@ -205,21 +205,10 @@ private:
 
     void _registerCoreRoutes() {
         _server.on("/api/v1/state", HTTP_GET, [this](AsyncWebServerRequest* req) {
-            static uint32_t lastStateRequestMs = 0;
-            const uint32_t nowMs = millis();
-            if ((uint32_t)(nowMs - lastStateRequestMs) < 250UL) {
-                req->send(
-                    429,
-                    "application/json; charset=utf-8",
-                    "{\"ok\":false,\"error\":\"too_many_requests\"}"
-                );
-                return;
-            }
-            lastStateRequestMs = nowMs;
-
             DynamicJsonDocument doc(24576);
             JsonObject root = doc.to<JsonObject>();
             _buildState(root);
+            const uint32_t nowMs = millis();
             static uint32_t lastStateSizeLogMs = 0;
             if ((uint32_t)(nowMs - lastStateSizeLogMs) >= 5000UL) {
                 lastStateSizeLogMs = nowMs;
@@ -1828,12 +1817,6 @@ private:
 
         JsonArray outputs = root.createNestedArray("outputs");
         _buildOutputs(outputs);
-
-        JsonArray confirmations = root.createNestedArray("confirmations");
-        _buildConfirmations(confirmations);
-
-        JsonObject diag = root.createNestedObject("diag");
-        _buildDiag(diag);
     }
 
     void _buildSensors(JsonArray arr) {
@@ -1848,7 +1831,6 @@ private:
             so["periodMs"] = s->periodMs;
             so["error"]   = s->error;
             so["present"] = s->present;
-            so["sensorError"] = s->error;
             so["sensorErrorActive"] = s->isSensorErrorActive();
             so["sensorErrorSticky"] = s->isSensorErrorSticky();
             so["sensorErrorLatched"] = s->sensorErrorLatched;
@@ -1887,10 +1869,7 @@ private:
                 co["min"]     = s->ctrl[oi].minVal;
                 co["max"]     = s->ctrl[oi].maxVal;
                 co["fixedOffOnly"] = fixedOffOnly;
-                co["logicLocked"]  = fixedOffOnly;
                 co["schemeAllowed"] = SensorManager::isRuleAllowedForOutput((uint8_t)i, (uint8_t)oi);
-                co["purpose"] = fixedOffOnly ? "protection" : "control";
-                co["purposeText"] = fixedOffOnly ? "Защита канала" : "Управление каналом";
             }
         }
     }
@@ -1967,7 +1946,6 @@ private:
                     oo["confirmNote"] = c.note;
                 }
             }
-            _appendMainOutputDebug(oo, i);
         }
     }
 
@@ -2173,7 +2151,8 @@ private:
 
         String urlStr = req->url();
         const char* url = urlStr.c_str();
-        static uint32_t lastPreSerializeLogMs = 0;
+        static uint32_t lastBufferedLowMemLogMs = 0;
+        static uint32_t lastBufferedNoContigLogMs = 0;
         static uint32_t lastReserveFailedLogMs = 0;
         static uint32_t lastBeginResponseNullLogMs = 0;
 
@@ -2197,31 +2176,50 @@ private:
           - async_tcp should only transmit prepared bytes, not run heavy JSON serialization.
         */
         const size_t freeNeed = jsonNeed + 8192;
-        const size_t largestNeed = jsonNeed + 4096;
+        const size_t contigNeed = jsonNeed + 2048;
 
-        if (jsonNeed <= 1 || free8 < freeNeed || largest8 < largestNeed) {
-            if (shouldLogMemGuard(lastPreSerializeLogMs)) {
+        if (jsonNeed <= 1 || free8 < freeNeed) {
+            if (shouldLogMemGuard(lastBufferedLowMemLogMs)) {
                 Serial.printf(
-                    "[MEMGUARD] 503 endpoint=%s jsonNeed=%u free8=%u largest8=%u freeNeed=%u largestNeed=%u stage=pre_serialize\n",
+                    "[MEMGUARD] 503 endpoint=%s jsonNeed=%u free8=%u largest8=%u freeNeed=%u stage=buffered_lowmem\n",
                     url,
                     (unsigned)jsonNeed,
                     (unsigned)free8,
                     (unsigned)largest8,
-                    (unsigned)freeNeed,
-                    (unsigned)largestNeed
+                    (unsigned)freeNeed
                 );
             }
 
             req->send(
                 503,
                 "application/json; charset=utf-8",
-                "{\"ok\":false,\"error\":\"low_memory\",\"stage\":\"pre_serialize\"}"
+                "{\"ok\":false,\"error\":\"low_memory\",\"stage\":\"buffered_lowmem\"}"
+            );
+            return;
+        }
+
+        if (largest8 < contigNeed) {
+            if (shouldLogMemGuard(lastBufferedNoContigLogMs)) {
+                Serial.printf(
+                    "[MEMGUARD] 503 endpoint=%s jsonNeed=%u free8=%u largest8=%u contigNeed=%u stage=buffered_nocontig\n",
+                    url,
+                    (unsigned)jsonNeed,
+                    (unsigned)free8,
+                    (unsigned)largest8,
+                    (unsigned)contigNeed
+                );
+            }
+
+            req->send(
+                503,
+                "application/json; charset=utf-8",
+                "{\"ok\":false,\"error\":\"low_memory\",\"stage\":\"buffered_nocontig\"}"
             );
             return;
         }
 
         String json;
-        if (!json.reserve(jsonNeed)) {
+        if (!json.reserve(jsonNeed + 64)) {
             const size_t free8AfterReserve = heap_caps_get_free_size(MALLOC_CAP_8BIT);
             const size_t largest8AfterReserve = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
             if (shouldLogMemGuard(lastReserveFailedLogMs)) {
