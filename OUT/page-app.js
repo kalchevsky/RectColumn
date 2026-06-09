@@ -108,6 +108,8 @@ function routeParts(){
 
 var state = {
   schema: null,
+  config: null,
+  live: null,
   lastState: null,
   pollTimer: null,
   pollBusy: false,
@@ -285,7 +287,7 @@ function startLiveStatePoll(view){
   if (!isLiveStateRoute(view)) return;
   var pollMs = (view === 'manual') ? MANUAL_RELAY_POLL_MS : LIVE_STATE_POLL_MS;
   startPoll(pollMs, function(done){
-    loadState(function(){
+    loadLive(function(){
       if (routeParts()[0] === view) render();
       done();
     });
@@ -457,10 +459,133 @@ function loadSchema(cb){
   });
 }
 
-function loadState(cb){
-  api('/api/v1/state', null, function(res){
-    if (res && res.sensors) {
-      state.lastState = res;
+function copyOwn(dst, src){
+  if (!src) return dst;
+  for (var key in src) {
+    if (Object.prototype.hasOwnProperty.call(src, key)) dst[key] = src[key];
+  }
+  return dst;
+}
+
+function cloneObjectArray(arr){
+  var out = [];
+  arr = Array.isArray(arr) ? arr : [];
+  for (var i = 0; i < arr.length; i++) {
+    var item = arr[i];
+    if (item && typeof item === 'object') {
+      var cloned = {};
+      copyOwn(cloned, item);
+      out.push(cloned);
+    } else {
+      out.push(item);
+    }
+  }
+  return out;
+}
+
+function mergeObjectArrayByIndex(baseArr, overlayArr){
+  baseArr = Array.isArray(baseArr) ? baseArr : [];
+  overlayArr = Array.isArray(overlayArr) ? overlayArr : [];
+  var len = Math.max(baseArr.length, overlayArr.length);
+  var out = [];
+  for (var i = 0; i < len; i++) {
+    var base = baseArr[i];
+    var overlay = overlayArr[i];
+    var merged = {};
+    if (base && typeof base === 'object') copyOwn(merged, base);
+    if (overlay && typeof overlay === 'object') copyOwn(merged, overlay);
+    out.push(merged);
+  }
+  return out;
+}
+
+function mergeById(configArr, liveArr, mergeEntry){
+  configArr = Array.isArray(configArr) ? configArr : [];
+  liveArr = Array.isArray(liveArr) ? liveArr : [];
+  var configById = {};
+  var liveById = {};
+  var orderedIds = [];
+  var seen = {};
+  var i;
+
+  for (i = 0; i < configArr.length; i++) {
+    var configItem = configArr[i];
+    if (!configItem || !configItem.id) continue;
+    configById[configItem.id] = configItem;
+    orderedIds.push(configItem.id);
+    seen[configItem.id] = true;
+  }
+
+  for (i = 0; i < liveArr.length; i++) {
+    var liveItem = liveArr[i];
+    if (!liveItem || !liveItem.id) continue;
+    liveById[liveItem.id] = liveItem;
+    if (!seen[liveItem.id]) {
+      orderedIds.push(liveItem.id);
+      seen[liveItem.id] = true;
+    }
+  }
+
+  var out = [];
+  for (i = 0; i < orderedIds.length; i++) {
+    var id = orderedIds[i];
+    out.push(mergeEntry(configById[id], liveById[id]));
+  }
+  return out;
+}
+
+function mergeSensorState(configSensor, liveSensor){
+  var merged = {};
+  copyOwn(merged, configSensor || {});
+  copyOwn(merged, liveSensor || {});
+  merged.alarms = mergeObjectArrayByIndex(configSensor && configSensor.alarms, liveSensor && liveSensor.alarms);
+  merged.ctrl = cloneObjectArray(configSensor && configSensor.ctrl);
+  return merged;
+}
+
+function mergeOutputState(configOutput, liveOutput){
+  var merged = {};
+  copyOwn(merged, configOutput || {});
+  copyOwn(merged, liveOutput || {});
+  return merged;
+}
+
+function rebuildMergedState(){
+  var merged = {};
+  copyOwn(merged, state.config || {});
+  copyOwn(merged, state.live || {});
+  merged.sensors = mergeById(
+    state.config && state.config.sensors,
+    state.live && state.live.sensors,
+    mergeSensorState
+  );
+  merged.outputs = mergeById(
+    state.config && state.config.outputs,
+    state.live && state.live.outputs,
+    mergeOutputState
+  );
+  return merged;
+}
+
+function loadConfig(cb, forceReload){
+  if (state.config && !forceReload) {
+    cb && cb(state.config);
+    return;
+  }
+  api('/api/v1/config', null, function(res){
+    if (res && res.sensors && res.outputs) {
+      state.config = res;
+      state.lastState = rebuildMergedState();
+    }
+    cb && cb(state.config);
+  });
+}
+
+function loadLive(cb){
+  api('/api/v1/live', null, function(res){
+    if (res && res.sensors && res.outputs) {
+      state.live = res;
+      state.lastState = rebuildMergedState();
       state.stateFailCount = 0;
       state.lastValidStateMs = Date.now();
       clearError();
@@ -476,6 +601,22 @@ function loadState(cb){
     }
     cb && cb(state.lastState);
   });
+}
+
+function loadState(cb){
+  if (state.config) {
+    loadLive(cb);
+    return;
+  }
+  loadConfig(function(){
+    loadLive(cb);
+  });
+}
+
+function reloadConfigAndState(cb){
+  loadConfig(function(){
+    loadLive(cb);
+  }, true);
 }
 
 function loadLog(cb){
@@ -1410,7 +1551,7 @@ function saveOutputConfig(){
       renderOutputConfig();
       return;
     }
-    loadState(function(){
+    reloadConfigAndState(function(){
       renderOutputConfigView((res && res.outputs) ? res : payload);
     });
   });
@@ -1807,9 +1948,11 @@ setInterval(function(){
 applyUiFontConfig();
 applyTheme();
 loadSchema(function(){
-  loadState(function(){
-    autoSyncTimeIfNeeded();
-    render();
+  loadConfig(function(){
+    loadLive(function(){
+      autoSyncTimeIfNeeded();
+      render();
+    });
   });
 });
 
@@ -2226,7 +2369,7 @@ function toggleSensorEnabled(id){
     body: JSON.stringify({ enabled: !s.enabled, periodMs: Number(s.periodMs || 1000) })
   }, function(res){
     setNotice(res && res.ok ? ('Датчик ' + tplSensorLabel(id) + ' ' + (!s.enabled ? 'включён.' : 'отключён.')) : ((res && (res.error || res.err)) ? (res.error || res.err) : 'Не удалось изменить статус датчика.'));
-    loadState(function(){ render(); });
+    reloadConfigAndState(function(){ render(); });
   });
 }
 function toggleCtrlRule(id, outIdx){
@@ -2239,7 +2382,7 @@ function toggleCtrlRule(id, outIdx){
     body: JSON.stringify({ outIdx: outIdx, enabled: !rule.enabled, logic: rule.logic, min: rule.min, max: rule.max })
   }, function(res){
     setNotice(res && res.ok ? ('Управление ' + tplSensorLabel(id) + ' → CH' + (outIdx + 1) + ' ' + (!rule.enabled ? 'включено.' : 'отключено.')) : ((res && (res.error || res.err)) ? (res.error || res.err) : 'Не удалось изменить правило управления.'));
-    loadState(function(){ render(); });
+    reloadConfigAndState(function(){ render(); });
   });
 }
 function postAlarm(id, idx, enabled, threshold, isMax, cb){
@@ -2257,7 +2400,7 @@ function toggleAlarmPref(id, key){
     var nextC = !ui.al1.enabled;
     postAlarm(id, 0, nextC, ui.al1.min, false, function(res){
       setNotice(res && res.ok ? ('ALmin ' + (nextC ? 'включена.' : 'выключена.')) : ((res && (res.error || res.err)) ? (res.error || res.err) : 'Не удалось изменить ALmin.'));
-      loadState(function(){ render(); });
+      reloadConfigAndState(function(){ render(); });
     });
     return;
   }
@@ -2265,7 +2408,7 @@ function toggleAlarmPref(id, key){
     var next = !ui.toggle.enabled;
     postAlarm(id, 0, next, ui.toggle.threshold, false, function(res){
       setNotice(res && res.ok ? ('Сигнализация ' + (next ? 'включена.' : 'выключена.')) : ((res && (res.error || res.err)) ? (res.error || res.err) : 'Не удалось изменить сигнализацию.'));
-      loadState(function(){ render(); });
+      reloadConfigAndState(function(){ render(); });
     });
     return;
   }
@@ -2274,12 +2417,12 @@ function toggleAlarmPref(id, key){
     postAlarm(id, 0, next1, ui.al1.min, false, function(res1){
       if (!(res1 && res1.ok)) {
         setNotice((res1 && (res1.error || res1.err)) ? (res1.error || res1.err) : 'Не удалось изменить AL1.');
-        loadState(function(){ render(); });
+        reloadConfigAndState(function(){ render(); });
         return;
       }
       postAlarm(id, 2, next1, ui.al1.max, true, function(res2){
         setNotice(res2 && res2.ok ? ('AL1 ' + (next1 ? 'включена.' : 'выключена.')) : ((res2 && (res2.error || res2.err)) ? (res2.error || res2.err) : 'Не удалось изменить AL1.'));
-        loadState(function(){ render(); });
+        reloadConfigAndState(function(){ render(); });
       });
     });
   } else {
@@ -2287,12 +2430,12 @@ function toggleAlarmPref(id, key){
     postAlarm(id, 1, next2, ui.al2.min, false, function(res1){
       if (!(res1 && res1.ok)) {
         setNotice((res1 && (res1.error || res1.err)) ? (res1.error || res1.err) : 'Не удалось изменить AL2.');
-        loadState(function(){ render(); });
+        reloadConfigAndState(function(){ render(); });
         return;
       }
       postAlarm(id, 3, next2, ui.al2.max, true, function(res2){
         setNotice(res2 && res2.ok ? ('AL2 ' + (next2 ? 'включена.' : 'выключена.')) : ((res2 && (res2.error || res2.err)) ? (res2.error || res2.err) : 'Не удалось изменить AL2.'));
-        loadState(function(){ render(); });
+        reloadConfigAndState(function(){ render(); });
       });
     });
   }
@@ -2327,7 +2470,7 @@ function saveNumEditor(){
     }, function(res){
       state.numEdit = null;
       setNotice(res && res.ok ? 'Период опроса сохранён.' : ((res && (res.error || res.err)) ? (res.error || res.err) : 'Не удалось сохранить значение.'));
-      loadState(function(){ go(ctx.returnHash || '#/sensor/' + encodeURIComponent(ctx.sensorId)); render(); });
+      reloadConfigAndState(function(){ go(ctx.returnHash || '#/sensor/' + encodeURIComponent(ctx.sensorId)); render(); });
     });
     return;
   }
@@ -2349,7 +2492,7 @@ function saveNumEditor(){
     }, function(res){
       state.numEdit = null;
       setNotice(res && res.ok ? 'Значение сохранено.' : ((res && (res.error || res.err)) ? (res.error || res.err) : 'Не удалось сохранить значение.'));
-      loadState(function(){ go(ctx.returnHash || '#/sensor/' + encodeURIComponent(ctx.sensorId)); render(); });
+      reloadConfigAndState(function(){ go(ctx.returnHash || '#/sensor/' + encodeURIComponent(ctx.sensorId)); render(); });
     });
     return;
   }
@@ -2371,7 +2514,7 @@ function saveNumEditor(){
     }, function(res){
       state.numEdit = null;
       setNotice(res && res.ok ? 'Значение сохранено.' : ((res && (res.error || res.err)) ? (res.error || res.err) : 'Не удалось сохранить значение.'));
-      loadState(function(){ go(ctx.returnHash || '#/sensorCtrl/' + encodeURIComponent(ctx.sensorId)); render(); });
+      reloadConfigAndState(function(){ go(ctx.returnHash || '#/sensorCtrl/' + encodeURIComponent(ctx.sensorId)); render(); });
     });
     return;
   }
@@ -2402,7 +2545,7 @@ function saveNumEditor(){
     postAlarm(ctx.sensorId, idx, enabled, value, isMax, function(res){
       state.numEdit = null;
       setNotice(res && res.ok ? 'Значение сохранено.' : ((res && (res.error || res.err)) ? (res.error || res.err) : 'Не удалось сохранить значение.'));
-      loadState(function(){ go(ctx.returnHash || '#/sensorAlarm/' + encodeURIComponent(ctx.sensorId)); render(); });
+      reloadConfigAndState(function(){ go(ctx.returnHash || '#/sensorAlarm/' + encodeURIComponent(ctx.sensorId)); render(); });
     });
     return;
   }

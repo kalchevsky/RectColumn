@@ -204,6 +204,43 @@ private:
     }
 
     void _registerCoreRoutes() {
+        _server.on("/api/v1/config", HTTP_GET, [this](AsyncWebServerRequest* req) {
+            DynamicJsonDocument doc(24576);
+            JsonObject root = doc.to<JsonObject>();
+            _buildConfig(root);
+            const uint32_t nowMs = millis();
+            static uint32_t lastConfigSizeLogMs = 0;
+            if ((uint32_t)(nowMs - lastConfigSizeLogMs) >= 5000UL) {
+                lastConfigSizeLogMs = nowMs;
+                Serial.printf(
+                    "[CONFIG_SIZE] total=%u sensors=%u outputs=%u\n",
+                    (unsigned)measureJson(doc),
+                    (unsigned)measureJson(root["sensors"]),
+                    (unsigned)measureJson(root["outputs"])
+                );
+            }
+            _sendDoc(req, 200, doc);
+        });
+
+        _server.on("/api/v1/live", HTTP_GET, [this](AsyncWebServerRequest* req) {
+            DynamicJsonDocument doc(24576);
+            JsonObject root = doc.to<JsonObject>();
+            _buildLive(root);
+            const uint32_t nowMs = millis();
+            static uint32_t lastLiveSizeLogMs = 0;
+            if ((uint32_t)(nowMs - lastLiveSizeLogMs) >= 5000UL) {
+                lastLiveSizeLogMs = nowMs;
+                Serial.printf(
+                    "[LIVE_SIZE] total=%u sensors=%u outputs=%u alarms=%u\n",
+                    (unsigned)measureJson(doc),
+                    (unsigned)measureJson(root["sensors"]),
+                    (unsigned)measureJson(root["outputs"]),
+                    (unsigned)(measureJson(root["activeAlarmReasons"]) + measureJson(root["activeAlarmsAll"]))
+                );
+            }
+            _sendDoc(req, 200, doc);
+        });
+
         _server.on("/api/v1/state", HTTP_GET, [this](AsyncWebServerRequest* req) {
             DynamicJsonDocument doc(24576);
             JsonObject root = doc.to<JsonObject>();
@@ -1751,6 +1788,8 @@ private:
         endpoints.add("/api/v1/health");
         endpoints.add("/api/v1/schema");
         endpoints.add("/api/v1/diag");
+        endpoints.add("/api/v1/config");
+        endpoints.add("/api/v1/live");
         endpoints.add("/api/v1/state");
         endpoints.add("/api/v1/sensor");
         endpoints.add("/api/v1/output");
@@ -1784,21 +1823,24 @@ private:
         _buildDiag(diag);
     }
 
-    void _buildState(JsonObject root) {
-        root["time"]   = _tb->nowStr();
+    void _buildStateTopStatic(JsonObject root) {
+        root["emu"] = EMU_MODE;
+        root["fw"] = FW_VERSION;
+        root["apiVersion"] = API_VERSION;
+    }
+
+    void _buildStateTopRuntime(JsonObject root) {
+        root["time"] = _tb->nowStr();
         root["timeMs"] = _tb->nowMs();
         root["synced"] = _tb->isSynced();
-        root["emu"]    = EMU_MODE;
-        root["fw"]     = FW_VERSION;
-        root["apiVersion"] = API_VERSION;
-        root["apIP"]   = _wifi->apIP();
+        root["apIP"] = _wifi->apIP();
         root["apRunning"] = _wifi->apRunning();
-        root["staIP"]  = _wifi->staIP();
-        root["rssi"]   = _wifi->rssi();
+        root["staIP"] = _wifi->staIP();
+        root["rssi"] = _wifi->rssi();
         root["staRssi"] = _wifi->staRssi();
         root["apRssi"] = _wifi->apRssi();
         root["apClientCount"] = _wifi->apClientCount();
-        root["muted"]  = _om->soundMuted;
+        root["muted"] = _om->soundMuted;
         root["activeAlarmCount"] = _om->activeAlarmCount(*_sm);
         root["unackedAlarmCount"] = _om->unackedAlarmCount(*_sm);
         root["safetyAlarmActive"] = _om->safetyAlarmActive();
@@ -1807,6 +1849,169 @@ private:
         root["stopLatched"] = _om->mainStopLatched();
         root["wifiWizardPending"] = _wifiWizardPending();
         root["notifyEnabled"] = (_notifier ? _notifier->enabled() : false);
+    }
+
+    void _buildSensorConfigFields(JsonObject so, uint8_t sensorIdx, SensorBase* sensor) {
+        so["enabled"] = sensor->enabled;
+        so["periodMs"] = sensor->periodMs;
+        so["unit"] = SensorManager::sensorUnit(sensorIdx);
+        so["hwLimited"] = sensor->hwLimited;
+        so["alarmDelayMs"] = sensor->alarmDelayMs;
+        so["ctrlDelayMs"] = sensor->ctrlDelayMs;
+    }
+
+    void _buildSensorLiveFields(JsonObject so, uint8_t sensorIdx, SensorBase* s) {
+        so["warmup"] = s->isInEnableWarmup();
+        so["error"] = s->error;
+        so["present"] = s->present;
+        so["sensorErrorActive"] = s->isSensorErrorActive();
+        so["sensorErrorSticky"] = s->isSensorErrorSticky();
+        so["sensorErrorLatched"] = s->sensorErrorLatched;
+        so["sensorErrorReason"] = s->sensorErrorReasonCode();
+        so["sensorLostNotice"] = s->sensorLostNotice();
+        so["stale"] = s->isStale();
+        if (s->diagCode != SENSOR_DIAG_NONE) so["note"] = s->diagText();
+
+        if (!isnan(s->value) && !s->error) so["value"] = roundf(s->value * 100.0f) / 100.0f;
+        else                                         so["value"] = nullptr;
+
+        const uint8_t unackedMask = _om->unackedAlarmMaskFor(*_sm, sensorIdx);
+        so["sensorLostUnacked"] = ((unackedMask & SENSOR_LOST_ALARM_MASK) != 0);
+    }
+
+    void _buildSensorAlarmsConfig(JsonArray alarms, SensorBase* sensor) {
+        for (int alarmIdx = 0; alarmIdx < N_ALARMS; alarmIdx++) {
+            JsonObject ao = alarms.createNestedObject();
+            ao["enabled"] = sensor->alarm[alarmIdx].enabled;
+            ao["threshold"] = sensor->alarm[alarmIdx].threshold;
+            ao["isMax"] = sensor->alarm[alarmIdx].isMax;
+        }
+    }
+
+    void _buildSensorAlarmsLive(JsonArray alarms, SensorBase* sensor, uint8_t unackedMask) {
+        for (int alarmIdx = 0; alarmIdx < N_ALARMS; alarmIdx++) {
+            JsonObject ao = alarms.createNestedObject();
+            ao["triggered"] = sensor->alarm[alarmIdx].triggered;
+            ao["unacked"] = ((unackedMask & (1u << alarmIdx)) != 0);
+        }
+    }
+
+    void _buildSensorCtrlConfig(JsonArray ctrl, uint8_t sensorIdx, SensorBase* sensor) {
+        for (int outIdx = 0; outIdx < N_CTRL_OUT; outIdx++) {
+            JsonObject co = ctrl.createNestedObject();
+            const bool fixedOffOnly = SensorManager::isDigitalOffOnlyRule(sensorIdx, (uint8_t)outIdx);
+            co["outIdx"] = sensor->ctrl[outIdx].outIdx;
+            co["enabled"] = sensor->ctrl[outIdx].enabled;
+            co["logic"] = (sensor->ctrl[outIdx].logic == LOGIC_COOL) ? "cool" : "heat";
+            co["min"] = sensor->ctrl[outIdx].minVal;
+            co["max"] = sensor->ctrl[outIdx].maxVal;
+            co["fixedOffOnly"] = fixedOffOnly;
+            co["schemeAllowed"] = SensorManager::isRuleAllowedForOutput(sensorIdx, (uint8_t)outIdx);
+        }
+    }
+
+    void _buildOutputConfigFields(JsonObject oo, uint8_t outputIdx, Output* output) {
+        oo["enabled"] = output->enabled;
+        if (outputIdx < 3) oo["mode"] = (_om->chMode[outputIdx] == LOGIC_COOL) ? "cool" : "heat";
+    }
+
+    void _buildOutputLiveFields(JsonObject oo, uint8_t outputIdx, Output* output) {
+        const bool actualOn = output->actualOn();
+        const uint32_t effectiveForbidMask = _om->effectiveForbidMask(outputIdx);
+        const bool stopOverridesConfirm = _om->mainStopLatched() && outputIdx >= OUT_CH1 && outputIdx <= OUT_CH3;
+
+        oo["state"] = actualOn;
+        oo["actual"] = actualOn;
+        oo["displayOn"] = actualOn;
+        oo["requested"] = output->requestedOn();
+        oo["manualWant"] = output->manualWant();
+        oo["operatorHoldOff"] = _om->operatorHoldOff(outputIdx);
+        oo["forbidden"] = (effectiveForbidMask != 0);
+        oo["forbidMask"] = output->forbidMask();
+        oo["sensorForbidMask"] = _om->lastForbidMask(outputIdx);
+        oo["safetyForbidMask"] = _om->safetyForbidMask(outputIdx);
+        oo["effectiveForbidMask"] = effectiveForbidMask;
+        oo["forbidReasonText"] = _maskReasonText(effectiveForbidMask, false);
+        oo["wantOnMask"] = output->wantOnMask();
+        JsonArray reasons = oo.createNestedArray("forbidReasons");
+        _appendForbidReasons(reasons, effectiveForbidMask);
+        oo["autoOff"] = _om->autoOffActive(outputIdx);
+        oo["safetyBlocked"] = _om->safetyBlocked(outputIdx);
+        oo["blockReason"] = _maskReasonText(effectiveForbidMask, false);
+        oo["manualRequest"] = _om->manualRequestOn(outputIdx);
+        oo["finalRelayState"] = output->finalRequestedOn();
+        oo["physicalRelayState"] = output->actualOn();
+
+        oo["relayPending"] = _om->relayCommandPending(outputIdx);
+        oo["pendingCmd"] = _om->relayCommandPending(outputIdx)
+            ? relayCommandName(_om->relayCommand(outputIdx))
+            : nullptr;
+        const char* relayErr = _om->relayCommandErrorName(outputIdx);
+        if (relayErr && relayErr[0]) {
+            oo["relayError"] = relayErr;
+            oo["relayErrorMs"] = _om->relayCommandErrorMs(outputIdx);
+            oo["relayErrorText"] = _om->relayErrorText(outputIdx);
+        }
+
+        if (outputIdx < 4) {
+            const ConfirmationChannel& c = _cm->get(outputIdx);
+            if (outputIdx >= OUT_CH1 && outputIdx <= OUT_CH3) {
+                oo["confirmAvailable"] = c.available;
+                oo["confirmed"] = c.confirmed;
+                oo["mismatch"] = stopOverridesConfirm ? false : c.mismatch;
+                oo["timeout"] = stopOverridesConfirm ? false : c.timeout;
+                oo["confirmMismatch"] = stopOverridesConfirm ? false : c.mismatch;
+                oo["confirmTimeout"] = stopOverridesConfirm ? false : c.timeout;
+                oo["pending"] = stopOverridesConfirm ? false : c.pending;
+                oo["confirmActual"] = c.actual;
+                oo["confirmExpected"] = c.expected;
+                oo["feedbackOn"] = c.actual;
+                oo["confirmedLevel"] = c.actual ? 1 : 0;
+            } else {
+                oo["confirmAvailable"] = false;
+                oo["confirmed"] = nullptr;
+                oo["mismatch"] = false;
+                oo["timeout"] = false;
+                oo["confirmMismatch"] = false;
+                oo["confirmTimeout"] = false;
+                oo["pending"] = false;
+                oo["confirmActual"] = actualOn;
+                oo["feedbackOn"] = actualOn;
+                oo["confirmedLevel"] = actualOn ? 1 : 0;
+                oo["confirmNote"] = c.note;
+            }
+        }
+    }
+
+    void _buildConfig(JsonObject root) {
+        _buildStateTopStatic(root);
+
+        JsonArray sensors = root.createNestedArray("sensors");
+        _buildSensorsConfig(sensors);
+
+        JsonArray outputs = root.createNestedArray("outputs");
+        _buildOutputsConfig(outputs);
+    }
+
+    void _buildLive(JsonObject root) {
+        _buildStateTopRuntime(root);
+
+        JsonArray activeAlarmReasons = root.createNestedArray("activeAlarmReasons");
+        _buildActiveAlarmReasons(activeAlarmReasons, true);
+        JsonArray activeAlarmsAll = root.createNestedArray("activeAlarmsAll");
+        _buildActiveAlarmsAll(activeAlarmsAll);
+
+        JsonArray sensors = root.createNestedArray("sensors");
+        _buildSensorsLive(sensors);
+
+        JsonArray outputs = root.createNestedArray("outputs");
+        _buildOutputsLive(outputs);
+    }
+
+    void _buildState(JsonObject root) {
+        _buildStateTopRuntime(root);
+        _buildStateTopStatic(root);
+
         JsonArray activeAlarmReasons = root.createNestedArray("activeAlarmReasons");
         _buildActiveAlarmReasons(activeAlarmReasons, true);
         JsonArray activeAlarmsAll = root.createNestedArray("activeAlarmsAll");
@@ -1819,133 +2024,78 @@ private:
         _buildOutputs(outputs);
     }
 
-    void _buildSensors(JsonArray arr) {
+    void _buildSensorsConfig(JsonArray arr) {
         for (int i = 0; i < SEN_COUNT; i++) {
-            SensorBase* s = _sm->s[i];
+            SensorBase* sensor = _sm->s[i];
             JsonObject so = arr.createNestedObject();
-            so["id"]      = SensorManager::sensorName(i);
-            so["enabled"] = s->enabled;
-            // === PATCH WARMUP BEGIN ===
-            so["warmup"] = s->isInEnableWarmup();
-            // === PATCH WARMUP END ===
-            so["periodMs"] = s->periodMs;
-            so["error"]   = s->error;
-            so["present"] = s->present;
-            so["sensorErrorActive"] = s->isSensorErrorActive();
-            so["sensorErrorSticky"] = s->isSensorErrorSticky();
-            so["sensorErrorLatched"] = s->sensorErrorLatched;
-            so["sensorErrorReason"] = s->sensorErrorReasonCode();
-            so["sensorLostNotice"] = s->sensorLostNotice();
-            so["stale"]   = s->isStale();
-            so["lastValidMs"] = s->lastValidMs;
-            so["unit"]    = SensorManager::sensorUnit(i);
-            so["hwLimited"] = s->hwLimited;
-            so["alarmDelayMs"] = s->alarmDelayMs;
-            so["ctrlDelayMs"]  = s->ctrlDelayMs;
-            if (s->diagCode != SENSOR_DIAG_NONE) so["note"] = s->diagText();
+            so["id"] = SensorManager::sensorName(i);
+            _buildSensorConfigFields(so, (uint8_t)i, sensor);
 
-            if (!isnan(s->value) && !s->error) so["value"] = roundf(s->value * 100.0f) / 100.0f;
-            else                               so["value"] = nullptr;
-
-            const uint8_t unackedMask = _om->unackedAlarmMaskFor(*_sm, i);
-            so["sensorLostUnacked"] = ((unackedMask & SENSOR_LOST_ALARM_MASK) != 0);
             JsonArray alarms = so.createNestedArray("alarms");
-            for (int ai = 0; ai < N_ALARMS; ai++) {
-                JsonObject ao = alarms.createNestedObject();
-                ao["enabled"]   = s->alarm[ai].enabled;
-                ao["threshold"] = s->alarm[ai].threshold;
-                ao["isMax"]     = s->alarm[ai].isMax;
-                ao["triggered"] = s->alarm[ai].triggered;
-                ao["unacked"]   = ((unackedMask & (1u << ai)) != 0);
-            }
+            _buildSensorAlarmsConfig(alarms, sensor);
 
             JsonArray ctrl = so.createNestedArray("ctrl");
-            for (int oi = 0; oi < N_CTRL_OUT; oi++) {
-                JsonObject co = ctrl.createNestedObject();
-                const bool fixedOffOnly = SensorManager::isDigitalOffOnlyRule((uint8_t)i, (uint8_t)oi);
-                co["outIdx"]  = s->ctrl[oi].outIdx;
-                co["enabled"] = s->ctrl[oi].enabled;
-                co["logic"]   = (s->ctrl[oi].logic == LOGIC_COOL) ? "cool" : "heat";
-                co["min"]     = s->ctrl[oi].minVal;
-                co["max"]     = s->ctrl[oi].maxVal;
-                co["fixedOffOnly"] = fixedOffOnly;
-                co["schemeAllowed"] = SensorManager::isRuleAllowedForOutput((uint8_t)i, (uint8_t)oi);
-            }
+            _buildSensorCtrlConfig(ctrl, (uint8_t)i, sensor);
+        }
+    }
+
+    void _buildSensorsLive(JsonArray arr) {
+        for (int i = 0; i < SEN_COUNT; i++) {
+            SensorBase* sensor = _sm->s[i];
+            JsonObject so = arr.createNestedObject();
+            const uint8_t unackedMask = _om->unackedAlarmMaskFor(*_sm, i);
+            so["id"] = SensorManager::sensorName(i);
+            _buildSensorLiveFields(so, (uint8_t)i, sensor);
+
+            JsonArray alarms = so.createNestedArray("alarms");
+            _buildSensorAlarmsLive(alarms, sensor, unackedMask);
+        }
+    }
+
+    void _buildSensors(JsonArray arr) {
+        for (int i = 0; i < SEN_COUNT; i++) {
+            SensorBase* sensor = _sm->s[i];
+            JsonObject so = arr.createNestedObject();
+            const uint8_t unackedMask = _om->unackedAlarmMaskFor(*_sm, i);
+            so["id"] = SensorManager::sensorName(i);
+            _buildSensorConfigFields(so, (uint8_t)i, sensor);
+            _buildSensorLiveFields(so, (uint8_t)i, sensor);
+            so["lastValidMs"] = sensor->lastValidMs;
+
+            JsonArray alarms = so.createNestedArray("alarms");
+            _buildSensorAlarmsConfig(alarms, sensor);
+            _buildSensorAlarmsLive(alarms, sensor, unackedMask);
+
+            JsonArray ctrl = so.createNestedArray("ctrl");
+            _buildSensorCtrlConfig(ctrl, (uint8_t)i, sensor);
+        }
+    }
+
+    void _buildOutputsConfig(JsonArray arr) {
+        for (int i = 0; i < OUT_COUNT; i++) {
+            Output* output = _om->out[i];
+            JsonObject oo = arr.createNestedObject();
+            oo["id"] = _outputName(i);
+            _buildOutputConfigFields(oo, (uint8_t)i, output);
+        }
+    }
+
+    void _buildOutputsLive(JsonArray arr) {
+        for (int i = 0; i < OUT_COUNT; i++) {
+            Output* output = _om->out[i];
+            JsonObject oo = arr.createNestedObject();
+            oo["id"] = _outputName(i);
+            _buildOutputLiveFields(oo, (uint8_t)i, output);
         }
     }
 
     void _buildOutputs(JsonArray arr) {
         for (int i = 0; i < OUT_COUNT; i++) {
-            Output* o = _om->out[i];
+            Output* output = _om->out[i];
             JsonObject oo = arr.createNestedObject();
-            const bool actualOn = o->actualOn();
-            const uint32_t effectiveForbidMask = _om->effectiveForbidMask((uint8_t)i);
-            const bool stopOverridesConfirm = _om->mainStopLatched() && i >= OUT_CH1 && i <= OUT_CH3;
-
-            oo["id"]         = _outputName(i);
-            oo["state"]      = actualOn;
-            oo["actual"]     = actualOn;
-            oo["displayOn"]  = actualOn;
-            oo["requested"]  = o->requestedOn();
-            oo["manualWant"] = o->manualWant();
-            oo["operatorHoldOff"] = _om->operatorHoldOff((uint8_t)i);
-            oo["forbidden"]  = (effectiveForbidMask != 0);
-            oo["forbidMask"] = o->forbidMask();
-            oo["sensorForbidMask"] = _om->lastForbidMask((uint8_t)i);
-            oo["safetyForbidMask"] = _om->safetyForbidMask((uint8_t)i);
-            oo["effectiveForbidMask"] = effectiveForbidMask;
-            oo["forbidReasonText"] = _maskReasonText(effectiveForbidMask, false);
-            oo["wantOnMask"] = o->wantOnMask();
-            JsonArray reasons = oo.createNestedArray("forbidReasons");
-            _appendForbidReasons(reasons, effectiveForbidMask);
-            oo["enabled"]    = o->enabled;
-            oo["autoOff"] = _om->autoOffActive((uint8_t)i);
-            oo["safetyBlocked"] = _om->safetyBlocked((uint8_t)i);
-            oo["blockReason"] = _maskReasonText(effectiveForbidMask, false);
-            oo["manualRequest"] = _om->manualRequestOn((uint8_t)i);
-            oo["finalRelayState"] = o->finalRequestedOn();
-            oo["physicalRelayState"] = o->actualOn();
-            if (i < 3) oo["mode"] = (_om->chMode[i] == LOGIC_COOL) ? "cool" : "heat";
-
-            oo["relayPending"] = _om->relayCommandPending((uint8_t)i);
-            oo["pendingCmd"] = _om->relayCommandPending((uint8_t)i)
-                ? relayCommandName(_om->relayCommand((uint8_t)i))
-                : nullptr;
-            const char* relayErr = _om->relayCommandErrorName((uint8_t)i);
-            if (relayErr && relayErr[0]) {
-                oo["relayError"] = relayErr;
-                oo["relayErrorMs"] = _om->relayCommandErrorMs((uint8_t)i);
-                oo["relayErrorText"] = _om->relayErrorText((uint8_t)i);
-            }
-
-            if (i < 4) {
-                const ConfirmationChannel& c = _cm->get(i);
-                if (i >= OUT_CH1 && i <= OUT_CH3) {
-                    oo["confirmAvailable"] = c.available;
-                    oo["confirmed"] = c.confirmed;
-                    oo["mismatch"]  = stopOverridesConfirm ? false : c.mismatch;
-                    oo["timeout"]   = stopOverridesConfirm ? false : c.timeout;
-                    oo["confirmMismatch"] = stopOverridesConfirm ? false : c.mismatch;
-                    oo["confirmTimeout"] = stopOverridesConfirm ? false : c.timeout;
-                    oo["pending"]   = stopOverridesConfirm ? false : c.pending;
-                    oo["confirmActual"]   = c.actual;
-                    oo["confirmExpected"] = c.expected;
-                    oo["feedbackOn"] = c.actual;
-                    oo["confirmedLevel"] = c.actual ? 1 : 0;
-                } else {
-                    oo["confirmAvailable"] = false;
-                    oo["confirmed"] = nullptr;
-                    oo["mismatch"]  = false;
-                    oo["timeout"]   = false;
-                    oo["confirmMismatch"] = false;
-                    oo["confirmTimeout"] = false;
-                    oo["pending"]   = false;
-                    oo["confirmActual"] = actualOn;
-                    oo["feedbackOn"] = actualOn;
-                    oo["confirmedLevel"] = actualOn ? 1 : 0;
-                    oo["confirmNote"] = c.note;
-                }
-            }
+            oo["id"] = _outputName(i);
+            _buildOutputConfigFields(oo, (uint8_t)i, output);
+            _buildOutputLiveFields(oo, (uint8_t)i, output);
         }
     }
 
