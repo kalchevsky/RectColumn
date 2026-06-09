@@ -205,9 +205,35 @@ private:
 
     void _registerCoreRoutes() {
         _server.on("/api/v1/state", HTTP_GET, [this](AsyncWebServerRequest* req) {
+            static uint32_t lastStateRequestMs = 0;
+            const uint32_t nowMs = millis();
+            if ((uint32_t)(nowMs - lastStateRequestMs) < 250UL) {
+                req->send(
+                    429,
+                    "application/json; charset=utf-8",
+                    "{\"ok\":false,\"error\":\"too_many_requests\"}"
+                );
+                return;
+            }
+            lastStateRequestMs = nowMs;
+
             DynamicJsonDocument doc(24576);
             JsonObject root = doc.to<JsonObject>();
             _buildState(root);
+            static uint32_t lastStateSizeLogMs = 0;
+            if ((uint32_t)(nowMs - lastStateSizeLogMs) >= 5000UL) {
+                lastStateSizeLogMs = nowMs;
+                Serial.printf(
+                    "[STATE_SIZE] total=%u activeAlarmReasons=%u activeAlarmsAll=%u sensors=%u outputs=%u confirmations=%u diag=%u\n",
+                    (unsigned)measureJson(doc),
+                    (unsigned)measureJson(root["activeAlarmReasons"]),
+                    (unsigned)measureJson(root["activeAlarmsAll"]),
+                    (unsigned)measureJson(root["sensors"]),
+                    (unsigned)measureJson(root["outputs"]),
+                    (unsigned)measureJson(root["confirmations"]),
+                    (unsigned)measureJson(root["diag"])
+                );
+            }
             _sendDoc(req, 200, doc);
         });
 
@@ -2141,14 +2167,114 @@ private:
     }
 
     void _sendDoc(AsyncWebServerRequest* req, int status, DynamicJsonDocument& doc) {
-        size_t need = doc.memoryUsage();
-        if (!_allowLargeResponse(req, req->url().c_str(), need)) return;
+        if (!req) {
+            return;
+        }
+
+        String urlStr = req->url();
+        const char* url = urlStr.c_str();
+        static uint32_t lastPreSerializeLogMs = 0;
+        static uint32_t lastReserveFailedLogMs = 0;
+        static uint32_t lastBeginResponseNullLogMs = 0;
+
+        auto shouldLogMemGuard = [](uint32_t& lastLogMs) {
+            const uint32_t nowMs = millis();
+            if ((uint32_t)(nowMs - lastLogMs) < 1000UL) {
+                return false;
+            }
+            lastLogMs = nowMs;
+            return true;
+        };
+
+        const size_t jsonNeed = measureJson(doc) + 1;
+        const size_t free8 = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+        const size_t largest8 = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+
+        /*
+          Buffered path:
+          - serialize once into String json;
+          - hand a ready-made buffer to AsyncWebServerResponse;
+          - async_tcp should only transmit prepared bytes, not run heavy JSON serialization.
+        */
+        const size_t freeNeed = jsonNeed + 8192;
+        const size_t largestNeed = jsonNeed + 4096;
+
+        if (jsonNeed <= 1 || free8 < freeNeed || largest8 < largestNeed) {
+            if (shouldLogMemGuard(lastPreSerializeLogMs)) {
+                Serial.printf(
+                    "[MEMGUARD] 503 endpoint=%s jsonNeed=%u free8=%u largest8=%u freeNeed=%u largestNeed=%u stage=pre_serialize\n",
+                    url,
+                    (unsigned)jsonNeed,
+                    (unsigned)free8,
+                    (unsigned)largest8,
+                    (unsigned)freeNeed,
+                    (unsigned)largestNeed
+                );
+            }
+
+            req->send(
+                503,
+                "application/json; charset=utf-8",
+                "{\"ok\":false,\"error\":\"low_memory\",\"stage\":\"pre_serialize\"}"
+            );
+            return;
+        }
+
         String json;
+        if (!json.reserve(jsonNeed)) {
+            const size_t free8AfterReserve = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+            const size_t largest8AfterReserve = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+            if (shouldLogMemGuard(lastReserveFailedLogMs)) {
+                Serial.printf(
+                    "[MEMGUARD] 503 endpoint=%s jsonNeed=%u free8=%u largest8=%u stage=reserve_failed\n",
+                    url,
+                    (unsigned)jsonNeed,
+                    (unsigned)free8AfterReserve,
+                    (unsigned)largest8AfterReserve
+                );
+            }
+
+            req->send(
+                503,
+                "application/json; charset=utf-8",
+                "{\"ok\":false,\"error\":\"low_memory\",\"stage\":\"reserve_failed\"}"
+            );
+            return;
+        }
+
         serializeJson(doc, json);
-        AsyncWebServerResponse* resp = req->beginResponse(status, "application/json; charset=utf-8", json);
-        resp->addHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-        resp->addHeader("Pragma", "no-cache");
-        resp->addHeader("Expires", "0");
+
+        AsyncWebServerResponse* resp =
+            req->beginResponse(status, "application/json; charset=utf-8", json);
+
+        if (!resp) {
+            if (shouldLogMemGuard(lastBeginResponseNullLogMs)) {
+                Serial.printf(
+                    "[MEMGUARD] 503 endpoint=%s jsonNeed=%u stage=beginResponse_null\n",
+                    url,
+                    (unsigned)jsonNeed
+                );
+            }
+            req->send(
+                503,
+                "application/json; charset=utf-8",
+                "{\"ok\":false,\"error\":\"low_memory\",\"stage\":\"beginResponse_null\"}"
+            );
+            return;
+        }
+
+        /*
+          Do NOT add per-response headers here.
+
+          The decoded crash happened in:
+            AsyncWebServerResponse::addHeader(...)
+            std::_List_node<AsyncWebHeader>::allocate
+            operator new
+
+          For hot API path /api/v1/state, avoiding extra heap allocations is more
+          important than no-cache headers.
+        */
+
         req->send(resp);
     }
 
