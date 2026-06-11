@@ -81,7 +81,7 @@ private:
 
             if (!_levelAlarmLatched && (now - _levelStartedMs >= alarmDelayMs)) {
                 _levelAlarmLatched = true;
-                _alarm("Авария уровня: цепь L разомкнута");
+                _alarm("Уровень MAX!");
             }
 
             if ((now - _levelStartedMs >= alarmDelayMs) && ls->alarm[0].enabled) {
@@ -118,37 +118,29 @@ private:
             return;
         }
 
-        bool flowControlEnabled = false;
-        for (uint8_t oi = OUT_CH1; oi <= OUT_CH3; oi++) {
-            if (fs->controlRuleEnabled(oi)) {
-                flowControlEnabled = true;
-                break;
-            }
-        }
-        const bool ch2ActualOn = _om->out[OUT_CH2] && _om->out[OUT_CH2]->actualOn();
-        const bool flowFault = fs->enabled && flowControlEnabled && ch2ActualOn && !_sm->flowActive();
-        const uint32_t alarmDelayMs = fs->alarmDelayMs;
-        bool alarmActive = false;
+        // ── Тревога "нет протока" — единый источник истины ──────────────────
+        // Состояние берётся из фазовой машины OutputManager: тревога активна
+        // только в фазе FAULT (окно ожидания grace истекло и протока нет).
+        // Выдержку уже отработала фазовая машина (grace = ctrlDelayMs F),
+        // поэтому здесь дополнительной задержки нет. В NEUTRAL/WAITING тревога
+        // снимается автоматически (не липкая). Каналы здесь НЕ гасятся.
+        // ────────────────────────────────────────────────────────────────────
+        const bool flowFault = fs->enabled && _om && _om->flowPhaseIsFault();
 
         if (flowFault) {
-            if (!_flowConditionLatched) {
-                _flowConditionLatched = true;
-                _flowStartedMs = now;
-                _flowAlarmLatched = false;
-            }
+            _flowConditionLatched = true;   // оставлено для индикации/совместимости
+            if (_flowStartedMs == 0) _flowStartedMs = now;
 
-            alarmActive = (now - _flowStartedMs >= alarmDelayMs);
-
-            if (alarmActive && fs->alarm[0].enabled) {
+            if (fs->alarm[0].enabled) {
                 fs->externalAlarmMaskBits |= (1u << 0);
                 fs->alarm[0].triggered = true;
             } else {
                 fs->alarm[0].triggered = false;
             }
 
-            if (alarmActive && !_flowAlarmLatched) {
+            if (!_flowAlarmLatched) {
                 _flowAlarmLatched = true;
-                _alarm("Авария потока: цепь F разомкнута / нет потока");
+                _alarm("Авария потока: нет протока (окно ожидания истекло)");
             }
             return;
         }

@@ -93,7 +93,7 @@ function ensureHeaderClockStyles(){
     '.home-topbar .wifi-left{align-items:flex-start;}',
     '.home-topbar .wifi-side{display:flex;flex-direction:column;align-items:flex-end;gap:2px;}',
     '.home-topbar .wifi-row{display:flex;align-items:center;gap:8px;}',
-    '.home-topbar .wifi-side .clock{margin-top:0;font-family:\"Courier New\",monospace;font-size:12px;line-height:1.1;font-variant-numeric:tabular-nums;letter-spacing:.04em;white-space:nowrap;}',
+    '.home-topbar .wifi-side .clock{margin-top:0;font-family:\"Courier New\",monospace;font-size:18px;line-height:1.05;font-variant-numeric:tabular-nums;letter-spacing:.02em;white-space:nowrap;}',
     '.home-topbar .wifi-side .clock.stale{opacity:.4;}',
     '.home-topbar .ip{font-size:10.5px;}'
   ].join('');
@@ -405,31 +405,7 @@ function hasAnyAlert(){
 function unifiedAlertOverlayHtml(activeItems, latchedLines){
   var html = '';
   html += '<div class="rc-unified-alert-card" role="status" aria-live="assertive">';
-  html += '<div class="rc-unified-alert-title">Активные тревоги и ошибки</div>';
-  if (activeItems.length) {
-    html += '<section class="rc-unified-alert-section">';
-    html += '<div class="rc-unified-alert-section-title">Тревоги</div>';
-    html += '<div class="rc-unified-alert-lines">';
-    for (var i = 0; i < activeItems.length; i++) {
-      var item = activeItems[i];
-      html += '<div class="rc-unified-alert-line ' + (item.acked ? 'rc-unified-alert-line-acked' : 'rc-unified-alert-line-unacked') + '">';
-      html += '<div class="rc-unified-alert-line-text">' + esc(item.text) + '</div>';
-      if (item.acked) html += '<div class="rc-unified-alert-mark">квитирована</div>';
-      html += '</div>';
-    }
-    html += '</div></section>';
-  }
-  if (latchedLines.length) {
-    html += '<section class="rc-unified-alert-section">';
-    html += '<div class="rc-unified-alert-section-title">Ошибки датчиков</div>';
-    html += '<div class="rc-unified-alert-lines">';
-    for (var li = 0; li < latchedLines.length; li++) {
-      html += '<div class="rc-unified-alert-line rc-unified-alert-line-latched">';
-      html += '<div class="rc-unified-alert-line-text">' + esc(latchedLines[li]) + '</div>';
-      html += '</div>';
-    }
-    html += '</div></section>';
-  }
+  html += '<div class="rc-unified-alert-message">Есть ошибки и тревоги</div>';
   html += '</div>';
   return html;
 }
@@ -2639,8 +2615,10 @@ function renderSensorConfigGrid(id, s){
   html.push('<section class="grid">');
   html.push('<div class="cell"><div class="label">Статус: «' + esc(s.enabled ? 'Включено' : 'Выключено') + '»</div></div>');
   html.push('<a class="cell btn ' + (s.enabled ? 'red' : 'green') + '" href="#" onclick="event.preventDefault();toggleSensorEnabled(\'' + esc(id) + '\')">' + esc(s.enabled ? 'Отключить!' : 'Включить!') + '</a>');
-  html.push('<div class="cell"><div class="label">Период опроса: ' + esc(tplComma2(Number(s.periodMs || 1000) / 1000)) + ' сек.</div></div>');
-  html.push('<a class="cell btn" href="#" onclick="event.preventDefault();editSensorPeriod(\'' + esc(id) + '\')">Установить другой</a>');
+  if (!isVirtualSensor(id)) {
+    html.push('<div class="cell"><div class="label">Период опроса: ' + esc(tplComma2(Number(s.periodMs || 1000) / 1000)) + ' сек.</div></div>');
+    html.push('<a class="cell btn" href="#" onclick="event.preventDefault();editSensorPeriod(\'' + esc(id) + '\')">Установить другой</a>');
+  }
   if (sensorSupportsAlarmDelay(id)) {
     html.push('<div class="cell"><div class="label">Задержка срабатывания сигнализации: ' + esc(tplComma2(sensorDelaySeconds(s, "alarmDelayMs"))) + ' сек.</div></div>');
     html.push('<a class="cell btn" href="#" onclick="event.preventDefault();editSensorDelay(\'' + esc(id) + '\',\'alarm\')">Установить другой</a>');
@@ -2746,8 +2724,7 @@ function renderSensorAlarm(id){
 
   if (ui.cMinOnly) {
     html.push('<section class="alarm-row">');
-    if (ui.al1.enabled) html.push('<a class="cell value' + alarmValueClass(ui.al1.enabled, ui.al1.minTriggered) + '" href="#" onclick="event.preventDefault();editAlarmThreshold(\'' + esc(id) + '\',\'al1\',\'min\')">' + esc(tplCurrentFromPercent(ui.al1.min)) + '</a>');
-    else html.push('<a class="cell empty" href="#" onclick="event.preventDefault();editAlarmThreshold(\'' + esc(id) + '\',\'al1\',\'min\')">—</a>');
+    html.push('<a class="cell value' + alarmValueClass(ui.al1.enabled, ui.al1.minTriggered) + '" href="#" onclick="event.preventDefault();editAlarmThreshold(\'' + esc(id) + '\',\'al1\',\'min\')">' + esc(tplCurrentFromPercent(ui.al1.min)) + '</a>');
     html.push('<a class="cell center" href="#" onclick="event.preventDefault();toggleAlarmPref(\'' + esc(id) + '\',\'al1\')"><div class="al-name' + alarmNameClass(ui.al1.enabled, ui.al1.minTriggered) + '">ALmin</div></a>');
     html.push('<div class="cell empty">—</div>');
     html.push('</section>');
@@ -2768,19 +2745,15 @@ function renderSensorAlarm(id){
     var al1Triggered = !!(ui.al1.minTriggered || ui.al1.maxTriggered);
     var al2Triggered = !!(ui.al2.minTriggered || ui.al2.maxTriggered);
     html.push('<section class="alarm-row">');
-    if (ui.al1.enabled) html.push('<a class="cell value' + alarmValueClass(ui.al1.enabled, ui.al1.minTriggered) + '" href="#" onclick="event.preventDefault();editAlarmThreshold(\'' + esc(id) + '\',\'al1\',\'min\')">' + esc(tplComma2(ui.al1.min)) + '</a>');
-    else html.push('<a class="cell empty" href="#" onclick="event.preventDefault();editAlarmThreshold(\'' + esc(id) + '\',\'al1\',\'min\')">—</a>');
+    html.push('<a class="cell value' + alarmValueClass(ui.al1.enabled, ui.al1.minTriggered) + '" href="#" onclick="event.preventDefault();editAlarmThreshold(\'' + esc(id) + '\',\'al1\',\'min\')">' + esc(tplComma2(ui.al1.min)) + '</a>');
     html.push('<a class="cell center" href="#" onclick="event.preventDefault();toggleAlarmPref(\'' + esc(id) + '\',\'al1\')"><div class="al-name' + alarmNameClass(ui.al1.enabled, al1Triggered) + '">AL1</div></a>');
-    if (ui.al1.enabled) html.push('<a class="cell value' + alarmValueClass(ui.al1.enabled, ui.al1.maxTriggered) + '" href="#" onclick="event.preventDefault();editAlarmThreshold(\'' + esc(id) + '\',\'al1\',\'max\')">' + esc(tplComma2(ui.al1.max)) + '</a>');
-    else html.push('<a class="cell empty" href="#" onclick="event.preventDefault();editAlarmThreshold(\'' + esc(id) + '\',\'al1\',\'max\')">—</a>');
+    html.push('<a class="cell value' + alarmValueClass(ui.al1.enabled, ui.al1.maxTriggered) + '" href="#" onclick="event.preventDefault();editAlarmThreshold(\'' + esc(id) + '\',\'al1\',\'max\')">' + esc(tplComma2(ui.al1.max)) + '</a>');
     html.push('</section>');
 
     html.push('<section class="alarm-row">');
-    if (ui.al2.enabled) html.push('<a class="cell value' + alarmValueClass(ui.al2.enabled, ui.al2.minTriggered) + '" href="#" onclick="event.preventDefault();editAlarmThreshold(\'' + esc(id) + '\',\'al2\',\'min\')">' + esc(tplComma2(ui.al2.min)) + '</a>');
-    else html.push('<a class="cell empty" href="#" onclick="event.preventDefault();editAlarmThreshold(\'' + esc(id) + '\',\'al2\',\'min\')">—</a>');
+    html.push('<a class="cell value' + alarmValueClass(ui.al2.enabled, ui.al2.minTriggered) + '" href="#" onclick="event.preventDefault();editAlarmThreshold(\'' + esc(id) + '\',\'al2\',\'min\')">' + esc(tplComma2(ui.al2.min)) + '</a>');
     html.push('<a class="cell center" href="#" onclick="event.preventDefault();toggleAlarmPref(\'' + esc(id) + '\',\'al2\')"><div class="al-name' + alarmNameClass(ui.al2.enabled, al2Triggered) + '">AL2</div></a>');
-    if (ui.al2.enabled) html.push('<a class="cell value' + alarmValueClass(ui.al2.enabled, ui.al2.maxTriggered) + '" href="#" onclick="event.preventDefault();editAlarmThreshold(\'' + esc(id) + '\',\'al2\',\'max\')">' + esc(tplComma2(ui.al2.max)) + '</a>');
-    else html.push('<a class="cell empty" href="#" onclick="event.preventDefault();editAlarmThreshold(\'' + esc(id) + '\',\'al2\',\'max\')">—</a>');
+    html.push('<a class="cell value' + alarmValueClass(ui.al2.enabled, ui.al2.maxTriggered) + '" href="#" onclick="event.preventDefault();editAlarmThreshold(\'' + esc(id) + '\',\'al2\',\'max\')">' + esc(tplComma2(ui.al2.max)) + '</a>');
     html.push('</section>');
   }
   html.push('<a class="back" href="#/home">Вернуться на стартовую страницу</a>');

@@ -229,10 +229,15 @@ public:
         return enabled && controlRuleEnabled(outIdx);
     }
 
-    void resetControlRuntime(uint8_t outIdx) {
+    void resetCtrlCandidate(uint8_t outIdx) {
         if (outIdx >= N_CTRL_OUT) return;
         _ctrlCandidateCmd[outIdx] = 0;
         _ctrlCandidateSinceMs[outIdx] = 0;
+    }
+
+    void resetControlRuntime(uint8_t outIdx) {
+        if (outIdx >= N_CTRL_OUT) return;
+        resetCtrlCandidate(outIdx);
         _ctrlRearmPollAfterMs[outIdx] = 0;
     }
 

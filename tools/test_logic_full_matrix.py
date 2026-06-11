@@ -171,6 +171,85 @@ class StopControllerModel:
         return self.aux_outputs[out_idx].set_manual(True)
 
 
+@dataclass
+class FlowPhaseTick:
+    now_ms: int
+    phase: str
+    grace_started_ms: int
+    ch1_forbid: int
+    ch3_forbid: int
+    ch1_on: bool
+    ch2_on: bool
+    ch3_on: bool
+    alarm_active: bool
+
+
+class FlowPhaseRuntimeModel:
+    FP_NEUTRAL = "neutral"
+    FP_WAITING = "waiting"
+    FP_FAULT = "fault"
+
+    def __init__(self, flow_sensor: scheme.Sensor):
+        self.flow_sensor = flow_sensor
+        self.phase = self.FP_NEUTRAL
+        self.grace_started_ms = 0
+
+    def _rule_enabled(self, out_idx: int) -> bool:
+        rule = self.flow_sensor.ctrl.get(out_idx)
+        return bool(rule and rule.enabled and rule.out_idx == out_idx)
+
+    def tick(self, *, now_ms: int, prev_ch2_actual_on: bool, ch2_actual_on: bool,
+             ch1_on: bool, ch3_on: bool) -> FlowPhaseTick:
+        # Focused host-side model of the new firmware path:
+        # _updateFlowPhase() -> phase-based F gate -> direct forbid in FP_FAULT.
+        flow_present = self.flow_sensor.enabled and self.flow_sensor.value > 0.5
+        grace_ms = scheme.control_delay_ms(scheme.SEN_F)
+
+        if not ch2_actual_on:
+            self.phase = self.FP_NEUTRAL
+            self.grace_started_ms = now_ms
+        elif ch2_actual_on and not prev_ch2_actual_on:
+            self.phase = self.FP_WAITING
+            self.grace_started_ms = now_ms
+        elif self.phase == self.FP_FAULT:
+            pass
+        elif flow_present:
+            self.phase = self.FP_WAITING
+            self.grace_started_ms = now_ms
+        elif now_ms - self.grace_started_ms >= grace_ms:
+            self.phase = self.FP_FAULT
+
+        ch1_forbid = (1 << scheme.SEN_F) if (
+            self.phase == self.FP_FAULT and self._rule_enabled(scheme.OUT_CH1)
+        ) else 0
+        ch3_forbid = (1 << scheme.SEN_F) if (
+            self.phase == self.FP_FAULT and self._rule_enabled(scheme.OUT_CH3)
+        ) else 0
+
+        ch1 = scheme.ArbiterOutput(actual_on=ch1_on, requested_on=ch1_on)
+        ch3 = scheme.ArbiterOutput(actual_on=ch3_on, requested_on=ch3_on)
+        ch1.apply(ch1_forbid, 0)
+        ch3.apply(ch3_forbid, 0)
+
+        alarm_active = (
+            self.flow_sensor.enabled and
+            self.flow_sensor.alarm_enabled[0] and
+            self.phase == self.FP_FAULT
+        )
+
+        return FlowPhaseTick(
+            now_ms=now_ms,
+            phase=self.phase,
+            grace_started_ms=self.grace_started_ms,
+            ch1_forbid=ch1_forbid,
+            ch3_forbid=ch3_forbid,
+            ch1_on=ch1.actual_on,
+            ch2_on=ch2_actual_on,
+            ch3_on=ch3.actual_on,
+            alarm_active=alarm_active,
+        )
+
+
 class AnalogSchemeMatrixTests(unittest.TestCase):
     def test_heat_mode_matrix_for_t1_t2_t3_p(self):
         for sensor_idx in ANALOG_SENSOR_INDICES:
@@ -410,6 +489,189 @@ class DigitalSchemeMatrixTests(unittest.TestCase):
                 )
                 expected = tuple(out_idx not in enabled_channels for out_idx in MAIN_CHANNELS)
                 self.assertEqual(scheme.state_tuple(states), expected)
+
+
+class FlowPhaseBehaviorTests(unittest.TestCase):
+    GRACE_MS = scheme.control_delay_ms(scheme.SEN_F)
+
+    @staticmethod
+    def _flow_sensor(*, enabled_channels: tuple[int, ...], flow_present: bool) -> scheme.Sensor:
+        flow = scheme.build_control_sensor(
+            scheme.SEN_F,
+            enabled_channels=enabled_channels,
+            fault=not flow_present,
+        )
+        flow.alarm_enabled = (True, False, False, False)
+        return flow
+
+    # S2: F=0 до включения CH2 не должен мгновенно гасить уже включённый CH1.
+    def test_s2_preexisting_no_flow_keeps_ch1_on_through_waiting_grace(self):
+        flow = self._flow_sensor(enabled_channels=(scheme.OUT_CH1,), flow_present=False)
+        runtime = FlowPhaseRuntimeModel(flow)
+
+        neutral_tick = runtime.tick(
+            now_ms=0,
+            prev_ch2_actual_on=False,
+            ch2_actual_on=False,
+            ch1_on=True,
+            ch3_on=False,
+        )
+        start_tick = runtime.tick(
+            now_ms=100,
+            prev_ch2_actual_on=False,
+            ch2_actual_on=True,
+            ch1_on=neutral_tick.ch1_on,
+            ch3_on=neutral_tick.ch3_on,
+        )
+        waiting_tick = runtime.tick(
+            now_ms=100 + self.GRACE_MS - 1,
+            prev_ch2_actual_on=True,
+            ch2_actual_on=True,
+            ch1_on=start_tick.ch1_on,
+            ch3_on=start_tick.ch3_on,
+        )
+
+        self.assertEqual(start_tick.phase, runtime.FP_WAITING)
+        self.assertEqual(waiting_tick.phase, runtime.FP_WAITING)
+        self.assertEqual(start_tick.ch1_forbid, 0)
+        self.assertEqual(waiting_tick.ch1_forbid, 0)
+        self.assertTrue(waiting_tick.ch1_on)
+        self.assertFalse(waiting_tick.alarm_active)
+
+    # S3: ручной CH3 не должен "щёлкать", пока F ещё не вошёл в фазу FAULT.
+    def test_s3_manual_ch3_stays_on_while_flow_phase_is_neutral(self):
+        flow = self._flow_sensor(enabled_channels=(scheme.OUT_CH3,), flow_present=False)
+        runtime = FlowPhaseRuntimeModel(flow)
+
+        neutral_tick = runtime.tick(
+            now_ms=0,
+            prev_ch2_actual_on=False,
+            ch2_actual_on=False,
+            ch1_on=False,
+            ch3_on=True,
+        )
+        later_neutral_tick = runtime.tick(
+            now_ms=1000,
+            prev_ch2_actual_on=False,
+            ch2_actual_on=False,
+            ch1_on=neutral_tick.ch1_on,
+            ch3_on=neutral_tick.ch3_on,
+        )
+
+        self.assertEqual(neutral_tick.phase, runtime.FP_NEUTRAL)
+        self.assertEqual(later_neutral_tick.phase, runtime.FP_NEUTRAL)
+        self.assertEqual(neutral_tick.ch3_forbid, 0)
+        self.assertEqual(later_neutral_tick.ch3_forbid, 0)
+        self.assertTrue(later_neutral_tick.ch3_on)
+        self.assertFalse(later_neutral_tick.alarm_active)
+
+    # S4: на тике FAULT одновременно должны появиться forbid для CH1/CH3 и alarm.
+    def test_s4_fault_tick_turns_off_channels_and_raises_alarm_simultaneously(self):
+        flow = self._flow_sensor(
+            enabled_channels=(scheme.OUT_CH1, scheme.OUT_CH3),
+            flow_present=False,
+        )
+        runtime = FlowPhaseRuntimeModel(flow)
+
+        start_tick = runtime.tick(
+            now_ms=100,
+            prev_ch2_actual_on=False,
+            ch2_actual_on=True,
+            ch1_on=True,
+            ch3_on=True,
+        )
+        pre_fault_tick = runtime.tick(
+            now_ms=100 + self.GRACE_MS - 1,
+            prev_ch2_actual_on=True,
+            ch2_actual_on=True,
+            ch1_on=start_tick.ch1_on,
+            ch3_on=start_tick.ch3_on,
+        )
+        fault_tick = runtime.tick(
+            now_ms=100 + self.GRACE_MS,
+            prev_ch2_actual_on=True,
+            ch2_actual_on=True,
+            ch1_on=pre_fault_tick.ch1_on,
+            ch3_on=pre_fault_tick.ch3_on,
+        )
+
+        self.assertEqual(pre_fault_tick.phase, runtime.FP_WAITING)
+        self.assertFalse(pre_fault_tick.alarm_active)
+        self.assertEqual(pre_fault_tick.ch1_forbid, 0)
+        self.assertEqual(pre_fault_tick.ch3_forbid, 0)
+        self.assertTrue(pre_fault_tick.ch1_on)
+        self.assertTrue(pre_fault_tick.ch3_on)
+
+        self.assertEqual(fault_tick.phase, runtime.FP_FAULT)
+        # Одновременность S4: на одном и том же fault_tick уже есть и forbid, и alarm.
+        self.assertTrue(fault_tick.alarm_active)
+        self.assertEqual(fault_tick.ch1_forbid, 1 << scheme.SEN_F)
+        self.assertEqual(fault_tick.ch3_forbid, 1 << scheme.SEN_F)
+        self.assertFalse(fault_tick.ch1_on)
+        self.assertFalse(fault_tick.ch3_on)
+
+    # S6: после наличия протока полный grace стартует заново от последнего flow==true.
+    def test_s6_flow_loss_restarts_grace_from_latest_flow_observation(self):
+        flow = self._flow_sensor(enabled_channels=(scheme.OUT_CH1,), flow_present=True)
+        runtime = FlowPhaseRuntimeModel(flow)
+
+        start_tick = runtime.tick(
+            now_ms=100,
+            prev_ch2_actual_on=False,
+            ch2_actual_on=True,
+            ch1_on=True,
+            ch3_on=False,
+        )
+        flowing_tick_a = runtime.tick(
+            now_ms=2000,
+            prev_ch2_actual_on=True,
+            ch2_actual_on=True,
+            ch1_on=start_tick.ch1_on,
+            ch3_on=start_tick.ch3_on,
+        )
+        flowing_tick_b = runtime.tick(
+            now_ms=3000,
+            prev_ch2_actual_on=True,
+            ch2_actual_on=True,
+            ch1_on=flowing_tick_a.ch1_on,
+            ch3_on=flowing_tick_a.ch3_on,
+        )
+
+        flow.value = 0.0
+        loss_tick = runtime.tick(
+            now_ms=3001,
+            prev_ch2_actual_on=True,
+            ch2_actual_on=True,
+            ch1_on=flowing_tick_b.ch1_on,
+            ch3_on=flowing_tick_b.ch3_on,
+        )
+        before_fault_tick = runtime.tick(
+            now_ms=3000 + self.GRACE_MS - 1,
+            prev_ch2_actual_on=True,
+            ch2_actual_on=True,
+            ch1_on=loss_tick.ch1_on,
+            ch3_on=loss_tick.ch3_on,
+        )
+        fault_tick = runtime.tick(
+            now_ms=3000 + self.GRACE_MS,
+            prev_ch2_actual_on=True,
+            ch2_actual_on=True,
+            ch1_on=before_fault_tick.ch1_on,
+            ch3_on=before_fault_tick.ch3_on,
+        )
+
+        self.assertEqual(flowing_tick_a.phase, runtime.FP_WAITING)
+        self.assertEqual(flowing_tick_b.phase, runtime.FP_WAITING)
+        self.assertEqual(flowing_tick_b.grace_started_ms, 3000)
+        self.assertGreater(flowing_tick_b.grace_started_ms, start_tick.grace_started_ms)
+        self.assertEqual(loss_tick.phase, runtime.FP_WAITING)
+        self.assertEqual(loss_tick.grace_started_ms, 3000)
+        self.assertFalse(loss_tick.alarm_active)
+        self.assertEqual(before_fault_tick.phase, runtime.FP_WAITING)
+        self.assertEqual(before_fault_tick.ch1_forbid, 0)
+        self.assertEqual(fault_tick.phase, runtime.FP_FAULT)
+        self.assertTrue(fault_tick.alarm_active)
+        self.assertEqual(fault_tick.ch1_forbid, 1 << scheme.SEN_F)
 
 
 class MainOutputPriorityTests(unittest.TestCase):
@@ -1372,12 +1634,16 @@ class FullMatrixSourceGuardTests(unittest.TestCase):
     def test_global_stop_loop_is_limited_to_main_channels(self):
         self.assertIn("for (uint8_t oi = OUT_CH1; oi <= OUT_CH3; oi++)", self.output_manager_h)
 
-    def test_flow_gate_uses_ch2_for_ch1_and_keeps_local_gate_for_other_channels(self):
+    def test_flow_gate_uses_fault_phase_for_ch1_ch3_and_keeps_local_gate_for_ch2(self):
+        # Новый инвариант по ТЗ: F для CH1/CH3 работает через фазовую машину
+        # и единый grace-period. Откат к wants(OUT_CH2) должен краснить тест.
         self.assertIn("controlGate = _flowControlGate(prevState, outIdx);", self.output_manager_h)
+        self.assertIn("if (outIdx == OUT_CH1 || outIdx == OUT_CH3) {", self.output_manager_h)
+        self.assertIn("return (_flowPhase == FP_FAULT);", self.output_manager_h)
         self.assertIn("out[idx]->manualWant()", self.output_manager_h)
         self.assertIn("(_lastWant[idx] != 0)", self.output_manager_h)
-        self.assertIn("return wants(OUT_CH2);", self.output_manager_h)
         self.assertIn("return wants(outIdx);", self.output_manager_h)
+        self.assertNotIn("return wants(OUT_CH2);", self.output_manager_h)
 
     def test_mute_clears_sound_outputs_without_touching_main_channels(self):
         self.assertIn("out[OUT_CH4]->setBellPatternActive(false);", self.output_manager_h)

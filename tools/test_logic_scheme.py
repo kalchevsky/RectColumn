@@ -1417,7 +1417,14 @@ class SourceGuardTests(unittest.TestCase):
         self.assertIn("sensor.sensorErrorSticky === true", self.app_js)
         self.assertIn("function updateUnifiedAlertOverlay()", self.app_js)
         self.assertIn("function unifiedAlertOverlayHtml(activeItems, latchedLines)", self.app_js)
-        self.assertIn("Активные тревоги и ошибки", self.app_js)
+        overlay_html = self.app_js[
+            self.app_js.find("function unifiedAlertOverlayHtml(activeItems, latchedLines)"):
+            self.app_js.find("function updateUnifiedAlertOverlay()")
+        ]
+        self.assertIn("Есть ошибки и тревоги", overlay_html)
+        self.assertNotIn("Активные тревоги и ошибки", overlay_html)
+        self.assertNotIn("Ошибки датчиков", overlay_html)
+        self.assertNotIn("rc-unified-alert-line-unacked", overlay_html)
         self.assertIn("document.body.appendChild(shell);", self.app_js)
 
     def test_pressure_units_are_gpa_in_ui_api_and_serial(self):
@@ -1447,12 +1454,16 @@ class SourceGuardTests(unittest.TestCase):
         self.assertIn("if (!enabled) {", self.sensors_h)
         self.assertIn("return 0;", self.sensors_h)
 
-    def test_flow_rule_for_ch1_depends_on_ch2_and_other_channels_keep_local_gate(self):
+    def test_flow_rule_for_ch1_ch3_uses_fault_phase_and_ch2_keeps_local_gate(self):
+        # Новый инвариант по ТЗ: single grace живёт в фазовой машине, поэтому
+        # F открывает gate для CH1/CH3 только в FP_FAULT, а не по wants(CH2).
         self.assertIn("controlGate = _flowControlGate(prevState, outIdx);", self.output_mgr_h)
+        self.assertIn("if (outIdx == OUT_CH1 || outIdx == OUT_CH3) {", self.output_mgr_h)
+        self.assertIn("return (_flowPhase == FP_FAULT);", self.output_mgr_h)
         self.assertIn("out[idx]->manualWant()", self.output_mgr_h)
         self.assertIn("(_lastWant[idx] != 0)", self.output_mgr_h)
-        self.assertIn("return wants(OUT_CH2);", self.output_mgr_h)
         self.assertIn("return wants(outIdx);", self.output_mgr_h)
+        self.assertNotIn("return wants(OUT_CH2);", self.output_mgr_h)
 
     def test_flow_gate_does_not_reset_control_delay_runtime(self):
         self.assertIn("if (!controlGate) {", self.sensors_h)
@@ -1471,9 +1482,12 @@ class SourceGuardTests(unittest.TestCase):
         self.assertIn("esp_core_dump_image_get(&addr, &size)", self.main_ino)
         self.assertIn("coredump,   data, coredump, 0x3F0000, 0x10000,", self.partitions_csv)
 
-    def test_flow_alarm_is_gated_by_ch2_runtime_and_enabled_flow_control(self):
-        self.assertIn("const bool ch2ActualOn = _om->out[OUT_CH2] && _om->out[OUT_CH2]->actualOn();", self.process_h)
-        self.assertIn("const bool flowFault = fs->enabled && flowControlEnabled && ch2ActualOn && !_sm->flowActive();", self.process_h)
+    def test_flow_alarm_reads_fault_phase_from_output_manager(self):
+        # Новый инвариант по ТЗ: сигнализация F читает итог FAULT из
+        # OutputManager, чтобы alarm и OFF использовали один и тот же grace.
+        self.assertIn("const bool flowFault = fs->enabled && _om && _om->flowPhaseIsFault();", self.process_h)
+        self.assertNotIn("flowControlEnabled", self.process_h)
+        self.assertNotIn("const bool ch2ActualOn = _om->out[OUT_CH2] && _om->out[OUT_CH2]->actualOn();", self.process_h)
 
     def test_main_loop_keeps_confirmation_polling_while_stop_is_active(self):
         self.assertIn("confirmMgr.loop(outputMgr, sensorMgr, &eventLog);", self.main_ino)
