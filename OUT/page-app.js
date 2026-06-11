@@ -404,8 +404,34 @@ function hasAnyAlert(){
 }
 function unifiedAlertOverlayHtml(activeItems, latchedLines){
   var html = '';
+  var lines = '';
+  var lossLines = '';
   html += '<div class="rc-unified-alert-card" role="status" aria-live="assertive">';
-  html += '<div class="rc-unified-alert-message">Есть ошибки и тревоги</div>';
+  html += '<div class="rc-unified-alert-title">Активные тревоги и ошибки</div>';
+  for (var i = 0; i < activeItems.length; i++) {
+    var item = activeItems[i];
+    if (item.acked) continue;
+    lines += '<div class="rc-unified-alert-line rc-unified-alert-line-unacked">';
+    lines += '<div class="rc-unified-alert-line-text">' + esc(item.text) + '</div>';
+    lines += '</div>';
+  }
+  if (lines) {
+    html += '<section class="rc-unified-alert-section">';
+    html += '<div class="rc-unified-alert-section-title">Тревоги</div>';
+    html += '<div class="rc-unified-alert-lines">' + lines + '</div>';
+    html += '</section>';
+  }
+  for (var li = 0; li < latchedLines.length; li++) {
+    lossLines += '<div class="rc-unified-alert-line rc-unified-alert-line-latched">';
+    lossLines += '<div class="rc-unified-alert-line-text">' + esc(latchedLines[li]) + '</div>';
+    lossLines += '</div>';
+  }
+  if (lossLines) {
+    html += '<section class="rc-unified-alert-section">';
+    html += '<div class="rc-unified-alert-section-title">Ошибки датчиков</div>';
+    html += '<div class="rc-unified-alert-lines">' + lossLines + '</div>';
+    html += '</section>';
+  }
   html += '</div>';
   return html;
 }

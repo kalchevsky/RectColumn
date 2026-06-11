@@ -1417,14 +1417,29 @@ class SourceGuardTests(unittest.TestCase):
         self.assertIn("sensor.sensorErrorSticky === true", self.app_js)
         self.assertIn("function updateUnifiedAlertOverlay()", self.app_js)
         self.assertIn("function unifiedAlertOverlayHtml(activeItems, latchedLines)", self.app_js)
+        out_app_js = (self.root / "OUT" / "page-app.js").read_text(encoding="utf-8", errors="ignore")
+        overlay_src = out_app_js[
+            out_app_js.find("function unifiedAlertOverlayHtml(activeItems, latchedLines)"):
+            out_app_js.find("function updateUnifiedAlertOverlay()")
+        ]
         overlay_html = self.app_js[
             self.app_js.find("function unifiedAlertOverlayHtml(activeItems, latchedLines)"):
             self.app_js.find("function updateUnifiedAlertOverlay()")
         ]
-        self.assertIn("Есть ошибки и тревоги", overlay_html)
-        self.assertNotIn("Активные тревоги и ошибки", overlay_html)
-        self.assertNotIn("Ошибки датчиков", overlay_html)
-        self.assertNotIn("rc-unified-alert-line-unacked", overlay_html)
+        self.assertIn("Активные тревоги и ошибки", overlay_src)
+        self.assertIn("if (item.acked) continue;", overlay_src)
+        self.assertIn("rc-unified-alert-line-unacked", overlay_src)
+        self.assertIn("Ошибки датчиков", overlay_src)
+        self.assertIn("rc-unified-alert-line-latched", overlay_src)
+        self.assertNotIn("rc-unified-alert-line-acked", overlay_src)
+        self.assertNotIn("квитирована", overlay_src)
+        self.assertIn("Активные тревоги и ошибки", overlay_html)
+        self.assertIn("if (item.acked) continue;", overlay_html)
+        self.assertIn("rc-unified-alert-line-unacked", overlay_html)
+        self.assertIn("Ошибки датчиков", overlay_html)
+        self.assertIn("rc-unified-alert-line-latched", overlay_html)
+        self.assertNotIn("rc-unified-alert-line-acked", overlay_html)
+        self.assertNotIn("квитирована", overlay_html)
         self.assertIn("document.body.appendChild(shell);", self.app_js)
 
     def test_pressure_units_are_gpa_in_ui_api_and_serial(self):
