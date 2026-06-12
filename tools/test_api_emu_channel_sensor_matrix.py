@@ -1007,6 +1007,39 @@ class EmuChannelSensorMatrixTests(LiveEmuApiTestCase):
         self.assertIn("L", ch1.get("forbidReasons", []))
 
     @human_case(
+        title="Поле circuitOpen у L следует raw-контакту и не зависит от alarm.enabled",
+        situation="Для датчика уровня L сигнализация alarm[0] отключена, но live API всё равно должен показывать raw-состояние цепи через circuitOpen.",
+        steps=[
+            "Выключить alarm[0] у датчика L через API.",
+            "Подать в эмулятор L=false и прочитать /api/v1/live.",
+            "Проверить, что у L есть поле circuitOpen=True.",
+            "Подать в эмулятор L=true и снова прочитать /api/v1/live.",
+            "Проверить, что circuitOpen=False, а у аналогового T1 такого поля нет.",
+        ],
+        expected="Поле circuitOpen у L присутствует в /api/v1/live и следует raw-контакту независимо от alarm.enabled. У аналогового T1 поле отсутствует.",
+    )
+    def test_live_level_circuit_open_follows_raw_not_alarm_enabled(self):
+        self._set_sensor_config("L", enabled=True)
+        self._set_sensor_alarm("L", 0, enabled=False, threshold=0.0, is_max=False)
+
+        self._post_json_logged("/api/v1/emu/set", safe_emu_payload(L=False))
+        live_open = self.api.get_json("/api/v1/live")
+        sensors_open = sensor_map(live_open)
+        level_open = sensors_open["L"]
+        record_human_detail(self, "live_level_open", level_open)
+        self.assertIn("circuitOpen", level_open)
+        self.assertIs(level_open["circuitOpen"], True)
+
+        self._post_json_logged("/api/v1/emu/set", safe_emu_payload(L=True))
+        live_closed = self.api.get_json("/api/v1/live")
+        sensors_closed = sensor_map(live_closed)
+        level_closed = sensors_closed["L"]
+        record_human_detail(self, "live_level_closed", level_closed)
+        self.assertIn("circuitOpen", level_closed)
+        self.assertIs(level_closed["circuitOpen"], False)
+        self.assertNotIn("circuitOpen", sensors_closed["T1"])
+
+    @human_case(
         title="Датчик протока F влияет на CH1 только когда CH2 уже включён",
         situation="Для CH1 включено правило по протоку F. Сначала CH2 выключен, затем включается, при этом протока нет.",
         steps=[
