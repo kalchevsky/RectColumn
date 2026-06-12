@@ -1875,6 +1875,11 @@ private:
         if (!isnan(s->value) && !s->error) so["value"] = roundf(s->value * 100.0f) / 100.0f;
         else                                         so["value"] = nullptr;
 
+        if (SensorManager::isDigitalOffOnlySensorIndex(sensorIdx)) {
+            const DigitalSensor* digital = static_cast<const DigitalSensor*>(s);
+            so["circuitOpen"] = digital->isCircuitOpen();
+        }
+
         const uint8_t unackedMask = _om->unackedAlarmMaskFor(*_sm, sensorIdx);
         so["sensorLostUnacked"] = ((unackedMask & SENSOR_LOST_ALARM_MASK) != 0);
     }

@@ -2029,7 +2029,7 @@ function tplValueText(sensor, blankWhenDisabled){
   if (!sensor) return blankWhenDisabled ? '' : '—';
   if (!sensor.enabled) return blankWhenDisabled ? '' : '—';
   if (sensor.error || sensor.value == null) return '—';
-  if (sensor.id === 'L') return sensorToggleAlarmTriggered(sensor) ? 'MAX!' : 'OK';
+  if (sensor.id === 'L') return (typeof sensor.circuitOpen === 'boolean' ? sensor.circuitOpen : (Number(sensor.value) <= 0.5)) ? 'MAX!' : 'OK';
   if (sensor.id === 'F') return flowAlarmVisible(sensor) ? 'Нет протока!' : 'OK';
   if (sensor.id === 'C') return tplCurrentFromRaw(sensor.value);
   return tplComma2(sensor.value);
