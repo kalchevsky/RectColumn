@@ -54,6 +54,7 @@ private:
     bool _flowConditionLatched = false;
     bool _flowAlarmLatched = false;
     uint32_t _flowStartedMs = 0;
+    uint32_t _flowAlarmCandidateSinceMs = 0;
 
     bool _werFaultLatched[4] = { false, false, false, false };
 
@@ -81,7 +82,7 @@ private:
 
             if (!_levelAlarmLatched && (now - _levelStartedMs >= alarmDelayMs)) {
                 _levelAlarmLatched = true;
-                _alarm("Уровень MAX!");
+                _alarm("Авария уровня: цепь L разомкнута");
             }
 
             if ((now - _levelStartedMs >= alarmDelayMs) && ls->alarm[0].enabled) {
@@ -93,7 +94,7 @@ private:
             return;
         }
 
-        if (_levelRawLatched || _levelAlarmLatched) {
+        if (_levelAlarmLatched) {
             _alarm("Авария уровня сброшена");
         }
         ls->alarm[0].triggered = false;
@@ -115,19 +116,28 @@ private:
             _flowConditionLatched = false;
             _flowAlarmLatched = false;
             _flowStartedMs = 0;
+            _flowAlarmCandidateSinceMs = 0;
             return;
         }
 
-        // ── Тревога "нет протока" — единый источник истины ──────────────────
-        // Состояние берётся из фазовой машины OutputManager: тревога активна
-        // только в фазе FAULT (окно ожидания grace истекло и протока нет).
-        // Выдержку уже отработала фазовая машина (grace = ctrlDelayMs F),
-        // поэтому здесь дополнительной задержки нет. В NEUTRAL/WAITING тревога
-        // снимается автоматически (не липкая). Каналы здесь НЕ гасятся.
+        // ── Тревога "нет протока" считается отдельно от управления ──────────
+        // Первичный признак — сырой "нет протока" от датчика F. alarmDelayMs
+        // управляет только тревогой/индикацией; ctrlDelayMs и фазовая машина
+        // OutputManager продолжают отдельно управлять реле и переходом в FAULT.
         // ────────────────────────────────────────────────────────────────────
-        const bool flowFault = fs->enabled && _om && _om->flowPhaseIsFault();
+        const bool rawNoFlow = fs->enabled && !_sm->flowActive();
+        if (!rawNoFlow) {
+            _flowAlarmCandidateSinceMs = 0;
+        } else if (_flowAlarmCandidateSinceMs == 0) {
+            _flowAlarmCandidateSinceMs = now;
+        }
+        const bool flowAlarm =
+            fs->enabled &&
+            rawNoFlow &&
+            (fs->alarmDelayMs == 0 ||
+             (now - _flowAlarmCandidateSinceMs) >= fs->alarmDelayMs);
 
-        if (flowFault) {
+        if (flowAlarm) {
             _flowConditionLatched = true;   // оставлено для индикации/совместимости
             if (_flowStartedMs == 0) _flowStartedMs = now;
 
@@ -140,7 +150,7 @@ private:
 
             if (!_flowAlarmLatched) {
                 _flowAlarmLatched = true;
-                _alarm("Авария потока: нет протока (окно ожидания истекло)");
+                _alarm("Авария потока: нет протока");
             }
             return;
         }

@@ -8,7 +8,7 @@
 // true  -> аппаратное оборудование НЕ опрашивается,
 //          значения берутся из /api/v1/emu/*
 // false -> режим реального оборудования
-#define EMU_MODE false
+#define EMU_MODE true
 
 // Включить периодический (каждые 5 секунд) вывод в Serial
 // состояния всех датчиков и подтверждений.
@@ -16,7 +16,7 @@
 #define SERIAL_DEBUG_SENSOR_SNAPSHOT  0
 
 // ─── Версия прошивки / API ───────────────────────────────────────
-#define FW_VERSION      "1.6.56"
+#define FW_VERSION      "1.6.57"
 #define API_VERSION     "v1"
 #define AP_SSID_DEF     "Control_System"
 #define DEVICE_NAME     "RectColumn"

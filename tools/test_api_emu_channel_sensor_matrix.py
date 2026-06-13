@@ -234,6 +234,18 @@ class EmuChannelSensorMatrixTests(LiveEmuApiTestCase):
             timeout=timeout,
         )
 
+    def _wait_live(self, predicate, *, timeout: float = 4.0, interval: float = 0.2):
+        deadline = time.time() + timeout
+        last = None
+        while time.time() < deadline:
+            last = self.api.get_json("/api/v1/live")
+            if predicate(last):
+                return last
+            time.sleep(interval)
+        raise AssertionError(
+            f"Timed out waiting for live predicate. Last live: {json.dumps(last, ensure_ascii=False)[:1200]}"
+        )
+
     def _turn_on_outputs(self, output_ids: tuple[str, ...]) -> None:
         expected = {output_id: True for output_id in output_ids}
         last_error: AssertionError | None = None
@@ -740,71 +752,91 @@ class EmuChannelSensorMatrixTests(LiveEmuApiTestCase):
         self.assertTrue(response["accepted"])
 
     @human_case(
-        title="Авария протока не активируется, пока CH2 выключен",
-        situation="Нет протока F=false, но CH2 остаётся выключенным. Проверяется, что flow alarm не должен срабатывать заранее.",
+        title="Тревога протока считает raw no-flow даже при выключенном CH2",
+        situation="Нет протока F=false, CH2 остаётся выключенным, а alarmDelayMs у F настроен отдельно от ctrlDelayMs.",
         steps=[
-            "Настроить F с ctrlDelay и alarmDelay.",
-            "Включить защитное правило F -> CH1 и alarm F.",
+            "Настроить F с коротким alarmDelayMs и длинным ctrlDelayMs.",
+            "Включить alarm F и защитное правило F -> CH1.",
             "Подать F=false, не включая CH2.",
-            "Проверить состояние alarm triggered.",
+            "Дождаться срабатывания alarm F и проверить, что forbid для CH1 ещё нет.",
         ],
-        expected="Пока CH2 выключен, flow alarm остаётся неактивным.",
+        expected="Alarm F срабатывает по raw no-flow даже при CH2 OFF, но каналы не уходят в forbid без включённого CH2.",
     )
-    def test_flow_alarm_is_inactive_while_ch2_is_off(self):
+    def test_flow_alarm_follows_raw_no_flow_while_ch2_is_off(self):
         self._reset_runtime()
-        self._set_sensor_config("F", enabled=True, ctrl_delay_ms=500, alarm_delay_ms=500)
+        self._set_sensor_config("F", enabled=True, ctrl_delay_ms=5000, alarm_delay_ms=400)
         self._set_sensor_rule("F", 0, enabled=True)
         self._set_sensor_alarm("F", 0, enabled=True, threshold=0.0, is_max=False)
         self._post_json_logged("/api/v1/emu/set", safe_emu_payload(F=False))
-        time.sleep(0.8)
-
-        state = self.api.get_json("/api/v1/state")
+        state = self._wait_live(
+            lambda current: sensor_map(current)["F"]["alarms"][0]["triggered"] is True,
+            timeout=4.0,
+        )
         record_human_detail(self, "flow_state_with_ch2_off", {
             "sensor": sensor_map(state)["F"],
             "outputs": {output_id: output_map(state)[output_id] for output_id, _ in MAIN_OUTPUTS},
         })
-        self.assertFalse(sensor_map(state)["F"]["alarms"][0]["triggered"])
+        self.assertTrue(sensor_map(state)["F"]["alarms"][0]["triggered"])
+        self.assertFalse(output_map(state)["CH1"]["forbidden"])
+        self.assertNotIn("F", output_map(state)["CH1"].get("forbidReasons", []))
 
     @human_case(
-        title="Авария протока появляется только после включения CH2 без потока",
-        situation="Нет протока F=false, alarm F настроен, а CH2 сначала выключен, потом включается вручную.",
+        title="alarmDelayMs F отделён от ctrlDelayMs и срабатывает раньше отключения CH1",
+        situation="Нет протока F=false, alarmDelayMs короче ctrlDelayMs, CH1 и CH2 включены при активном правиле F -> CH1.",
         steps=[
-            "Настроить F с ctrlDelay и alarmDelay.",
-            "Подать F=false и убедиться, что до включения CH2 аларма нет.",
-            "Включить CH2 вручную.",
-            "Дождаться срабатывания alarm F.",
-            "Выключить CH2 и убедиться, что alarm сбрасывается.",
+            "Настроить F: alarmDelayMs=3 c, ctrlDelayMs=10 c.",
+            "Включить CH1 и CH2 при наличии протока.",
+            "Подать F=false.",
+            "Через ~3 c проверить alarm F triggered=True, но CH1 ещё не forbidden.",
+            "Через ~10 c дождаться auto-off CH1 по F.",
+            "Вернуть F=true и убедиться, что тревога сброшена.",
         ],
-        expected="Alarm F появляется только на фоне CH2 ON + нет протока и сбрасывается после выключения CH2.",
+        expected="Тревога F появляется по своему alarmDelayMs раньше, чем управление по ctrlDelayMs отключает CH1.",
     )
-    def test_flow_alarm_appears_only_after_ch2_turns_on_without_flow(self):
+    def test_flow_alarm_delay_independent_from_ctrl_delay(self):
+        alarm_delay_ms = 3000
+        ctrl_delay_ms = 10000
+
         self._reset_runtime()
-        self._set_sensor_config("F", enabled=True, ctrl_delay_ms=500, alarm_delay_ms=500)
+        self._set_sensor_config("F", enabled=True, ctrl_delay_ms=ctrl_delay_ms, alarm_delay_ms=alarm_delay_ms)
         self._set_sensor_rule("F", 0, enabled=True)
         self._set_sensor_alarm("F", 0, enabled=True, threshold=0.0, is_max=False)
+        self._post_json_logged("/api/v1/emu/set", safe_emu_payload(F=True))
+        self._turn_on_outputs(("CH1", "CH2"))
+        # EMU test API does not expose a reboot route, so persistence is
+        # checked via config round-trip after the POST /sensor/F/config save.
+        persisted = self.api.get_json("/api/v1/config")
+        record_human_detail(self, "flow_delay_persisted_config", sensor_map(persisted)["F"])
+        self.assertEqual(sensor_map(persisted)["F"]["alarmDelayMs"], alarm_delay_ms)
+        self.assertEqual(sensor_map(persisted)["F"]["ctrlDelayMs"], ctrl_delay_ms)
+
         self._post_json_logged("/api/v1/emu/set", safe_emu_payload(F=False))
-
-        before_on = self.api.get_json("/api/v1/state")
-        record_human_detail(self, "state_before_ch2_on", {
-            "sensor": sensor_map(before_on)["F"],
-            "output": output_map(before_on)["CH2"],
-        })
-        self.assertFalse(sensor_map(before_on)["F"]["alarms"][0]["triggered"])
-
-        self._turn_on_outputs(("CH2",))
-        alarmed = self.api.wait_for_state(
+        alarmed = self._wait_live(
             lambda current: sensor_map(current)["F"]["alarms"][0]["triggered"] is True,
-            timeout=4.0,
+            timeout=6.0,
         )
-        record_human_detail(self, "state_with_alarm_active", {
+        record_human_detail(self, "state_after_flow_alarm_before_forbid", {
             "sensor": sensor_map(alarmed)["F"],
-            "output": output_map(alarmed)["CH2"],
+            "ch1": output_map(alarmed)["CH1"],
+            "ch2": output_map(alarmed)["CH2"],
         })
-        self.assertTrue(output_map(alarmed)["CH2"]["actual"])
         self.assertTrue(sensor_map(alarmed)["F"]["alarms"][0]["triggered"])
+        self.assertTrue(output_map(alarmed)["CH1"]["actual"])
+        self.assertFalse(output_map(alarmed)["CH1"]["forbidden"])
+        self.assertNotIn("F", output_map(alarmed)["CH1"].get("forbidReasons", []))
+        faulted = self._wait_outputs({"CH1": False, "CH2": True}, timeout=12.0)
+        record_human_detail(self, "state_after_ctrl_delay_fault", {
+            "sensor": sensor_map(faulted)["F"],
+            "ch1": output_map(faulted)["CH1"],
+            "ch2": output_map(faulted)["CH2"],
+        })
+        self.assertTrue(sensor_map(faulted)["F"]["alarms"][0]["triggered"])
+        self.assertFalse(output_map(faulted)["CH1"]["actual"])
+        self.assertIn("F", output_map(faulted)["CH1"].get("forbidReasons", []))
 
+        self._post_json_logged("/api/v1/emu/set", safe_emu_payload(F=True))
         self._post_json_logged("/api/v1/output/CH2/manual", {"state": False}, ok_statuses=(200, 409))
-        cleared = self.api.wait_for_state(
+        cleared = self._wait_live(
             lambda current: (
                 output_map(current)["CH2"]["actual"] is False
                 and sensor_map(current)["F"]["alarms"][0]["triggered"] is False
@@ -816,6 +848,29 @@ class EmuChannelSensorMatrixTests(LiveEmuApiTestCase):
             "output": output_map(cleared)["CH2"],
         })
         self.assertFalse(sensor_map(cleared)["F"]["alarms"][0]["triggered"])
+
+    @human_case(
+        title="alarmDelayMs=0 у F даёт мгновенную тревогу по raw no-flow",
+        situation="Для F alarmDelayMs оставлен нулевым, сигнализация включена, а проток пропадает.",
+        steps=[
+            "Настроить F: alarmDelayMs=0, ctrlDelayMs оставить ненулевым.",
+            "Подать F=false.",
+            "Проверить, что alarm F triggered=True на ближайшем poll без ожидания отдельной alarm-задержки.",
+        ],
+        expected="При alarmDelayMs=0 тревога F появляется сразу на следующем обновлении состояния.",
+    )
+    def test_flow_alarm_delay_zero_immediate(self):
+        self._reset_runtime()
+        self._set_sensor_config("F", enabled=True, ctrl_delay_ms=5000, alarm_delay_ms=0)
+        self._set_sensor_alarm("F", 0, enabled=True, threshold=0.0, is_max=False)
+        self._post_json_logged("/api/v1/emu/set", safe_emu_payload(F=False))
+
+        state = self._wait_live(
+            lambda current: sensor_map(current)["F"]["alarms"][0]["triggered"] is True,
+            timeout=2.0,
+        )
+        record_human_detail(self, "flow_alarm_zero_delay_state", sensor_map(state)["F"])
+        self.assertTrue(sensor_map(state)["F"]["alarms"][0]["triggered"])
 
     @human_case(
         title="Активный auto-off запрещает manual ON и не воспроизводится позже",
