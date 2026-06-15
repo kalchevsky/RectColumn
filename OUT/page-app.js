@@ -78,6 +78,8 @@ function ensureUnifiedAlertOverlayStyles(){
     '.rc-unified-alert-line-unacked{background:rgba(127,29,29,.48);border:1px solid rgba(252,165,165,.38);color:#fee2e2;}',
     '.rc-unified-alert-line-acked{background:rgba(120,53,15,.32);border:1px solid rgba(251,191,36,.28);color:#fed7aa;}',
     '.rc-unified-alert-line-latched{background:rgba(69,26,3,.34);border:1px solid rgba(253,186,116,.28);color:#ffedd5;}',
+    '.rc-unified-alert-ack-btn{pointer-events:auto;display:block;width:100%;margin-top:14px;padding:14px 16px;border:none;border-radius:12px;background:#2563eb;color:#fff;font-weight:700;font-size:18px;line-height:1.2;cursor:pointer}',
+    '.rc-unified-alert-ack-btn:active{background:#1d4ed8}',
     '.rc-unified-alert-mark{flex:0 0 auto;font-size:11px;line-height:1.2;color:#fcd34d;white-space:nowrap;padding-top:2px;}',
     '@media (min-width: 720px){.rc-unified-alert-overlay{left:auto;max-width:420px;}}'
   ].join('');
@@ -432,6 +434,7 @@ function unifiedAlertOverlayHtml(activeItems, latchedLines){
     html += '<div class="rc-unified-alert-lines">' + lossLines + '</div>';
     html += '</section>';
   }
+  html += '<button type="button" class="rc-unified-alert-ack-btn" onclick="acknowledgeAlarms()">Квитировать</button>';
   html += '</div>';
   return html;
 }
@@ -1523,11 +1526,18 @@ function renderOutputConfigView(cfg){
 function renderOutputConfig(){
   stopPoll();
   api('/api/v1/output/config', null, function(res){
-    var cfg = (res && res.outputs) ? res : {
+    var list = null;
+    if (Array.isArray(res)) {
+      list = res;
+    } else if (res && Array.isArray(res.outputs)) {
+      list = res.outputs;
+    }
+    var ok = !!(list && list.length);
+    var cfg = ok ? { outputs: list } : {
       outputs: (state.lastState && state.lastState.outputs) ? state.lastState.outputs : []
     };
-    if (!(res && res.ok && res.outputs)) {
-      setNotice((res && (res.error || res.err)) ? 'Не удалось загрузить конфигурацию выходов. Показываю текущий режим по состоянию устройства.' : 'Не удалось загрузить конфигурацию выходов. Показываю текущий режим по состоянию устройства.');
+    if (!ok) {
+      setNotice('Не удалось загрузить конфигурацию выходов. Показываю текущий режим по состоянию устройства.');
     }
     renderOutputConfigView(cfg);
   });

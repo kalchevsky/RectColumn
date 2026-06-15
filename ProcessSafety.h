@@ -120,20 +120,18 @@ private:
             return;
         }
 
-        // ── Тревога "нет протока" считается отдельно от управления ──────────
-        // Первичный признак — сырой "нет протока" от датчика F. alarmDelayMs
-        // управляет только тревогой/индикацией; ctrlDelayMs и фазовая машина
-        // OutputManager продолжают отдельно управлять реле и переходом в FAULT.
+        // ── Тревога "нет протока" читается из итоговой фазы OutputManager ───
+        // alarmDelayMs управляет только тревогой/индикацией; ctrlDelayMs и
+        // фазовая машина OutputManager продолжают отдельно управлять реле.
         // ────────────────────────────────────────────────────────────────────
-        const bool rawNoFlow = fs->enabled && !_sm->flowActive();
-        if (!rawNoFlow) {
+        const bool flowFault = fs->enabled && _om && _om->flowPhaseIsFault();
+        if (!flowFault) {
             _flowAlarmCandidateSinceMs = 0;
         } else if (_flowAlarmCandidateSinceMs == 0) {
             _flowAlarmCandidateSinceMs = now;
         }
         const bool flowAlarm =
-            fs->enabled &&
-            rawNoFlow &&
+            flowFault &&
             (fs->alarmDelayMs == 0 ||
              (now - _flowAlarmCandidateSinceMs) >= fs->alarmDelayMs);
 

@@ -1295,6 +1295,10 @@ class SourceGuardTests(unittest.TestCase):
         cls.emu_panel = (cls.root / "emupanel-v3.html").read_text(encoding="utf-8", errors="ignore")
         cls.webpage_app_js_h = (cls.root / "WebPageAppJs.h").read_text(encoding="utf-8", errors="ignore")
         cls.app_js = decode_gzip_header_array(cls.webpage_app_js_h)
+        cls.webpage_root_h = (cls.root / "WebPageRoot.h").read_text(encoding="utf-8", errors="ignore")
+        cls.webpage_wifi_h = (cls.root / "WebPageWifi.h").read_text(encoding="utf-8", errors="ignore")
+        cls.root_page_html = decode_gzip_header_array(cls.webpage_root_h)
+        cls.wifi_page_html = decode_gzip_header_array(cls.webpage_wifi_h)
 
     def define_int(self, name: str) -> int:
         m = re.search(rf"^\s*#define\s+{name}\s+(-?\d+)(?:[uUlL]*)\b", self.config_h, re.MULTILINE)
@@ -1429,6 +1433,9 @@ class SourceGuardTests(unittest.TestCase):
         self.assertIn("Активные тревоги и ошибки", overlay_src)
         self.assertIn("if (item.acked) continue;", overlay_src)
         self.assertIn("rc-unified-alert-line-unacked", overlay_src)
+        self.assertIn("rc-unified-alert-ack-btn", overlay_src)
+        self.assertIn('onclick="acknowledgeAlarms()"', overlay_src)
+        self.assertNotIn("if (hasUnacked)", overlay_src)
         self.assertIn("Ошибки датчиков", overlay_src)
         self.assertIn("rc-unified-alert-line-latched", overlay_src)
         self.assertNotIn("rc-unified-alert-line-acked", overlay_src)
@@ -1436,11 +1443,57 @@ class SourceGuardTests(unittest.TestCase):
         self.assertIn("Активные тревоги и ошибки", overlay_html)
         self.assertIn("if (item.acked) continue;", overlay_html)
         self.assertIn("rc-unified-alert-line-unacked", overlay_html)
+        self.assertIn("rc-unified-alert-ack-btn", overlay_html)
+        self.assertIn('onclick="acknowledgeAlarms()"', overlay_html)
+        self.assertNotIn("if (hasUnacked)", overlay_html)
         self.assertIn("Ошибки датчиков", overlay_html)
         self.assertIn("rc-unified-alert-line-latched", overlay_html)
         self.assertNotIn("rc-unified-alert-line-acked", overlay_html)
         self.assertNotIn("квитирована", overlay_html)
+        self.assertIn(".rc-unified-alert-ack-btn{pointer-events:auto;", self.app_js)
+        self.assertIn("function acknowledgeAlarms()", self.app_js)
         self.assertIn("document.body.appendChild(shell);", self.app_js)
+
+    def test_root_and_wifi_headers_match_temp_dark_sources(self):
+        temp_root = (self.root / "TEMP" / "root.html").read_text(encoding="utf-8", errors="ignore")
+        temp_wifi = (self.root / "TEMP" / "wifi.html").read_text(encoding="utf-8", errors="ignore")
+        self.assertEqual(temp_root.rstrip(), self.root_page_html.rstrip())
+        self.assertEqual(temp_wifi.rstrip(), self.wifi_page_html.rstrip())
+        self.assertIn(":root{color-scheme:dark}", self.root_page_html)
+        self.assertIn("background:#0a0c14", self.root_page_html)
+        self.assertIn("background:#131722", self.root_page_html)
+        self.assertIn(":root{color-scheme:dark}", self.wifi_page_html)
+        self.assertIn("background:#0a0c14", self.wifi_page_html)
+        self.assertIn("background:#131722", self.wifi_page_html)
+        self.assertIn("function openStep(step){", self.wifi_page_html)
+        self.assertIn("function callApi(url, method, body, cb){", self.wifi_page_html)
+
+    def test_output_config_notice_depends_only_on_outputs_presence(self):
+        out_app_js = (self.root / "OUT" / "page-app.js").read_text(encoding="utf-8", errors="ignore")
+        render_src = out_app_js[
+            out_app_js.find("function renderOutputConfig()"):
+            out_app_js.find("function saveOutputConfig()")
+        ]
+        render_html = self.app_js[
+            self.app_js.find("function renderOutputConfig()"):
+            self.app_js.find("function saveOutputConfig()")
+        ]
+        self.assertIn("if (Array.isArray(res)) {", render_src)
+        self.assertIn("} else if (res && Array.isArray(res.outputs)) {", render_src)
+        self.assertIn("var ok = !!(list && list.length);", render_src)
+        self.assertIn("var cfg = ok ? { outputs: list } : {", render_src)
+        self.assertIn("if (!ok) {", render_src)
+        self.assertNotIn("console.log('OUTPUT/CONFIG RAW:'", render_src)
+        self.assertNotIn("if (!(res && res.ok && res.outputs)) {", render_src)
+        self.assertIn("Не удалось загрузить конфигурацию выходов. Показываю текущий режим по состоянию устройства.", render_src)
+        self.assertIn("if (Array.isArray(res)) {", render_html)
+        self.assertIn("} else if (res && Array.isArray(res.outputs)) {", render_html)
+        self.assertIn("var ok = !!(list && list.length);", render_html)
+        self.assertIn("var cfg = ok ? { outputs: list } : {", render_html)
+        self.assertIn("if (!ok) {", render_html)
+        self.assertNotIn("console.log('OUTPUT/CONFIG RAW:'", render_html)
+        self.assertNotIn("if (!(res && res.ok && res.outputs)) {", render_html)
+        self.assertIn("Не удалось загрузить конфигурацию выходов. Показываю текущий режим по состоянию устройства.", render_html)
 
     def test_pressure_units_are_gpa_in_ui_api_and_serial(self):
         self.assertIn('static const char* units[SEN_COUNT] = {"C","C","C","C","гПа","","","",""};', self.sensor_manager_h)

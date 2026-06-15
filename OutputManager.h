@@ -568,6 +568,9 @@ private:
             // state must not jerk. L/F keep their explicit forbid behavior.
             if (sensorIdx == SEN_F) {
                 controlGate = _flowControlGate(prevState, outIdx);
+                if (outIdx == OUT_CH2 && !controlGate && sen->controlRuleEnabled(OUT_CH2)) {
+                    sen->resetCtrlCandidate(OUT_CH2);
+                }
             }
         }
 
