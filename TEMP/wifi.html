@@ -1,0 +1,450 @@
+
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>RectColumn WiFi</title>
+  <style>
+    :root{color-scheme:dark}
+    body{margin:0;font-family:Arial,sans-serif;background:#0a0c14;color:#e5e7eb}
+    .wrap{max-width:560px;margin:0 auto;padding:14px}
+    .card{background:#131722;border:1px solid #2a2f3a;border-radius:16px;padding:16px;margin:12px 0}
+    h1,h2{margin:0 0 12px;line-height:1.2}
+    p{font-size:18px;line-height:1.45;margin:10px 0}
+    label{display:block;font-size:17px;font-weight:700;margin:14px 0 6px}
+    input,select,button,a.btn{box-sizing:border-box;width:100%;font-size:20px;padding:16px;border-radius:14px;border:1px solid #3a4151}
+    input,select{background:#1c2230;color:#e5e7eb}
+    input::placeholder{color:#64748b}
+    button,a.btn{font-weight:700;background:#2563eb;color:#fff;border:none;text-align:center;text-decoration:none;display:block;cursor:pointer}
+    button[disabled]{opacity:.6}
+    .secondary{background:#334155;color:#e5e7eb}
+    .light{background:#2a2f3a;color:#e5e7eb}
+    .danger{background:#b45309;color:#fff}
+    .stack > *{margin-top:12px}
+    .hidden{display:none}
+    .msg{padding:14px;border-radius:14px;background:#1c2230;color:#e5e7eb;font-size:18px;line-height:1.45}
+    .err{background:#3b1418;color:#fca5a5}
+    .ok{background:#14331f;color:#86efac}
+    .busy{background:#0a0c14;color:#fff}.busy-overlay{position:fixed;inset:0;background:rgba(17,24,39,.42);display:flex;align-items:center;justify-content:center;padding:24px;z-index:40}.busy-overlay.hidden{display:none}.busy-box{max-width:320px;width:100%;background:#111827;color:#fff;border-radius:18px;padding:18px;text-align:center;box-shadow:0 12px 40px rgba(0,0,0,.28)}.wifi-bars{font-family:monospace;font-size:18px;letter-spacing:1px}
+    .small{font-size:15px;color:#94a3b8}
+    ul.networks{list-style:none;padding:0;margin:12px 0 0}
+    ul.networks li{padding:14px;border:1px solid #2a2f3a;border-radius:14px;margin:10px 0;font-size:18px;background:#1c2230;color:#e5e7eb}
+  </style>
+</head>
+<body>
+  <div id="busyOverlay" class="busy-overlay hidden"><div class="busy-box"><div id="busyText">Подождите...</div></div></div>
+  <div class="wrap">
+    <div class="card">
+      <h1>Настройка WiFi</h1>
+      <p id="statusText">Загрузка состояния...</p>
+      <div id="topActions" class="stack hidden"></div>
+    </div>
+
+    <div id="inlineStatus" class="card hidden">
+      <div id="inlineStatusText" class="msg"></div>
+    </div>
+
+    <div class="card" id="choiceStep">
+      <h2>Что сделать?</h2>
+      <div class="stack">
+        <button type="button" onclick="openStep('ap')">Продолжить работу через точку доступа</button>
+        <button type="button" class="secondary" onclick="openStep('sta')">Подключить устройство к домашнему WiFi</button>
+      </div>
+    </div>
+
+    <div class="card hidden" id="staRouteStep">
+      <h2>Работа через домашнюю сеть WiFi</h2>
+      <div id="staRouteText"></div>
+    </div>
+
+    <div class="card hidden" id="apStep">
+      <h2>Работа через точку доступа</h2>
+      <p>Можно оставить доступ без пароля или сразу защитить точку доступа паролем.</p>
+      <div class="stack">
+        <button type="button" class="secondary" onclick="finishWizardWithoutPassword()">Продолжить без пароля</button>
+        <button type="button" class="danger" onclick="showApPasswordForm(true)">Создать пароль</button>
+        <button type="button" class="light" onclick="openStep('choice')">Назад</button>
+      </div>
+
+      <div id="apPasswordForm" class="hidden stack">
+        <label for="apPass1">Новый пароль</label>
+        <input id="apPass1" type="password" minlength="8" maxlength="63" placeholder="8-63 символа">
+        <label for="apPass2">Повторите пароль</label>
+        <input id="apPass2" type="password" minlength="8" maxlength="63" placeholder="Повтор пароля">
+        <div class="msg err">Подключение без пароля будет невозможно. Не потеряйте пароль. После изменения пароля может потребоваться переподключение к точке доступа.</div>
+        <button type="button" onclick="saveApPassword()">Сохранить</button>
+        <button type="button" class="light" onclick="showApPasswordForm(false)">Отменить</button>
+      </div>
+    </div>
+
+    <div class="card hidden" id="staStep">
+      <h2>Подключение к домашнему WiFi</h2>
+      <p>Найдите свою сеть, введите пароль и нажмите «Подключить».</p>
+      <div class="stack">
+        <button id="scanBtn" type="button" onclick="scanNetworks()">Найти сети</button>
+        <button type="button" class="light" onclick="openStep('choice')">Назад</button>
+      </div>
+
+      <div id="scanBox" class="hidden">
+        <label for="ssidSelect">Найденные сети</label>
+        <select id="ssidSelect"></select>
+      </div>
+
+      <label for="ssidInput">Имя сети</label>
+      <input id="ssidInput" placeholder="SSID">
+      <label for="staPass">Пароль</label>
+      <input id="staPass" type="password" placeholder="Пароль WiFi">
+      <div class="stack">
+        <button id="connectBtn" type="button" onclick="connectSta()">Подключить</button>
+      </div>
+      <ul id="networkList" class="networks"></ul>
+    </div>
+
+    <div id="messageCard" class="card hidden">
+      <h2>Сообщение</h2>
+      <div id="messageBox" class="msg"></div>
+      <div id="nextActions" class="stack hidden"></div>
+    </div>
+  </div>
+
+  <script>
+    function byId(id){ return document.getElementById(id); }
+    function addClass(el, cls){ if (el && (' ' + el.className + ' ').indexOf(' ' + cls + ' ') < 0) el.className += (el.className ? ' ' : '') + cls; }
+    function removeClass(el, cls){ if (!el) return; el.className = (' ' + el.className + ' ').replace(' ' + cls + ' ', ' ').replace(/^\s+|\s+$/g, ''); }
+    function toggleHidden(el, hide){ if (!el) return; if (hide) addClass(el, 'hidden'); else removeClass(el, 'hidden'); }
+
+    function setMsg(text, cls){
+      var card = byId('messageCard');
+      var el = byId('messageBox');
+      if (!el) return;
+      toggleHidden(card, !text);
+      el.className = 'msg' + (cls ? ' ' + cls : '');
+      el.textContent = text || '';
+    }
+
+    function setInlineStatus(text, cls){
+      var wrap = byId('inlineStatus');
+      var el = byId('inlineStatusText');
+      if (!wrap || !el) return;
+      if (!text) {
+        toggleHidden(wrap, true);
+        el.textContent = '';
+        el.className = 'msg';
+        return;
+      }
+      toggleHidden(wrap, false);
+      el.className = 'msg' + (cls ? ' ' + cls : '');
+      el.textContent = text;
+      wrap.scrollIntoView({ behavior:'smooth', block:'start' });
+    }
+
+    function wifiBarsLevel(rssi){
+      rssi = Number(rssi);
+      if (!isFinite(rssi)) return 0;
+      if (rssi >= -60) return 4;
+      if (rssi >= -70) return 3;
+      if (rssi >= -80) return 2;
+      if (rssi >= -88) return 1;
+      return 0;
+    }
+
+    function wifiBarsText(rssi){
+      return ['▱▱▱▱','▰▱▱▱','▰▰▱▱','▰▰▰▱','▰▰▰▰'][wifiBarsLevel(rssi)] || '▱▱▱▱';
+    }
+
+    function setBusy(busy, text){
+      var scanBtn = byId('scanBtn');
+      var connectBtn = byId('connectBtn');
+      var overlay = byId('busyOverlay');
+      var busyText = byId('busyText');
+      if (scanBtn) scanBtn.disabled = !!busy;
+      if (connectBtn) connectBtn.disabled = !!busy;
+      if (busyText) busyText.textContent = text || 'Подождите...';
+      toggleHidden(overlay, !busy);
+      if (busy) setInlineStatus(text || 'Подождите...', 'busy');
+    }
+
+    function setActions(html){
+      var box = byId('nextActions');
+      if (!box) return;
+      box.innerHTML = html || '';
+      toggleHidden(box, !html);
+    }
+
+    function setTopActions(html){
+      var box = byId('topActions');
+      if (!box) return;
+      box.innerHTML = html || '';
+      toggleHidden(box, !html);
+    }
+
+    function openStep(step){
+      toggleHidden(byId('choiceStep'), step !== 'choice');
+      toggleHidden(byId('staRouteStep'), true);
+      toggleHidden(byId('apStep'), step !== 'ap');
+      toggleHidden(byId('staStep'), step !== 'sta');
+    }
+    function showApPasswordForm(show){ toggleHidden(byId('apPasswordForm'), !show); }
+    function goToApp(){ window.location.href = '/app'; }
+    function openStaApp(ip){ if (!ip || ip === '-') { goToApp(); return; } window.location.href = 'http://' + ip + '/app'; }
+    function showDisconnectHint(){ setMsg('Отключитесь от точки доступа устройства в настройках WiFi телефона или планшета, затем подключитесь к Вашей домашней сети WiFi. После этого откройте интерфейс по указанному IP адресу. Обратите внимание, что при включенном VPN доступ может не работать.', 'ok'); }
+
+    function callApi(url, method, body, cb){
+      var xhr = new XMLHttpRequest();
+      var done = false;
+      var timer = setTimeout(function(){
+        if (!done) {
+          done = true;
+          try { xhr.abort(); } catch(e) {}
+          cb({ ok:false, error:'network_error', __http:0 });
+        }
+      }, 12000);
+
+      xhr.onreadystatechange = function(){
+        if (xhr.readyState !== 4 || done) return;
+        done = true;
+        clearTimeout(timer);
+        var data = {};
+        try { data = xhr.responseText ? JSON.parse(xhr.responseText) : {}; } catch(e) { data = {}; }
+        data.__http = xhr.status || 0;
+        cb(data);
+      };
+
+      var finalUrl = url;
+      if ((method || 'GET').toUpperCase() === 'GET') {
+        finalUrl += (finalUrl.indexOf('?') >= 0 ? '&' : '?') + '_ts=' + Date.now();
+      }
+      xhr.open(method || 'GET', finalUrl, true);
+      if (body) xhr.setRequestHeader('Content-Type', 'application/json');
+      try { xhr.send(body || null); } catch(e) {
+        clearTimeout(timer);
+        cb({ ok:false, error:'network_error', __http:0 });
+      }
+    }
+
+    var infoRetryCount = 0;
+    function infoBool(v){ return !!v; }
+    function infoVal(obj, key, fallback){ return obj && typeof obj[key] !== 'undefined' ? obj[key] : fallback; }
+    function escapeHtml(text){
+      return String(text == null ? '' : text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+    function normalizeHost(host){ return String(host || '').trim().toLowerCase(); }
+    function resolveEntryMode(apIp, staIp){
+      var currentHost = normalizeHost(window.location && window.location.hostname);
+      var apHost = normalizeHost(apIp);
+      var staHost = normalizeHost(staIp);
+      if (currentHost && staHost && currentHost === staHost) return 'sta';
+      if (currentHost && apHost && currentHost === apHost) return 'ap';
+      return 'fallback';
+    }
+    function buildStaRouteHtml(staSsid, apSsid, apIp){
+      var parts = [];
+      if (staSsid) parts.push('<p>Сейчас Вы работаете через домашнюю сеть WiFi «' + escapeHtml(staSsid) + '».</p>');
+      else parts.push('<p>Сейчас Вы работаете через домашнюю сеть WiFi.</p>');
+      parts.push('<p>Чтобы переключиться на точку доступа: отключите телефон/планшет/компьютер от домашней сети и подключитесь к точке доступа «' + escapeHtml(apSsid) + '». Если подключение не произойдёт автоматически, введите в адресной строке браузера: ' + escapeHtml(apIp) + '</p>');
+      parts.push('<p>Чтобы подключиться к другой сети WiFi: в режиме точки доступа зайдите на страницу «Настройки WiFi», выполните поиск сетей, найдите нужную и подключитесь. После успешного подключения система покажет присвоенный IP-адрес. Затем отключите телефон от точки доступа, подключите его к той же сети, что и система управления, и введите полученный IP в адресной строке браузера.</p>');
+      return parts.join('');
+    }
+    function applyEntryMode(mode, staSsid, apSsid, apIp){
+      var staRouteStep = byId('staRouteStep');
+      var staRouteText = byId('staRouteText');
+      if (mode === 'sta') {
+        if (staRouteText) staRouteText.innerHTML = buildStaRouteHtml(staSsid, apSsid, apIp);
+        toggleHidden(byId('choiceStep'), true);
+        toggleHidden(staRouteStep, false);
+        toggleHidden(byId('apStep'), true);
+        toggleHidden(byId('staStep'), true);
+        return;
+      }
+      toggleHidden(staRouteStep, true);
+    }
+
+    function buildTopActions(staConnected, staIp){
+      var html = '<a class="btn" href="/app">Открыть основной интерфейс</a>';
+      return html;
+    }
+
+    function loadInfo(){
+      callApi('/api/v1/info', 'GET', null, function(info){
+        var pending, ap, sta, apSsid, apIp, staSsid, staIp, staConnected, text, entryMode;
+        if (!(info && (typeof info.wifiWizardPending !== 'undefined' || info.ap || info.sta || info.apIP))) {
+          infoRetryCount += 1;
+          byId('statusText').textContent = 'Не удалось загрузить состояние Wi‑Fi. ' + (infoRetryCount < 4 ? 'Повторяем попытку...' : 'Проверьте соединение и обновите страницу.');
+          if (infoRetryCount < 4) setTimeout(loadInfo, 1200);
+          return;
+        }
+        infoRetryCount = 0;
+        pending = infoBool(info && info.wifiWizardPending);
+        ap = info && info.ap ? info.ap : {};
+        sta = info && info.sta ? info.sta : {};
+        apSsid = infoVal(ap, 'ssid', 'Control_System');
+        apIp = infoVal(ap, 'ip', infoVal(info, 'apIP', '192.168.4.1'));
+        staSsid = infoVal(sta, 'ssid', '');
+        staIp = infoVal(sta, 'ip', infoVal(info, 'staIP', '-'));
+        staConnected = infoBool(infoVal(sta, 'connected', false));
+        entryMode = pending ? 'ap' : resolveEntryMode(apIp, staIp);
+        applyEntryMode(entryMode, staSsid, apSsid, apIp);
+        text = '';
+        if (pending) {
+          text = 'Первичная настройка ещё не завершена. Точка доступа: ' + apSsid + '. Адрес точки доступа: ' + apIp + '.';
+          setTopActions('');
+        } else {
+          text = 'Настройка уже завершена. Точка доступа: ' + apSsid + '. Адрес точки доступа: ' + apIp + '. ';
+          if (staConnected) text += 'Домашняя сеть подключена, IP: ' + staIp + '.';
+          else text += 'Можно продолжать работу через точку доступа или перенастроить домашнюю сеть.';
+          setTopActions(buildTopActions(staConnected, staIp));
+        }
+        byId('statusText').textContent = text;
+      });
+    }
+
+    function finishWizardWithoutPassword(){
+      setActions('');
+      setInlineStatus('Сохраняем выбор...', 'busy');
+      setMsg('Сохраняем выбор...');
+      callApi('/api/v1/wifi/wizard/complete', 'POST', JSON.stringify({ done:true }), function(res){
+        setBusy(false);
+        if (res && res.ok) {
+          setInlineStatus('Можно продолжать работу через открытую точку доступа. Сейчас откроется основной интерфейс.', 'ok');
+          setMsg('Можно продолжать работу через открытую точку доступа. Сейчас откроется основной интерфейс.', 'ok');
+          setActions('<a class="btn" href="/app">Открыть основной интерфейс</a><button type="button" class="light" onclick="openStep(\'choice\')">Остаться на странице WiFi</button>');
+          loadInfo();
+          setTimeout(function(){ goToApp(); }, 900);
+          return;
+        }
+        setInlineStatus('Не удалось завершить мастер. Попробуйте ещё раз.', 'err');
+        setMsg('Не удалось завершить мастер. Попробуйте ещё раз.', 'err');
+        loadInfo();
+      });
+    }
+
+    function saveApPassword(){
+      var p1 = byId('apPass1').value;
+      var p2 = byId('apPass2').value;
+      setActions('');
+      if (!p1 || p1.length < 8 || p1.length > 63) {
+        setInlineStatus('Пароль точки доступа должен содержать от 8 до 63 символов.', 'err');
+        setMsg('Пароль точки доступа должен содержать от 8 до 63 символов.', 'err');
+        return;
+      }
+      if (p1 !== p2) {
+        setInlineStatus('Пароли не совпадают.', 'err');
+        setMsg('Пароли не совпадают.', 'err');
+        return;
+      }
+      setInlineStatus('Сохраняем пароль точки доступа...', 'busy');
+      setMsg('Сохраняем пароль точки доступа...');
+      callApi('/api/v1/wifi/ap', 'POST', JSON.stringify({ pass:p1 }), function(res){
+        if (res && res.ok) {
+          setInlineStatus('Пароль сохранён. Если связь с точкой доступа пропадёт, подключитесь заново уже с новым паролем.', 'ok');
+          setMsg('Пароль сохранён. Подключение без пароля теперь невозможно. Если связь с точкой доступа пропадёт, подключитесь заново уже с новым паролем. После этого откройте основной интерфейс.', 'ok');
+          showApPasswordForm(false);
+          setActions('<a class="btn" href="/app">Перейти на стартовую страницу</a><button type="button" class="light" onclick="openStep(\'ap\')">Остаться на странице WiFi</button>');
+          loadInfo();
+          setTimeout(function(){ goToApp(); }, 1500);
+          return;
+        }
+        setInlineStatus((res && (res.error || res.err)) ? (res.error || res.err) : 'Не удалось сохранить пароль точки доступа.', 'err');
+        setMsg((res && (res.error || res.err)) ? (res.error || res.err) : 'Не удалось сохранить пароль точки доступа.', 'err');
+        loadInfo();
+      });
+    }
+
+    function scanNetworks(){
+      setActions('');
+      setBusy(true, 'Поиск сетей...');
+      setMsg('Поиск сетей...');
+      callApi('/api/v1/wifi/scan', 'GET', null, function(res){
+        setBusy(false);
+        var arr = Object.prototype.toString.call(res) === '[object Array]' ? res : [];
+        var scanBox = byId('scanBox');
+        var ssidSelect = byId('ssidSelect');
+        var networkList = byId('networkList');
+        var ssidInput = byId('ssidInput');
+        var i, n, opt, rssi, prot, protText, html = '';
+
+        toggleHidden(scanBox, arr.length === 0);
+        ssidSelect.innerHTML = '';
+        for (i = 0; i < arr.length; i++) {
+          n = arr[i] || {};
+          rssi = typeof n.rssi !== 'undefined' ? wifiBarsText(n.rssi) : '▱▱▱▱';
+          prot = n.authMode || n.auth || n.security || (n.open ? 'open' : '');
+          protText = prot ? ' · ' + prot : '';
+          html += '<li>' + (n.ssid || '(без имени)') + ' · <span class="wifi-bars">' + rssi + '</span>' + protText + '</li>';
+          opt = document.createElement('option');
+          opt.value = n.ssid || '';
+          opt.text = (n.ssid || '(без имени)') + ' [' + rssi + ']' + (prot ? ' · ' + prot : '');
+          ssidSelect.appendChild(opt);
+          if (i === 0 && n.ssid) ssidInput.value = n.ssid;
+        }
+        networkList.innerHTML = html;
+        ssidSelect.onchange = function(){ ssidInput.value = ssidSelect.value; };
+        if (arr.length) {
+          setInlineStatus('Список сетей обновлён. Выберите нужную сеть.', 'ok');
+          setMsg('Список сетей обновлён. Выберите свою сеть.', 'ok');
+        } else {
+          setInlineStatus('Сети не найдены.', 'err');
+          setMsg('Сети не найдены.', 'err');
+        }
+      });
+    }
+
+    function humanConnectFail(res){
+      var txt = '';
+      if (res && (res.statusText || res.error || res.err)) txt = String(res.statusText || res.error || res.err).toUpperCase();
+      if (txt.indexOf('WRONG_PASSWORD') >= 0 || txt.indexOf('AUTH') >= 0 || txt.indexOf('PASSWORD') >= 0 || txt.indexOf('CONNECT_FAILED') >= 0) return 'Неверный пароль или сеть отклонила подключение.';
+      if (res && res.timedOut) return 'Время ожидания истекло.';
+      if (txt.indexOf('NO_SSID') >= 0 || txt.indexOf('SSID') >= 0) return 'Сеть недоступна или не найдена.';
+      return 'Сеть недоступна или параметры подключения неверны.';
+    }
+
+    function connectSta(){
+      var ssid = (byId('ssidInput').value || '').replace(/^\s+|\s+$/g, '');
+      var pass = byId('staPass').value || '';
+      setActions('');
+      if (!ssid) {
+        setInlineStatus('Укажите имя сети.', 'err');
+        setMsg('Укажите имя сети.', 'err');
+        return;
+      }
+      setBusy(true, 'Подключение...');
+      setMsg('Подключение к сети...');
+      callApi('/api/v1/wifi/connect', 'POST', JSON.stringify({ ssid:ssid, pass:pass }), function(res){
+        setBusy(false);
+        var ip;
+        if (res && res.ok) {
+          ip = res.ip || res.staIP || '-';
+          setInlineStatus('Подключение успешно. IP: ' + ip + '.', 'ok');
+          setMsg('Чтобы продолжить работу через Вашу домашнюю сеть, необходимо отключиться от Точки доступа и подключиться к Вашей сети WiFi. После этого Вы сможете войти в интерфейс по IP адресу: ' + ip + '. Обратите внимание, что при включенном VPN ничего работать не будет!', 'ok');
+          setActions('<a class="btn secondary" href="/app">Продолжить через точку доступа</a>' + '<button type="button" class="light" onclick="showDisconnectHint()">Отключиться от точки доступа</button>');
+          loadInfo();
+          return;
+        }
+        setInlineStatus('Подключение не удалось. ' + humanConnectFail(res), 'err');
+        setMsg('Подключение не удалось. ' + humanConnectFail(res), 'err');
+        loadInfo();
+      });
+    }
+
+    window.openStep = openStep;
+    window.showApPasswordForm = showApPasswordForm;
+    window.finishWizardWithoutPassword = finishWizardWithoutPassword;
+    window.saveApPassword = saveApPassword;
+    window.scanNetworks = scanNetworks;
+    window.connectSta = connectSta;
+    window.showDisconnectHint = showDisconnectHint;
+    window.openStaApp = openStaApp;
+    document.addEventListener('visibilitychange', function(){ if (!document.hidden) loadInfo(); });
+    window.addEventListener('focus', loadInfo);
+
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', loadInfo);
+    else loadInfo();
+  </script>
+</body>
+</html>
