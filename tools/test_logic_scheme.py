@@ -22,6 +22,7 @@ from __future__ import annotations
 import math
 import re
 import gzip
+import hashlib
 from itertools import combinations
 import unittest
 from dataclasses import dataclass, field
@@ -1522,16 +1523,59 @@ class SourceGuardTests(unittest.TestCase):
         self.assertIn("if (!enabled) {", self.sensors_h)
         self.assertIn("return 0;", self.sensors_h)
 
-    def test_flow_rule_for_ch1_ch3_uses_fault_phase_and_ch2_keeps_local_gate(self):
-        # Новый инвариант по ТЗ: single grace живёт в фазовой машине, поэтому
-        # F открывает gate для CH1/CH3 только в FP_FAULT, а не по wants(CH2).
-        self.assertIn("controlGate = _flowControlGate(prevState, outIdx);", self.output_mgr_h)
-        self.assertIn("if (outIdx == OUT_CH1 || outIdx == OUT_CH3) {", self.output_mgr_h)
-        self.assertIn("return (_flowPhase == FP_FAULT);", self.output_mgr_h)
-        self.assertIn("out[idx]->manualWant()", self.output_mgr_h)
-        self.assertIn("(_lastWant[idx] != 0)", self.output_mgr_h)
-        self.assertIn("return wants(outIdx);", self.output_mgr_h)
-        self.assertNotIn("return wants(OUT_CH2);", self.output_mgr_h)
+    def test_flow_rule_uses_physical_ch2_gate_for_all_channels(self):
+        self.assertIn("controlGate = (out[OUT_CH2] && out[OUT_CH2]->actualOn());", self.output_mgr_h)
+        self.assertIn("if (!controlGate && sen->controlRuleEnabled(outIdx)) {", self.output_mgr_h)
+        self.assertIn("sen->resetCtrlCandidate(outIdx);", self.output_mgr_h)
+
+    def test_flow_phase_artifacts_are_removed_from_runtime(self):
+        self.assertNotIn("flowPhaseIsFault()", self.output_mgr_h)
+        self.assertNotIn("enum FlowPhase", self.output_mgr_h)
+        self.assertNotIn("_flowPhase", self.output_mgr_h)
+        self.assertNotIn("_flowGraceStartedMs", self.output_mgr_h)
+        self.assertNotIn("_flowControlGate(", self.output_mgr_h)
+        self.assertNotIn("_updateFlowPhase(", self.output_mgr_h)
+
+    def test_flow_text_visibility_uses_flow_no_flow_live_flag(self):
+        # Слой 2: текст "Нет протока!" идёт от raw live-флага flowNoFlow,
+        # независимо от alarm triggered и без fallback на AL.
+        self.assertIn('so["flowNoFlow"] = ch2ActualOn && !_sm->flowActive();', self.webapi_h)
+        self.assertNotIn('so["flowFaultVisible"] = _om->flowPhaseIsFault();', self.webapi_h)
+        self.assertIn("return (typeof sensor.flowNoFlow === 'boolean') ? sensor.flowNoFlow : false;", self.app_js)
+        flow_visible_src = self.app_js[
+            self.app_js.find("function flowAlarmVisible(sensor){"):
+            self.app_js.find("function sensorDiscreteOk(sensor){")
+        ]
+        self.assertNotIn("sensor.flowFaultVisible", flow_visible_src)
+        self.assertNotIn("return sensorToggleAlarmTriggered(sensor);", flow_visible_src)
+
+    def test_main_app_sensor_cells_do_not_use_legacy_alarm_or_control_fallbacks(self):
+        tpl_value_src = self.app_js[
+            self.app_js.find("function tplValueText(sensor, blankWhenDisabled){"):
+            self.app_js.find("function tplHomeValueClass(sensor){")
+        ]
+        self.assertNotIn("function humanSensorValue(", self.app_js)
+        self.assertIn("if (sensor.id === 'L') return (typeof sensor.circuitOpen === 'boolean' ? sensor.circuitOpen : (Number(sensor.value) <= 0.5)) ? 'MAX!' : 'OK';", tpl_value_src)
+        self.assertIn("if (sensor.id === 'F') return flowAlarmVisible(sensor) ? 'Нет протока!' : 'OK';", tpl_value_src)
+        self.assertNotIn("sensorToggleAlarmTriggered(", tpl_value_src)
+        self.assertNotIn("flowControlEnabled", tpl_value_src)
+
+    def test_webpage_app_js_header_matches_out_source_by_hash(self):
+        out_app_js = (self.root / "OUT" / "page-app.js").read_text(encoding="utf-8", errors="ignore")
+        self.assertEqual(
+            hashlib.sha256(out_app_js.encode("utf-8")).hexdigest(),
+            hashlib.sha256(self.app_js.encode("utf-8")).hexdigest(),
+        )
+
+    def test_emupanel_flow_cell_uses_flow_no_flow_without_control_rule_gate(self):
+        flow_visible_src = self.emu_panel[
+            self.emu_panel.find("function flowAlarmVisible(sensor) {"):
+            self.emu_panel.find("function formatValue(sensor) {")
+        ]
+        self.assertIn("return (typeof sensor.flowNoFlow === 'boolean') ? sensor.flowNoFlow : false;", flow_visible_src)
+        self.assertNotIn("flowControlEnabled", flow_visible_src)
+        self.assertNotIn("sensor.ctrl", flow_visible_src)
+        self.assertNotIn("Number(sensor.value) <= 0.5", flow_visible_src)
 
     def test_flow_gate_does_not_reset_control_delay_runtime(self):
         self.assertIn("if (!controlGate) {", self.sensors_h)
@@ -1550,12 +1594,11 @@ class SourceGuardTests(unittest.TestCase):
         self.assertIn("esp_core_dump_image_get(&addr, &size)", self.main_ino)
         self.assertIn("coredump,   data, coredump, 0x3F0000, 0x10000,", self.partitions_csv)
 
-    def test_flow_alarm_reads_fault_phase_from_output_manager(self):
-        # Новый инвариант по ТЗ: сигнализация F читает итог FAULT из
-        # OutputManager, чтобы alarm и OFF использовали один и тот же grace.
-        self.assertIn("const bool flowFault = fs->enabled && _om && _om->flowPhaseIsFault();", self.process_h)
+    def test_flow_alarm_reads_raw_condition_independently_from_control_delay(self):
+        self.assertIn("const bool ch2ActualOn = _om && _om->out[OUT_CH2] && _om->out[OUT_CH2]->actualOn();", self.process_h)
+        self.assertIn("const bool flowFault = fs->enabled && _sm && ch2ActualOn && !_sm->flowActive();", self.process_h)
+        self.assertNotIn("flowPhaseIsFault()", self.process_h)
         self.assertNotIn("flowControlEnabled", self.process_h)
-        self.assertNotIn("const bool ch2ActualOn = _om->out[OUT_CH2] && _om->out[OUT_CH2]->actualOn();", self.process_h)
 
     def test_main_loop_keeps_confirmation_polling_while_stop_is_active(self):
         self.assertIn("confirmMgr.loop(outputMgr, sensorMgr, &eventLog);", self.main_ino)

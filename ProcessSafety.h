@@ -120,11 +120,12 @@ private:
             return;
         }
 
-        // ── Тревога "нет протока" читается из итоговой фазы OutputManager ───
+        // ── Тревога "нет протока" стартует от raw-условия CH2 ON + нет протока.
         // alarmDelayMs управляет только тревогой/индикацией; ctrlDelayMs и
         // фазовая машина OutputManager продолжают отдельно управлять реле.
         // ────────────────────────────────────────────────────────────────────
-        const bool flowFault = fs->enabled && _om && _om->flowPhaseIsFault();
+        const bool ch2ActualOn = _om && _om->out[OUT_CH2] && _om->out[OUT_CH2]->actualOn();
+        const bool flowFault = fs->enabled && _sm && ch2ActualOn && !_sm->flowActive();
         if (!flowFault) {
             _flowAlarmCandidateSinceMs = 0;
         } else if (_flowAlarmCandidateSinceMs == 0) {

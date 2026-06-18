@@ -1879,6 +1879,10 @@ private:
             const DigitalSensor* digital = static_cast<const DigitalSensor*>(s);
             so["circuitOpen"] = digital->isCircuitOpen();
         }
+        if (sensorIdx == SEN_F && _om) {
+            const bool ch2ActualOn = _om->out[OUT_CH2] && _om->out[OUT_CH2]->actualOn();
+            so["flowNoFlow"] = ch2ActualOn && !_sm->flowActive();
+        }
 
         const uint8_t unackedMask = _om->unackedAlarmMaskFor(*_sm, sensorIdx);
         so["sensorLostUnacked"] = ((unackedMask & SENSOR_LOST_ALARM_MASK) != 0);

@@ -896,20 +896,6 @@ function formatValueWithUnit(num, unit, digits){
   return Number(num).toFixed(d) + (unit ? (' ' + unit) : '');
 }
 
-function humanSensorValue(s, blankWhenDisabled){
-  if (!s) return '—';
-  if (!s.enabled) return blankWhenDisabled ? '' : 'Выключен';
-  if (!s.present && s.error) return 'Нет датчика';
-  if (s.error && s.note) return 'Недоступно';
-  if (s.error) return 'Ошибка';
-  if (s.value == null) return '—';
-  if (s.id === 'L') return sensorToggleAlarmTriggered(s) ? 'MAX!' : 'OK';
-  if (s.id === 'F') return flowAlarmVisible(s) ? 'Нет протока!' : 'OK';
-  if (s.id === 'P') return formatValueWithUnit(s.value, 'гПа', 1);
-  if (s.id === 'T1' || s.id === 'T2' || s.id === 'T3' || s.id === 'dT') return formatValueWithUnit(s.value, '°C', 1);
-  return String(Math.round(Number(s.value)));
-}
-
 function sensorEnabledAlarms(s){
   var out = [];
   var arr = (s && s.alarms) ? s.alarms : [];
@@ -2201,7 +2187,9 @@ function flowRawAlarmCondition(sensor){
   return Number(sensor.value) <= 0.5;
 }
 function flowAlarmVisible(sensor){
-  return sensorToggleAlarmTriggered(sensor);
+  if (!sensor || sensor.id !== 'F') return false;
+  if (!sensor.enabled || sensor.error || sensor.present === false) return false;
+  return (typeof sensor.flowNoFlow === 'boolean') ? sensor.flowNoFlow : false;
 }
 function sensorDiscreteOk(sensor){
   if (!sensor || !sensor.enabled || sensor.error || sensor.value == null || sensor.present === false) return false;

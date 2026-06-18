@@ -537,12 +537,8 @@ public:
     }
 
     bool safetyAlarmActive() const { return _safetyAlarmActive; }
-    bool flowPhaseIsFault() const { return _flowPhase == FP_FAULT; }
 
 private:
-    // Контекстная машина состояний датчика протока F.
-    enum FlowPhase : uint8_t { FP_NEUTRAL = 0, FP_WAITING = 1, FP_FAULT = 2 };
-
     static bool _isMainOutput(uint8_t outIdx) {
         return requiresWerConfirmation(outIdx);
     }
@@ -567,24 +563,14 @@ private:
             // "no command": the operator still sees ERR/alarm, but relay
             // state must not jerk. L/F keep their explicit forbid behavior.
             if (sensorIdx == SEN_F) {
-                controlGate = _flowControlGate(prevState, outIdx);
-                if (outIdx == OUT_CH2 && !controlGate && sen->controlRuleEnabled(OUT_CH2)) {
-                    sen->resetCtrlCandidate(OUT_CH2);
+                controlGate = (out[OUT_CH2] && out[OUT_CH2]->actualOn());
+                if (!controlGate && sen->controlRuleEnabled(outIdx)) {
+                    sen->resetCtrlCandidate(outIdx);
                 }
             }
         }
 
         const int cmd = sen->evalCtrl(outIdx, invalidMeansOff, controlGate);
-        if (sensorIdx == SEN_F &&
-            (outIdx == OUT_CH1 || outIdx == OUT_CH3) &&
-            sen->controlRuleEnabled(outIdx)) {
-            if (_flowPhase == FP_FAULT) {
-                return -1;
-            }
-            // Вне FAULT работаем по обычному evalCtrl(): для F на CH1/CH3
-            // это OFF-only правило, поэтому обратный переход означает лишь
-            // снятие forbid, а не выдачу отдельного ON-командования.
-        }
 #if STABILITY_BOOT_DIAG
         if (sensorIdx == SEN_F && outIdx == OUT_CH1 &&
             sen->controlRuleEnabled(outIdx) && controlGate &&
@@ -642,76 +628,6 @@ private:
         }
 #endif
         return cmd;
-    }
-
-    void _updateFlowPhase(SensorManager& sm, const bool prevState[OUT_COUNT]) {
-        const uint32_t now = millis();
-        const FlowPhase prevPhase = _flowPhase;
-        const bool ch2On = out[OUT_CH2] && out[OUT_CH2]->actualOn();
-        const bool ch2WasOn = prevState[OUT_CH2];
-        const bool flow = sm.flowActive();
-        SensorBase* flowSensor = sm.s[SEN_F];
-
-        uint32_t grace = 0;
-        if (flowSensor) grace = flowSensor->ctrlDelayMs;
-
-        if (!ch2On) {
-            _flowPhase = FP_NEUTRAL;
-            _flowGraceStartedMs = now;
-        } else if (ch2On && !ch2WasOn) {
-            // grace==0 на фронте CH2 ON: FAULT оценивается со следующего тика —
-            // намеренно, чтобы не дать ложную тревогу в момент пуска до
-            // установления протока.
-            _flowPhase = FP_WAITING;
-            _flowGraceStartedMs = now;
-        } else if (_flowPhase == FP_FAULT) {
-            // FAULT держим до явного выхода из режима ожидания протока:
-            // либо CH2 выключился, либо начался новый цикл через фронт CH2 ON.
-        } else if (flow) {
-            _flowPhase = FP_WAITING;
-            _flowGraceStartedMs = now;
-        } else if ((uint32_t)(now - _flowGraceStartedMs) >= grace) {
-            _flowPhase = FP_FAULT;
-        }
-
-        if (prevPhase == FP_FAULT && _flowPhase != FP_FAULT && flowSensor) {
-            if (flowSensor->controlRuleEnabled(OUT_CH1)) flowSensor->resetCtrlCandidate(OUT_CH1);
-            if (flowSensor->controlRuleEnabled(OUT_CH3)) flowSensor->resetCtrlCandidate(OUT_CH3);
-        }
-    }
-
-    bool _flowControlGate(const bool prevState[OUT_COUNT], uint8_t outIdx) const {
-        auto wants = [&](uint8_t idx) -> bool {
-            if (idx >= OUT_COUNT || !out[idx]) return false;
-            return prevState[idx] ||
-                   out[idx]->manualWant() ||
-                   (_lastWant[idx] != 0);
-        };
-
-        const bool ch2On = (out[OUT_CH2] && out[OUT_CH2]->actualOn());
-        (void)ch2On;
-
-        if (outIdx == OUT_CH1 || outIdx == OUT_CH3) {
-            // Forbid по протоку выпускаем только в фазе FAULT: окно ожидания
-            // истекло и протока нет. В NEUTRAL/WAITING gate закрыт -> нет
-            // мгновенного OFF CH1 и нет "щелчка" CH3, даже если цепь F была
-            // разомкнута до включения CH2.
-            return (_flowPhase == FP_FAULT);
-        }
-
-        // For CH2 delay must start from the intent to keep the channel ON,
-        // not only after the physical confirmation arrives.
-        return wants(outIdx);
-    }
-
-    void _resetFlowCtrlDelayOnCh2Rise(SensorManager& sm, const bool prevState[OUT_COUNT]) {
-        if (!out[OUT_CH2] || prevState[OUT_CH2] || !out[OUT_CH2]->actualOn()) return;
-
-        SensorBase* flow = sm.s[SEN_F];
-        if (!flow) return;
-
-        if (flow->controlRuleEnabled(OUT_CH1)) flow->resetCtrlCandidate(OUT_CH1);
-        if (flow->controlRuleEnabled(OUT_CH3)) flow->resetCtrlCandidate(OUT_CH3);
     }
 
     void _applyGlobalStop() {
@@ -918,7 +834,6 @@ private:
         uint32_t newWant[OUT_COUNT]   = {};
 
         sm.normalizeDigitalOffOnlyRules();
-        _updateFlowPhase(sm, prevState);
 
         out[OUT_CH4]->enabled = ch4Enabled;
         out[OUT_CH5]->enabled = ch5Enabled;
@@ -955,8 +870,6 @@ private:
             _lastWant[oi]   = newWant[oi];
             _applyCurrent((uint8_t)oi);
         }
-
-        _resetFlowCtrlDelayOnCh2Rise(sm, prevState);
 
         out[OUT_CH4]->setBellPatternActive(ch4Enabled && !soundMuted && soundRequired);
     }
@@ -1183,8 +1096,6 @@ private:
     bool     _operatorHoldOff[OUT_COUNT] = {};
     bool     _cmdPrevManual[OUT_COUNT] = {};
     bool     _cmdPrevHoldOff[OUT_COUNT] = {};
-    FlowPhase _flowPhase = FP_NEUTRAL;
-    uint32_t  _flowGraceStartedMs = 0;
     uint8_t  _lastCmdError[OUT_COUNT] = {};
     uint32_t _lastCmdErrorMs[OUT_COUNT] = {};
     const char* _lastCmdDetail[OUT_COUNT] = {};

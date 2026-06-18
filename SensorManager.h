@@ -35,8 +35,10 @@ public:
 
         // Базовые задержки по умолчанию для текущей логики проекта.
         l->alarmDelayMs = DIGITAL_ALARM_DEBOUNCE_MS;
+        l->alarm[0].enabled = true;
         l->ctrlDelayMs  = SAFETY_LEVEL_SHUTDOWN_MS;
         f->alarmDelayMs = 0;      // alarmDelayMs=0: тревога без задержки по умолчанию.
+        f->alarm[0].enabled = true;
         f->ctrlDelayMs  = 5000UL;
         c->alarmDelayMs = 1000UL;
         c->ctrlDelayMs  = 0;
