@@ -43,8 +43,10 @@ public:
 
     void begin(Storage& stor, EventLog& log) {
         _log = &log;
+        _stor = &stor;
 
         stor.loadWifiSTA(staSSID, staPass);
+        _apOnly = stor.loadWifiApOnly();
         // ─── Локальный WiFi для отладки  ─────────────────────────────────
         // if (staSSID.length() == 0) {
         //     staSSID = STA_SSID_DEF;
@@ -58,34 +60,9 @@ public:
         }
 
         WiFi.persistent(false);
-        WiFi.setAutoReconnect(true);
         WiFi.setSleep(false);         // AP-режим стабильнее без modem sleep
         WiFi.setHostname(DEVICE_NAME);
-        WiFi.mode(WIFI_OFF);
-        delay(50);
-        WiFi.mode(WIFI_AP_STA);
-        delay(50);
-
-        _startAP();
-        if (_apRunning) {
-            _dns.start(53, "*", WiFi.softAPIP());
-        }
-        _refreshApClientSignal();
-
-        if (staSSID.length() > 0) {
-            _connectSTA();
-        }
-
-        _lastReconnectMs = millis();
-        _lastStatus = (int)WiFi.status();
-        staConnected = (_lastStatus == WL_CONNECTED);
-
-        if (staConnected) {
-            _lastStatusText = statusText(_lastStatus);
-            _ensureMDNSStarted();
-        } else {
-            _lastStatusText = staSSID.length() > 0 ? "connecting" : "not configured";
-        }
+        _applyConfiguredMode(!_apOnly);
 
         if (_apRunning) {
             log.add(String("WiFi: AP started - ") + apSSID + " / " + (apPass.length() ? "protected" : "open")
@@ -96,6 +73,11 @@ public:
     }
 
     void loop() {
+        if (_modeApplyPending) {
+            _modeApplyPending = false;
+            _applyConfiguredMode(!_apOnly);
+        }
+
         _dns.processNextRequest();
 
         if (_apRunning && (millis() - _lastApSignalPollMs >= 1500UL)) {
@@ -128,7 +110,8 @@ public:
             _ensureMDNSStarted();
         }
 
-        if (!isConn && staSSID.length() > 0 &&
+        if (!_apOnly &&
+            !isConn && staSSID.length() > 0 &&
             !_reconnectPaused() &&
             (millis() - _lastReconnectMs >= WIFI_RECONNECT_COOLDOWN_MS)) {
             _lastReconnectMs = millis();
@@ -138,7 +121,7 @@ public:
 
     void fillScan(JsonArray arr) {
         const bool hadReconnect = WiFi.getAutoReconnect();
-        const bool reconnectingToStoredAp = (staSSID.length() > 0) && !staConnected;
+        const bool reconnectingToStoredAp = !_apOnly && (staSSID.length() > 0) && !staConnected;
 
         _pauseStaReconnect(WIFI_SCAN_RECONNECT_PAUSE_MS);
         WiFi.setAutoReconnect(false);
@@ -184,6 +167,13 @@ public:
 
         const String prevSSID = staSSID;
         const String prevPass = staPass;
+
+        if (_apOnly || _modeApplyPending) {
+            _apOnly = false;
+            _modeApplyPending = false;
+            stor.saveWifiApOnly(false);
+            _applyConfiguredMode(false);
+        }
 
         _connectSTA(ssid, pass);
 
@@ -246,6 +236,18 @@ public:
         }
     }
 
+    bool apOnly() const { return _apOnly; }
+    const char* wifiMode() const { return _apOnly ? "ap_only" : "sta_ap"; }
+
+    void setApOnly(bool enabled) {
+        if (_stor) {
+            _stor->saveWifiApOnly(enabled);
+        }
+        if (_apOnly == enabled && !_modeApplyPending) return;
+        _apOnly = enabled;
+        _modeApplyPending = true;
+    }
+
     // Алиас для совместимости с другими ветками
     void updateAPPassword(const String& pass, Storage& stor) {
         setAPPassword(pass, stor);
@@ -303,11 +305,14 @@ public:
 private:
     DNSServer _dns;
     EventLog* _log = nullptr;
+    Storage*  _stor = nullptr;
     uint32_t  _lastReconnectMs = 0;
     uint32_t  _reconnectPausedUntilMs = 0;
     int       _lastStatus = WL_IDLE_STATUS;
     String    _lastStatusText = "idle";
     bool      _mdnsStarted = false;
+    bool      _apOnly = false;
+    bool      _modeApplyPending = false;
     bool      _apRunning = false;
     bool      _apFallbackToOpen = false;
     String    _apStatusText = "idle";
@@ -346,6 +351,39 @@ private:
         }
 
         _refreshApClientSignal();
+    }
+
+    void _applyConfiguredMode(bool connectStoredSta) {
+        WiFi.setAutoReconnect(!_apOnly);
+        WiFi.disconnect(false, false);
+        delay(100);
+        WiFi.mode(WIFI_OFF);
+        delay(50);
+        WiFi.mode(_apOnly ? WIFI_AP : WIFI_AP_STA);
+        delay(50);
+
+        _startAP();
+        if (_apRunning) {
+            _dns.start(53, "*", WiFi.softAPIP());
+        }
+        _refreshApClientSignal();
+
+        if (!_apOnly && connectStoredSta && staSSID.length() > 0) {
+            _connectSTA();
+        }
+
+        _lastReconnectMs = millis();
+        _lastStatus = (int)WiFi.status();
+        staConnected = (_lastStatus == WL_CONNECTED);
+
+        if (staConnected) {
+            _lastStatusText = statusText(_lastStatus);
+            _ensureMDNSStarted();
+        } else if (_apOnly) {
+            _lastStatusText = "AP-only";
+        } else {
+            _lastStatusText = staSSID.length() > 0 ? "connecting" : "not configured";
+        }
     }
 
     void _connectSTA() {

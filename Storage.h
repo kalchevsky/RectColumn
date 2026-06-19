@@ -75,6 +75,21 @@ public:
         return done;
     }
 
+    void saveWifiApOnly(bool enabled) {
+        Preferences p;
+        if (!_openPrefs(p, "wifi", false)) return;
+        p.putBool("ap_only", enabled);
+        p.end();
+    }
+
+    bool loadWifiApOnly() {
+        Preferences p;
+        if (!_openPrefs(p, "wifi", true)) return false;
+        bool enabled = p.getBool("ap_only", false);
+        p.end();
+        return enabled;
+    }
+
     void saveSensors(SensorManager& sm) {
         _sanitizeSensors(sm);
         SensorsBlob blob{};

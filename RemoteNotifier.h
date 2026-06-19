@@ -114,13 +114,11 @@ public:
         char url[sizeof(_publishUrlSnap)] = {};
         char token[sizeof(_accessTokenSnap)] = {};
         _copyConfigSnapshot(nullptr, url, sizeof(url), token, sizeof(token));
-        return _sendNtfyWithTarget(String(url), String(token),
-                                   "Система управления", "Тестовое уведомление",
-                                   "3", "test_tube", errOut);
+        return _scheduleTestNotify(String(url), String(token), errOut);
     }
 
     bool sendTestTo(const String& publishUrl, const String& token, String& errOut) {
-        return _sendNtfyWithTarget(publishUrl, token, "Система управления", "Тестовое уведомление", "3", "test_tube", errOut);
+        return _scheduleTestNotify(publishUrl, token, errOut);
     }
 
     void loop() {
@@ -175,6 +173,9 @@ private:
         char body[320];
         char priority[8];
         char tags[48];
+        char url[160];
+        char token[96];
+        bool useCustomTarget;
     };
 
     void _snapshotCurrentAlarms() {
@@ -309,35 +310,94 @@ private:
         return _sendNtfyWithTarget(String(url), String(token), title, body, priority, tags, errOut);
     }
 
+    bool _scheduleTestNotify(const String& publishUrl,
+                             const String& token,
+                             String& errOut)
+    {
+        return _enqueueNotify("Система управления",
+                              "Тестовое уведомление",
+                              "3",
+                              "test_tube",
+                              publishUrl,
+                              token,
+                              true,
+                              false,
+                              false,
+                              errOut);
+    }
+
     bool _scheduleNotify(const String& title,
                          const String& body,
                          const char* priority,
                          const char* tags,
                          String& errOut)
     {
+        return _enqueueNotify(title,
+                              body,
+                              priority,
+                              tags,
+                              String(),
+                              String(),
+                              false,
+                              true,
+                              true,
+                              errOut);
+    }
+
+    bool _enqueueNotify(const String& title,
+                        const String& body,
+                        const char* priority,
+                        const char* tags,
+                        const String& publishUrlOverride,
+                        const String& tokenOverride,
+                        bool useCustomTarget,
+                        bool requireEnabled,
+                        bool guardRedirect,
+                        String& errOut)
+    {
         if (!_queue || !_worker) {
             errOut = "notify worker is not ready";
             return false;
         }
 
-        bool enabledSnap = false;
-        char url[sizeof(_publishUrlSnap)] = {};
-        _copyConfigSnapshot(&enabledSnap, url, sizeof(url), nullptr, 0);
-        if (!enabledSnap) {
-            errOut = "notify is disabled";
-            return false;
+        String targetUrl;
+        String targetToken;
+        if (useCustomTarget) {
+            targetUrl = publishUrlOverride;
+            targetToken = tokenOverride;
+            targetUrl.trim();
+            targetToken.trim();
+            if (!_validatePublishUrl(targetUrl, errOut)) {
+                return false;
+            }
+        } else {
+            bool enabledSnap = false;
+            char url[sizeof(_publishUrlSnap)] = {};
+            char token[sizeof(_accessTokenSnap)] = {};
+            _copyConfigSnapshot(&enabledSnap, url, sizeof(url), token, sizeof(token));
+            if (requireEnabled && !enabledSnap) {
+                errOut = "notify is disabled";
+                return false;
+            }
+            if (!_validatePublishUrlSnapshot(url, errOut)) {
+                return false;
+            }
+            // === PATCH NTFY BEGIN ===
+            if (guardRedirect && _isRedirectBlocked()) {
+                errOut = "server returned redirect (HTTPS required?); use a publish URL that does not redirect";
+                return false;
+            }
+            // === PATCH NTFY END ===
+            targetUrl = String(url);
+            targetToken = String(token);
         }
-        if (!_validatePublishUrlSnapshot(url, errOut)) {
-            return false;
-        }
-        // === PATCH NTFY BEGIN ===
-        if (_isRedirectBlocked()) {
-            errOut = "server returned redirect (HTTPS required?); use a publish URL that does not redirect";
-            return false;
-        }
-        // === PATCH NTFY END ===
+
         if (!_wifi || !_wifi->staConnected) {
-            errOut = "STA is not connected";
+            const wifi_mode_t mode = WiFi.getMode();
+            const bool apMode = (_wifi && _wifi->apRunning()) || mode == WIFI_AP || mode == WIFI_AP_STA;
+            errOut = apMode
+                ? "Нет подключения к домашней сети: устройство работает через точку доступа, уведомление не отправлено."
+                : "Нет подключения к домашней сети, уведомление не отправлено.";
             return false;
         }
 
@@ -346,11 +406,16 @@ private:
         strlcpy(item.body, body.c_str(), sizeof(item.body));
         strlcpy(item.priority, priority ? priority : "3", sizeof(item.priority));
         strlcpy(item.tags, tags ? tags : "information_source", sizeof(item.tags));
+        item.useCustomTarget = useCustomTarget;
+        if (useCustomTarget) {
+            strlcpy(item.url, targetUrl.c_str(), sizeof(item.url));
+            strlcpy(item.token, targetToken.c_str(), sizeof(item.token));
+        }
 
 #if STABILITY_BOOT_DIAG
         Serial.printf("[NTFY] schedule bodyLen=%u urlLen=%u\n",
                       (unsigned)strlen(item.body),
-                      (unsigned)strlen(url));
+                      (unsigned)targetUrl.length());
 #endif
 
         if (xQueueSend(_queue, &item, 0) != pdTRUE) {
@@ -376,11 +441,16 @@ private:
                 continue;
             }
 
-            bool enabledSnap = false;
             char url[sizeof(self->_publishUrlSnap)] = {};
             char token[sizeof(self->_accessTokenSnap)] = {};
-            self->_copyConfigSnapshot(&enabledSnap, url, sizeof(url), token, sizeof(token));
-            if (!enabledSnap || url[0] == '\0') continue;
+            if (item.useCustomTarget) {
+                strlcpy(url, item.url, sizeof(url));
+                strlcpy(token, item.token, sizeof(token));
+            } else {
+                bool enabledSnap = false;
+                self->_copyConfigSnapshot(&enabledSnap, url, sizeof(url), token, sizeof(token));
+                if (!enabledSnap || url[0] == '\0') continue;
+            }
 
             String err;
 #if STABILITY_BOOT_DIAG

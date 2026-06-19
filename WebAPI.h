@@ -674,6 +674,36 @@ private:
                 _sendDoc(req, 200, resp);
             });
 
+        _server.on("/api/v1/wifi/ap_only", HTTP_POST, [this](AsyncWebServerRequest* req) {
+            _wifi->setApOnly(true);
+            _om->beepAcceptedCommand();
+            _log->add("WiFi: включён режим только AP",
+                      _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
+
+            DynamicJsonDocument resp(256);
+            resp["ok"] = true;
+            resp["wifiMode"] = "ap_only";
+            resp["apOnly"] = true;
+            resp["apIP"] = _wifi->apIP();
+            resp["staConfigured"] = _wifi->staConfigured();
+            _sendDoc(req, 200, resp);
+        });
+
+        _server.on("/api/v1/wifi/sta_enable", HTTP_POST, [this](AsyncWebServerRequest* req) {
+            _wifi->setApOnly(false);
+            _om->beepAcceptedCommand();
+            _log->add("WiFi: включён режим STA+AP",
+                      _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
+
+            DynamicJsonDocument resp(256);
+            resp["ok"] = true;
+            resp["wifiMode"] = "sta_ap";
+            resp["apOnly"] = false;
+            resp["apIP"] = _wifi->apIP();
+            resp["staConfigured"] = _wifi->staConfigured();
+            _sendDoc(req, 200, resp);
+        });
+
         _server.on("/api/v1/wifi/wizard/complete", HTTP_POST,
             [](AsyncWebServerRequest*) {}, nullptr,
             [this](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t) {
@@ -789,8 +819,10 @@ private:
                 DynamicJsonDocument resp(256);
                 resp["ok"] = ok;
                 if (ok) {
+                    resp["queued"] = true;
+                    resp["message"] = "Тестовое уведомление поставлено в очередь";
                     _om->beepAcceptedCommand();
-                    _log->add("Тест уведомления отправлен",
+                    _log->add("Тестовое уведомление поставлено в очередь",
                               _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
                     _sendDoc(req, 200, resp);
                 } else {
@@ -1728,6 +1760,7 @@ private:
         root["apRunning"]  = _wifi->apRunning();
         root["apStatusText"] = _wifi->apStatusText();
         root["staIP"]      = _wifi->staIP();
+        root["wifiMode"]   = _wifi->wifiMode();
         root["rssi"]       = _wifi->rssi();
         root["staRssi"]    = _wifi->staRssi();
         root["apRssi"]     = _wifi->apRssi();
@@ -1761,6 +1794,7 @@ private:
         sta["ip"]         = _wifi->staIP();
         sta["rssi"]       = _wifi->staRssi();
         sta["statusText"] = _wifi->staStatusText();
+        sta["apOnly"]     = _wifi->apOnly();
         sta["reconnectPauseMs"] = _wifi->reconnectPauseRemainingMs();
 
         ap["clientCount"] = _wifi->apClientCount();
@@ -1812,6 +1846,8 @@ private:
         endpoints.add("/api/v1/wifi/scan");
         endpoints.add("/api/v1/wifi/connect");
         endpoints.add("/api/v1/wifi/ap");
+        endpoints.add("/api/v1/wifi/ap_only");
+        endpoints.add("/api/v1/wifi/sta_enable");
         endpoints.add("/api/v1/wifi/wizard/complete");
         endpoints.add("/api/v1/emu/set");
         endpoints.add("/api/v1/emu/scenario");
@@ -1836,6 +1872,7 @@ private:
         root["apIP"] = _wifi->apIP();
         root["apRunning"] = _wifi->apRunning();
         root["staIP"] = _wifi->staIP();
+        root["wifiMode"] = _wifi->wifiMode();
         root["rssi"] = _wifi->rssi();
         root["staRssi"] = _wifi->staRssi();
         root["apRssi"] = _wifi->apRssi();

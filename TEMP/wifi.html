@@ -224,6 +224,8 @@
     }
 
     var infoRetryCount = 0;
+    var currentWifiInfo = null;
+    var currentEntryMode = 'fallback';
     function infoBool(v){ return !!v; }
     function infoVal(obj, key, fallback){ return obj && typeof obj[key] !== 'undefined' ? obj[key] : fallback; }
     function escapeHtml(text){
@@ -242,6 +244,14 @@
       if (currentHost && staHost && currentHost === staHost) return 'sta';
       if (currentHost && apHost && currentHost === apHost) return 'ap';
       return 'fallback';
+    }
+    function wifiModeCode(info){
+      var mode = normalizeHost(infoVal(info, 'wifiMode', ''));
+      if (mode === 'ap_only' || mode === 'sta_ap') return mode;
+      return '';
+    }
+    function wifiModeLabel(mode){
+      return mode === 'ap_only' ? 'AP-only' : 'STA+AP';
     }
     function buildStaRouteHtml(staSsid, apSsid, apIp){
       var parts = [];
@@ -265,14 +275,49 @@
       toggleHidden(staRouteStep, true);
     }
 
-    function buildTopActions(staConnected, staIp){
+    function buildTopActions(wifiMode){
       var html = '<a class="btn" href="/app">Открыть основной интерфейс</a>';
+      if (wifiMode === 'ap_only') {
+        html += '<button type="button" class="secondary" onclick="switchWifiMode(false)">Подключаться к домашней сети (STA+AP)</button>';
+      } else {
+        html += '<button type="button" class="secondary" onclick="switchWifiMode(true)">Отключиться от домашней сети (только AP)</button>';
+      }
       return html;
+    }
+
+    function switchWifiMode(enableApOnly){
+      var info = currentWifiInfo || {};
+      var ap = info && info.ap ? info.ap : {};
+      var apSsid = infoVal(ap, 'ssid', 'Control_System');
+      var apIp = infoVal(ap, 'ip', infoVal(info, 'apIP', '192.168.4.1'));
+      var busyText = enableApOnly ? 'Переключаемся в режим только точки доступа...' : 'Включаем режим STA+AP...';
+      var okText = enableApOnly
+        ? 'Режим AP-only включён. Домашняя сеть отключается. Подключитесь к точке доступа «' + apSsid + '» и откройте адрес ' + apIp + '.'
+        : 'Режим STA+AP включён. Теперь можно искать домашнюю сеть и подключаться к ней вручную.';
+      var errorText = enableApOnly
+        ? 'Не удалось включить режим AP-only.'
+        : 'Не удалось включить режим STA+AP.';
+      var url = enableApOnly ? '/api/v1/wifi/ap_only' : '/api/v1/wifi/sta_enable';
+      setActions('');
+      setInlineStatus(busyText, 'busy');
+      setMsg(busyText);
+      callApi(url, 'POST', null, function(res){
+        if (res && res.ok) {
+          setInlineStatus(okText, 'ok');
+          setMsg(okText, 'ok');
+          if (!(enableApOnly && currentEntryMode === 'sta')) {
+            setTimeout(loadInfo, 500);
+          }
+          return;
+        }
+        setInlineStatus((res && (res.error || res.err)) ? (res.error || res.err) : errorText, 'err');
+        setMsg((res && (res.error || res.err)) ? (res.error || res.err) : errorText, 'err');
+      });
     }
 
     function loadInfo(){
       callApi('/api/v1/info', 'GET', null, function(info){
-        var pending, ap, sta, apSsid, apIp, staSsid, staIp, staConnected, text, entryMode;
+        var pending, ap, sta, apSsid, apIp, staSsid, staIp, staConnected, text, entryMode, wifiMode;
         if (!(info && (typeof info.wifiWizardPending !== 'undefined' || info.ap || info.sta || info.apIP))) {
           infoRetryCount += 1;
           byId('statusText').textContent = 'Не удалось загрузить состояние Wi‑Fi. ' + (infoRetryCount < 4 ? 'Повторяем попытку...' : 'Проверьте соединение и обновите страницу.');
@@ -280,6 +325,7 @@
           return;
         }
         infoRetryCount = 0;
+        currentWifiInfo = info;
         pending = infoBool(info && info.wifiWizardPending);
         ap = info && info.ap ? info.ap : {};
         sta = info && info.sta ? info.sta : {};
@@ -288,17 +334,19 @@
         staSsid = infoVal(sta, 'ssid', '');
         staIp = infoVal(sta, 'ip', infoVal(info, 'staIP', '-'));
         staConnected = infoBool(infoVal(sta, 'connected', false));
+        wifiMode = wifiModeCode(info) || (staConnected ? 'sta_ap' : 'ap_only');
         entryMode = pending ? 'ap' : resolveEntryMode(apIp, staIp);
+        currentEntryMode = entryMode;
         applyEntryMode(entryMode, staSsid, apSsid, apIp);
         text = '';
         if (pending) {
-          text = 'Первичная настройка ещё не завершена. Точка доступа: ' + apSsid + '. Адрес точки доступа: ' + apIp + '.';
+          text = 'Режим: ' + wifiModeLabel(wifiMode) + '. Первичная настройка ещё не завершена. Точка доступа: ' + apSsid + '. Адрес точки доступа: ' + apIp + '.';
           setTopActions('');
         } else {
-          text = 'Настройка уже завершена. Точка доступа: ' + apSsid + '. Адрес точки доступа: ' + apIp + '. ';
+          text = 'Режим: ' + wifiModeLabel(wifiMode) + '. Настройка уже завершена. Точка доступа: ' + apSsid + '. Адрес точки доступа: ' + apIp + '. ';
           if (staConnected) text += 'Домашняя сеть подключена, IP: ' + staIp + '.';
           else text += 'Можно продолжать работу через точку доступа или перенастроить домашнюю сеть.';
-          setTopActions(buildTopActions(staConnected, staIp));
+          setTopActions(buildTopActions(wifiMode));
         }
         byId('statusText').textContent = text;
       });
@@ -439,6 +487,7 @@
     window.scanNetworks = scanNetworks;
     window.connectSta = connectSta;
     window.showDisconnectHint = showDisconnectHint;
+    window.switchWifiMode = switchWifiMode;
     window.openStaApp = openStaApp;
     document.addEventListener('visibilitychange', function(){ if (!document.hidden) loadInfo(); });
     window.addEventListener('focus', loadInfo);

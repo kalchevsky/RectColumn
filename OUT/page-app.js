@@ -306,17 +306,23 @@ function wifiText(s){
   if (s.apRunning || s.apIP) return 'Точка доступа';
   return 'WiFi';
 }
+function wifiModeCode(s){
+  var mode = String(s && s.wifiMode ? s.wifiMode : '').toLowerCase();
+  if (mode === 'ap_only' || mode === 'sta_ap') return mode;
+  if (s && s.staIP && (s.apRunning || s.apIP)) return 'sta_ap';
+  if (s && (s.apRunning || s.apIP) && !s.staIP) return 'ap_only';
+  return '';
+}
 function wifiModeLabel(s){
-  if (!s) return 'WiFi';
-  if (s.staIP) return 'STA';
-  if (s.apRunning || s.apIP) return 'AP';
+  var mode = wifiModeCode(s);
+  if (mode === 'ap_only') return 'AP-only';
+  if (mode === 'sta_ap') return 'STA+AP';
   return 'WiFi';
 }
 function wifiModeNote(s){
-  if (!s) return 'WiFi';
-  if (s.staIP && (s.apRunning || s.apIP)) return 'STA + AP';
-  if (s.staIP) return 'STA';
-  if (s.apRunning || s.apIP) return 'AP';
+  var mode = wifiModeCode(s);
+  if (mode === 'ap_only') return 'Только точка доступа';
+  if (mode === 'sta_ap') return 'Домашняя сеть + точка доступа';
   return 'WiFi';
 }
 function wifiSignalRssi(s){
