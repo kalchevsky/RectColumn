@@ -277,8 +277,9 @@
 
     function buildTopActions(wifiMode){
       var html = '<a class="btn" href="/app">Открыть основной интерфейс</a>';
+      if (currentEntryMode !== 'ap') return html;
       if (wifiMode === 'ap_only') {
-        html += '<button type="button" class="secondary" onclick="switchWifiMode(false)">Подключаться к домашней сети (STA+AP)</button>';
+        html += '<button type="button" class="secondary" onclick="switchWifiMode(false)">Восстановить подключение к домашней сети</button>';
       } else {
         html += '<button type="button" class="secondary" onclick="switchWifiMode(true)">Отключиться от домашней сети (только AP)</button>';
       }
@@ -292,8 +293,8 @@
       var apIp = infoVal(ap, 'ip', infoVal(info, 'apIP', '192.168.4.1'));
       var busyText = enableApOnly ? 'Переключаемся в режим только точки доступа...' : 'Включаем режим STA+AP...';
       var okText = enableApOnly
-        ? 'Режим AP-only включён. Домашняя сеть отключается. Подключитесь к точке доступа «' + apSsid + '» и откройте адрес ' + apIp + '.'
-        : 'Режим STA+AP включён. Теперь можно искать домашнюю сеть и подключаться к ней вручную.';
+        ? 'Работа через домашнюю сеть отключена'
+        : 'Активирована возможность подключения к домашней сети';
       var errorText = enableApOnly
         ? 'Не удалось включить режим AP-only.'
         : 'Не удалось включить режим STA+AP.';
@@ -305,9 +306,7 @@
         if (res && res.ok) {
           setInlineStatus(okText, 'ok');
           setMsg(okText, 'ok');
-          if (!(enableApOnly && currentEntryMode === 'sta')) {
-            setTimeout(loadInfo, 500);
-          }
+          setTimeout(loadInfo, 500);
           return;
         }
         setInlineStatus((res && (res.error || res.err)) ? (res.error || res.err) : errorText, 'err');
