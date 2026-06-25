@@ -257,8 +257,6 @@
       var parts = [];
       if (staSsid) parts.push('<p>Сейчас Вы работаете через домашнюю сеть WiFi «' + escapeHtml(staSsid) + '».</p>');
       else parts.push('<p>Сейчас Вы работаете через домашнюю сеть WiFi.</p>');
-      parts.push('<p>Чтобы переключиться на точку доступа: отключите телефон/планшет/компьютер от домашней сети и подключитесь к точке доступа «' + escapeHtml(apSsid) + '». Если подключение не произойдёт автоматически, введите в адресной строке браузера: ' + escapeHtml(apIp) + '</p>');
-      parts.push('<p>Чтобы подключиться к другой сети WiFi: в режиме точки доступа зайдите на страницу «Настройки WiFi», выполните поиск сетей, найдите нужную и подключитесь. После успешного подключения система покажет присвоенный IP-адрес. Затем отключите телефон от точки доступа, подключите его к той же сети, что и система управления, и введите полученный IP в адресной строке браузера.</p>');
       return parts.join('');
     }
     function applyEntryMode(mode, staSsid, apSsid, apIp){
@@ -276,12 +274,14 @@
     }
 
     function buildTopActions(wifiMode){
-      var html = '<a class="btn" href="/app">Открыть основной интерфейс</a>';
-      if (currentEntryMode !== 'ap') return html;
-      if (wifiMode === 'ap_only') {
-        html += '<button type="button" class="secondary" onclick="switchWifiMode(false)">Восстановить подключение к домашней сети</button>';
-      } else {
-        html += '<button type="button" class="secondary" onclick="switchWifiMode(true)">Отключиться от домашней сети (только AP)</button>';
+      var html = '';
+      html += '<a class="btn" href="/app">Открыть экран управления</a>';
+      if (currentEntryMode === 'ap') {
+        if (wifiMode === 'ap_only') {
+          html += '<button type="button" class="secondary" onclick="switchWifiMode(false)">Восстановить подключение к домашней сети</button>';
+        } else if (wifiMode === 'sta_ap') {
+          html += '<button type="button" class="secondary" onclick="switchWifiMode(true)">Отключиться от домашней сети</button>';
+        }
       }
       return html;
     }
@@ -317,6 +317,7 @@
     function loadInfo(){
       callApi('/api/v1/info', 'GET', null, function(info){
         var pending, ap, sta, apSsid, apIp, staSsid, staIp, staConnected, text, entryMode, wifiMode;
+        var currentHost, staHost, isStaEntry;
         if (!(info && (typeof info.wifiWizardPending !== 'undefined' || info.ap || info.sta || info.apIP))) {
           infoRetryCount += 1;
           byId('statusText').textContent = 'Не удалось загрузить состояние Wi‑Fi. ' + (infoRetryCount < 4 ? 'Повторяем попытку...' : 'Проверьте соединение и обновите страницу.');
@@ -334,9 +335,19 @@
         staIp = infoVal(sta, 'ip', infoVal(info, 'staIP', '-'));
         staConnected = infoBool(infoVal(sta, 'connected', false));
         wifiMode = wifiModeCode(info) || (staConnected ? 'sta_ap' : 'ap_only');
-        entryMode = pending ? 'ap' : resolveEntryMode(apIp, staIp);
+        currentHost = normalizeHost(window.location && window.location.hostname);
+        staHost = normalizeHost(staIp);
+        isStaEntry = staConnected && currentHost && staHost && (currentHost === staHost);
+        entryMode = pending ? 'ap' : (isStaEntry ? 'sta' : 'ap');
         currentEntryMode = entryMode;
         applyEntryMode(entryMode, staSsid, apSsid, apIp);
+        if (pending) {
+          toggleHidden(byId('choiceStep'), false);
+        } else {
+          toggleHidden(byId('choiceStep'), true);
+          toggleHidden(byId('apStep'), true);
+          toggleHidden(byId('staStep'), true);
+        }
         text = '';
         if (pending) {
           text = 'Режим: ' + wifiModeLabel(wifiMode) + '. Первичная настройка ещё не завершена. Точка доступа: ' + apSsid + '. Адрес точки доступа: ' + apIp + '.';
