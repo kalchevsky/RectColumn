@@ -323,21 +323,36 @@ private:
     bool      _scanEverRun = false;
     int       _lastScanStatus = 0;
     int       _lastScanCount = 0;
+    String    _activeApSsid = "";
+    String    _activeApPass = "";
 
     void _startAP() {
-        _apRunning = false;
+        if (_apRunning &&
+            _activeApSsid == apSSID &&
+            _activeApPass == apPass) {
+            _refreshApClientSignal();
+            return;
+        }
+
         _apFallbackToOpen = false;
         _apStatusText = "failed";
-
-        WiFi.softAPdisconnect(true);
-        delay(50);
-
         bool ok = false;
         if (apPass.length() > 0) ok = WiFi.softAP(apSSID.c_str(), apPass.c_str());
         else                     ok = WiFi.softAP(apSSID.c_str());
 
+        if (!ok && _apRunning) {
+            WiFi.softAPdisconnect(false);
+            delay(20);
+            if (apPass.length() > 0) ok = WiFi.softAP(apSSID.c_str(), apPass.c_str());
+            else                     ok = WiFi.softAP(apSSID.c_str());
+        }
+
         if (!ok && apPass.length() > 0) {
             apPass = "";
+            if (_apRunning) {
+                WiFi.softAPdisconnect(false);
+                delay(20);
+            }
             ok = WiFi.softAP(apSSID.c_str());
             if (ok) {
                 _apFallbackToOpen = true;
@@ -346,9 +361,14 @@ private:
 
         _apRunning = ok;
         if (_apRunning) {
+            _activeApSsid = apSSID;
+            _activeApPass = apPass;
             _apStatusText = _apFallbackToOpen
                 ? "fallback_open"
                 : (apPass.length() > 0 ? "protected" : "open");
+        } else {
+            _activeApSsid = "";
+            _activeApPass = "";
         }
 
         _refreshApClientSignal();
@@ -356,12 +376,12 @@ private:
 
     void _applyConfiguredMode(bool connectStoredSta) {
         WiFi.setAutoReconnect(!_apOnly);
-        WiFi.disconnect(false, false);
-        delay(100);
-        WiFi.mode(WIFI_OFF);
-        delay(50);
+        if (_apOnly) {
+            WiFi.disconnect(false, false);
+            delay(20);
+        }
         WiFi.mode(_apOnly ? WIFI_AP : WIFI_AP_STA);
-        delay(50);
+        delay(20);
 
         _startAP();
         if (_apRunning) {
