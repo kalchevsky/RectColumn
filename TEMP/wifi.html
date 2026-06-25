@@ -486,12 +486,12 @@
       setMsg('Подключение к сети...');
       callApi('/api/v1/wifi/connect', 'POST', JSON.stringify({ ssid:ssid, pass:pass }), function(res){
         setBusy(false);
-        var ip;
+        var ip, staName;
         if (res && res.ok) {
           ip = res.ip || res.staIP || '-';
+          staName = (res && res.ssid) ? res.ssid : ssid;
           setInlineStatus('Подключение успешно. IP: ' + ip + '.', 'ok');
-          setMsg('Чтобы продолжить работу через Вашу домашнюю сеть, необходимо отключиться от Точки доступа и подключиться к Вашей сети WiFi. После этого Вы сможете войти в интерфейс по IP адресу: ' + ip + '. Обратите внимание, что при включенном VPN ничего работать не будет!', 'ok');
-          setActions('<a class="btn secondary" href="/app">Продолжить через точку доступа</a>' + '<button type="button" class="light" onclick="showDisconnectHint()">Отключиться от точки доступа</button>');
+          setMsg('Отключитесь от точки доступа устройства в настройках WiFi телефона или планшета, затем подключитесь к Вашей домашней сети WiFi (' + staName + '). После этого откройте интерфейс по указанному IP адресу: ' + ip + '. Обратите внимание, что при включенном VPN доступ может не работать.', 'ok');
           loadInfo();
           return;
         }
