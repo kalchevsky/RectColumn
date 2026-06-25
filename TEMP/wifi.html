@@ -284,7 +284,10 @@
       html += '<a class="btn" href="/app">Открыть экран управления</a>';
       if (currentEntryMode === 'ap') {
         if (wifiMode === 'ap_only') {
-          html += '<button type="button" class="secondary" onclick="switchWifiMode(false)">' + restoreLabel + '</button>';
+          var staConfigured = !!infoVal(sta, 'configured', false) || !!staSsid;
+          if (staConfigured) {
+            html += '<button type="button" class="secondary" onclick="switchWifiMode(false)">' + restoreLabel + '</button>';
+          }
           html += '<button type="button" class="secondary" onclick="openStep(\'sta\')">Подключиться к другой сети</button>';
         } else if (wifiMode === 'sta_ap') {
           html += '<button type="button" class="secondary" onclick="switchWifiMode(true)">Отключиться от домашней сети</button>';

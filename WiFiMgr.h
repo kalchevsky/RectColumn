@@ -47,6 +47,7 @@ public:
 
         stor.loadWifiSTA(staSSID, staPass);
         _apOnly = stor.loadWifiApOnly();
+        if (staSSID.length() == 0) _apOnly = true;   // нет STA-сети => только AP
         // ─── Локальный WiFi для отладки  ─────────────────────────────────
         // if (staSSID.length() == 0) {
         //     staSSID = STA_SSID_DEF;
