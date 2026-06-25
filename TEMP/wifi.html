@@ -83,7 +83,7 @@
       <p>Найдите свою сеть, введите пароль и нажмите «Подключить».</p>
       <div class="stack">
         <button id="scanBtn" type="button" onclick="scanNetworks()">Найти сети</button>
-        <button type="button" class="light" onclick="openStep('choice')">Назад</button>
+        <button id="staBackBtn" type="button" class="light" onclick="openStep('choice')">Назад</button>
       </div>
 
       <div id="scanBox" class="hidden">
@@ -184,6 +184,7 @@
       toggleHidden(byId('staRouteStep'), true);
       toggleHidden(byId('apStep'), step !== 'ap');
       toggleHidden(byId('staStep'), step !== 'sta');
+      toggleHidden(byId('staBackBtn'), !(step === 'sta' && currentWifiInfo && currentWifiInfo.wifiWizardPending));
     }
     function showApPasswordForm(show){ toggleHidden(byId('apPasswordForm'), !show); }
     function goToApp(){ window.location.href = '/app'; }
@@ -275,10 +276,16 @@
 
     function buildTopActions(wifiMode){
       var html = '';
+      var sta = currentWifiInfo && currentWifiInfo.sta ? currentWifiInfo.sta : {};
+      var staSsid = infoVal(sta, 'ssid', '');
+      var restoreLabel = staSsid
+        ? 'Восстановить подключение к сети «' + escapeHtml(staSsid) + '»'
+        : 'Восстановить подключение к домашней сети';
       html += '<a class="btn" href="/app">Открыть экран управления</a>';
       if (currentEntryMode === 'ap') {
         if (wifiMode === 'ap_only') {
-          html += '<button type="button" class="secondary" onclick="switchWifiMode(false)">Восстановить подключение к домашней сети</button>';
+          html += '<button type="button" class="secondary" onclick="switchWifiMode(false)">' + restoreLabel + '</button>';
+          html += '<button type="button" class="secondary" onclick="openStep(\'sta\')">Подключиться к другой сети</button>';
         } else if (wifiMode === 'sta_ap') {
           html += '<button type="button" class="secondary" onclick="switchWifiMode(true)">Отключиться от домашней сети</button>';
         }
@@ -348,6 +355,7 @@
           toggleHidden(byId('apStep'), true);
           toggleHidden(byId('staStep'), true);
         }
+        toggleHidden(byId('staBackBtn'), !pending);
         text = '';
         if (pending) {
           text = 'Режим: ' + wifiModeLabel(wifiMode) + '. Первичная настройка ещё не завершена. Точка доступа: ' + apSsid + '. Адрес точки доступа: ' + apIp + '.';
