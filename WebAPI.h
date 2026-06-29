@@ -1650,7 +1650,10 @@ private:
             }
 
             if (si == SEN_DT && sensor->error) {
-                _addUniqueReason(arr, _dtAlarmErrorText());
+                const bool dtAcked = _om->isDtErrorAcked();
+                if (!(unackedOnly && dtAcked)) {
+                    _addUniqueReason(arr, _dtAlarmErrorText());
+                }
             }
 
             for (uint8_t ai = 0; ai < N_ALARMS; ai++) {
@@ -1675,7 +1678,7 @@ private:
                 (uint8_t)(_om->unackedAlarmMaskFor(*_sm, si) & USER_ALARM_MASK);
 
             if (si == SEN_DT && sensor->error) {
-                _addOrUpdateActiveAlarmEntry(arr, _dtAlarmErrorText(), false);
+                _addOrUpdateActiveAlarmEntry(arr, _dtAlarmErrorText(), _om->isDtErrorAcked());
             }
 
             for (uint8_t ai = 0; ai < N_ALARMS; ai++) {

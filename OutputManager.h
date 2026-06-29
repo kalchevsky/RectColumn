@@ -458,7 +458,13 @@ public:
             const uint8_t active = s ? s->alarmMask() : 0;
             _ackedAlarmMask[si] |= active;
         }
+        SensorBase* dtSensor = sm.s[SEN_DT];
+        if (dtSensor && dtSensor->error) {
+            _dtErrorAcked = true;
+        }
     }
+
+    bool isDtErrorAcked() const { return _dtErrorAcked; }
 
     uint16_t activeAlarmCount(const SensorManager& sm) const {
         uint16_t count = 0;
@@ -1082,12 +1088,17 @@ private:
             const uint8_t active = s ? s->alarmMask() : 0;
             _ackedAlarmMask[si] &= active;
         }
+        SensorBase* dtSensor = sm.s[SEN_DT];
+        if (!dtSensor || !dtSensor->error) {
+            _dtErrorAcked = false;
+        }
     }
 
     uint32_t _lastForbid[OUT_COUNT];
     uint32_t _lastWant[OUT_COUNT];
     uint32_t _safetyForbid[OUT_COUNT] = {};
     uint8_t  _ackedAlarmMask[SEN_COUNT] = {};
+    bool     _dtErrorAcked = false;
     uint32_t _lastBeepMs = 0;
     bool     _manualStateDirty = false;
     bool     _begun = false;
