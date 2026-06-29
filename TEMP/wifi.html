@@ -311,17 +311,25 @@
       var url = enableApOnly ? '/api/v1/wifi/ap_only' : '/api/v1/wifi/sta_enable';
       setActions('');
       setInlineStatus(busyText, 'busy');
-      setMsg(busyText);
       callApi(url, 'POST', null, function(res){
         if (res && res.ok) {
           setInlineStatus(okText, 'ok');
-          setMsg(okText, 'ok');
-          setTimeout(loadInfo, 500);
+          if (enableApOnly) { setTimeout(loadInfo, 500); }
+          else { pollStaConnected(6); }
           return;
         }
         setInlineStatus((res && (res.error || res.err)) ? (res.error || res.err) : errorText, 'err');
-        setMsg((res && (res.error || res.err)) ? (res.error || res.err) : errorText, 'err');
       });
+    }
+
+    function pollStaConnected(tries){
+      loadInfo();
+      if (tries <= 0) return;
+      setTimeout(function(){
+        var sta = currentWifiInfo && currentWifiInfo.sta ? currentWifiInfo.sta : null;
+        if (sta && infoBool(infoVal(sta, 'connected', false))) return;
+        pollStaConnected(tries - 1);
+      }, 1500);
     }
 
     function loadInfo(){
@@ -376,19 +384,16 @@
     function finishWizardWithoutPassword(){
       setActions('');
       setInlineStatus('Сохраняем выбор...', 'busy');
-      setMsg('Сохраняем выбор...');
       callApi('/api/v1/wifi/wizard/complete', 'POST', JSON.stringify({ done:true }), function(res){
         setBusy(false);
         if (res && res.ok) {
           setInlineStatus('Можно продолжать работу через открытую точку доступа. Сейчас откроется основной интерфейс.', 'ok');
-          setMsg('Можно продолжать работу через открытую точку доступа. Сейчас откроется основной интерфейс.', 'ok');
           setActions('<a class="btn" href="/app">Открыть основной интерфейс</a><button type="button" class="light" onclick="openStep(\'choice\')">Остаться на странице WiFi</button>');
           loadInfo();
           setTimeout(function(){ goToApp(); }, 900);
           return;
         }
         setInlineStatus('Не удалось завершить мастер. Попробуйте ещё раз.', 'err');
-        setMsg('Не удалось завершить мастер. Попробуйте ещё раз.', 'err');
         loadInfo();
       });
     }
@@ -399,20 +404,16 @@
       setActions('');
       if (!p1 || p1.length < 8 || p1.length > 63) {
         setInlineStatus('Пароль точки доступа должен содержать от 8 до 63 символов.', 'err');
-        setMsg('Пароль точки доступа должен содержать от 8 до 63 символов.', 'err');
         return;
       }
       if (p1 !== p2) {
         setInlineStatus('Пароли не совпадают.', 'err');
-        setMsg('Пароли не совпадают.', 'err');
         return;
       }
       setInlineStatus('Сохраняем пароль точки доступа...', 'busy');
-      setMsg('Сохраняем пароль точки доступа...');
       callApi('/api/v1/wifi/ap', 'POST', JSON.stringify({ pass:p1 }), function(res){
         if (res && res.ok) {
           setInlineStatus('Пароль сохранён. Если связь с точкой доступа пропадёт, подключитесь заново уже с новым паролем.', 'ok');
-          setMsg('Пароль сохранён. Подключение без пароля теперь невозможно. Если связь с точкой доступа пропадёт, подключитесь заново уже с новым паролем. После этого откройте основной интерфейс.', 'ok');
           showApPasswordForm(false);
           setActions('<a class="btn" href="/app">Перейти на стартовую страницу</a><button type="button" class="light" onclick="openStep(\'ap\')">Остаться на странице WiFi</button>');
           loadInfo();
@@ -420,7 +421,6 @@
           return;
         }
         setInlineStatus((res && (res.error || res.err)) ? (res.error || res.err) : 'Не удалось сохранить пароль точки доступа.', 'err');
-        setMsg((res && (res.error || res.err)) ? (res.error || res.err) : 'Не удалось сохранить пароль точки доступа.', 'err');
         loadInfo();
       });
     }
@@ -428,7 +428,7 @@
     function scanNetworks(){
       setActions('');
       setBusy(true, 'Поиск сетей...');
-      setMsg('Поиск сетей...');
+      setInlineStatus('Поиск сетей...', 'busy');
       callApi('/api/v1/wifi/scan', 'GET', null, function(res){
         setBusy(false);
         var arr = Object.prototype.toString.call(res) === '[object Array]' ? res : [];
@@ -456,10 +456,8 @@
         ssidSelect.onchange = function(){ ssidInput.value = ssidSelect.value; };
         if (arr.length) {
           setInlineStatus('Список сетей обновлён. Выберите нужную сеть.', 'ok');
-          setMsg('Список сетей обновлён. Выберите свою сеть.', 'ok');
         } else {
           setInlineStatus('Сети не найдены.', 'err');
-          setMsg('Сети не найдены.', 'err');
         }
       });
     }
@@ -479,7 +477,6 @@
       setActions('');
       if (!ssid) {
         setInlineStatus('Укажите имя сети.', 'err');
-        setMsg('Укажите имя сети.', 'err');
         return;
       }
       setBusy(true, 'Подключение...');
@@ -496,7 +493,6 @@
           return;
         }
         setInlineStatus('Подключение не удалось. ' + humanConnectFail(res), 'err');
-        setMsg('Подключение не удалось. ' + humanConnectFail(res), 'err');
         loadInfo();
       });
     }
