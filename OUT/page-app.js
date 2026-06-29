@@ -433,7 +433,8 @@ function collectActiveSensorLossLines(){
     if (!line) continue;
     if (seen[line]) continue;
     seen[line] = true;
-    lines.push(line);
+    var acked = (sensor.sensorLostUnacked !== true);
+    lines.push({ text: line, acked: acked });
   }
   return lines;
 }
@@ -467,8 +468,13 @@ function unifiedAlertOverlayHtml(activeItems, latchedLines){
     html += '</section>';
   }
   for (var li = 0; li < latchedLines.length; li++) {
-    lossLines += '<div class="rc-unified-alert-line rc-unified-alert-line-latched">';
-    lossLines += '<div class="rc-unified-alert-line-text">' + esc(latchedLines[li]) + '</div>';
+    var lossItem = latchedLines[li] || {};
+    var lossText = (typeof lossItem === 'string') ? lossItem : (lossItem.text || '');
+    var lossAcked = (typeof lossItem === 'object') && lossItem.acked === true;
+    var lossCls = 'rc-unified-alert-line rc-unified-alert-line-latched';
+    if (lossAcked) lossCls += ' rc-unified-alert-line-acked';
+    lossLines += '<div class="' + lossCls + '">';
+    lossLines += '<div class="rc-unified-alert-line-text">' + esc(lossText) + '</div>';
     lossLines += '</div>';
   }
   if (lossLines) {
@@ -489,7 +495,8 @@ function updateUnifiedAlertOverlay(){
   var s = state.lastState || {};
   var unacked = Number(s.unackedAlarmCount || 0);
   var visibleActiveItems = activeItems.filter(function(item){ return item && !item.acked; });
-  if (!document.body || !(visibleActiveItems.length > 0 || latchedLines.length > 0 || unacked > 0)) return;
+  var unackedLatched = latchedLines.filter(function(it){ return it && it.acked !== true; });
+  if (!document.body || !(visibleActiveItems.length > 0 || unackedLatched.length > 0 || unacked > 0)) return;
   ensureUnifiedAlertOverlayStyles();
   var shell = document.createElement('div');
   shell.id = 'rc-unified-alert-overlay';

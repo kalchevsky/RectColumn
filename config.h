@@ -16,14 +16,10 @@
 #define SERIAL_DEBUG_SENSOR_SNAPSHOT  0
 
 // ─── Версия прошивки / API ───────────────────────────────────────
-#define FW_VERSION      "1.6.58"
+#define FW_VERSION      "1.6.60"
 #define API_VERSION     "v1"
 #define AP_SSID_DEF     "Control_System"
 #define DEVICE_NAME     "RectColumn"
-// ─── Локальный WiFi для отладки  ─────────────────────────────────
-// #define STA_SSID_DEF    "EnterFi"
-// #define STA_PASS_DEF    "22QQkWmDianTwfzvx2Qo"
-
 // ─── Режим общей функции GPIO35 ──────────────────────────────────
 // GPIO35 не может одновременно работать как аналоговый вход V
 // и как вход подтверждения WER_CH2.
