@@ -23,16 +23,6 @@
 #include "EventLog.h"
 #include "config.h"
 
-struct WifiConnectResult {
-    bool   ok = false;
-    int    status = WL_IDLE_STATUS;
-    String statusText;
-    String ssid;
-    String ip;
-    bool   saved = false;
-    bool   timedOut = false;
-};
-
 class WiFiMgr {
 public:
     String apSSID = AP_SSID_DEF;
@@ -40,6 +30,13 @@ public:
     String staSSID = "";
     String staPass = "";
     bool   staConnected = false;
+
+    enum class StaTry : uint8_t {
+        Idle,
+        InProgress,
+        Success,
+        Failed
+    };
 
     void begin(Storage& stor, EventLog& log) {
         _log = &log;
@@ -111,7 +108,10 @@ public:
             _ensureMDNSStarted();
         }
 
-        if (!_apOnly &&
+        _advanceStaTry(curEnum);
+
+        if (_staTry != StaTry::InProgress &&
+            !_apOnly &&
             !isConn && staSSID.length() > 0 &&
             !_reconnectPaused() &&
             (millis() - _lastReconnectMs >= WIFI_RECONNECT_COOLDOWN_MS)) {
@@ -159,73 +159,31 @@ public:
         WiFi.setAutoReconnect(hadReconnect);
     }
 
-    WifiConnectResult connectSTA(const String& ssid,
-                                 const String& pass,
-                                 Storage& stor,
-                                 uint32_t timeoutMs = WIFI_CONNECT_TIMEOUT_MS) {
-        WifiConnectResult res;
-        res.ssid = ssid;
+    bool beginConnectSTA(const String& ssid, const String& pass, Storage& stor) {
+        if (ssid.length() == 0) return false;
+        if (_staTry == StaTry::InProgress) return false;
 
-        const String prevSSID = staSSID;
-        const String prevPass = staPass;
+        resetStaTryState();
+        _stor = &stor;
+        _staTrySsid = ssid;
+        _staTryPass = pass;
+        _staTryPrevSsid = staSSID;
+        _staTryPrevPass = staPass;
+        _staTryPrevApOnly = _apOnly;
+        _staTryPrevModeApplyPend = _modeApplyPending;
+        _clearStaTryResult();
 
         if (_apOnly || _modeApplyPending) {
             _apOnly = false;
             _modeApplyPending = false;
-            stor.saveWifiApOnly(false);
             _applyConfiguredMode(false);
         }
 
         _connectSTA(ssid, pass);
-
-        const uint32_t started = millis();
-        wl_status_t cur = WiFi.status();
-        while (cur != WL_CONNECTED && (millis() - started) < timeoutMs) {
-            delay(200);
-            yield();
-            cur = WiFi.status();
-        }
-
-        res.status = (int)cur;
-        res.timedOut = (cur != WL_CONNECTED) && ((millis() - started) >= timeoutMs);
-        res.statusText = res.timedOut
-            ? (String("timeout/") + statusText((int)cur))
-            : statusText((int)cur);
-
-        if (cur == WL_CONNECTED) {
-            staSSID = ssid;
-            staPass = pass;
-            staConnected = true;
-            res.ok = true;
-            res.ip = WiFi.localIP().toString();
-            stor.saveWifiSTA(ssid, pass);
-            res.saved = true;
-            _lastReconnectMs = millis();
-            _lastStatus = (int)cur;
-            _lastStatusText = statusText((int)cur);
-            _ensureMDNSStarted();
-            return res;
-        }
-
-        // Не подменяем рабочую конфигурацию неудачной попыткой подключения.
-        WiFi.disconnect(false, false);
-        delay(100);
-        staConnected = false;
-        _pauseStaReconnect(WIFI_SCAN_RECONNECT_PAUSE_MS);
         _lastReconnectMs = millis();
-        if (prevSSID.length() > 0) {
-            staSSID = prevSSID;
-            staPass = prevPass;
-            _lastStatus = (int)WiFi.status();
-            _lastStatusText = res.statusText;
-        } else {
-            staSSID = "";
-            staPass = "";
-            _lastStatus = (int)WiFi.status();
-            _lastStatusText = res.statusText;
-        }
-
-        return res;
+        _staTryStartMs = millis();
+        _staTry = StaTry::InProgress;
+        return true;
     }
 
     void setAPPassword(const String& pass, Storage& stor) {
@@ -262,6 +220,38 @@ public:
     int    apClientCount() const { return _apClientCount; }
     int    lastScanStatus() const { return _lastScanStatus; }
     int    lastScanCount() const { return _lastScanCount; }
+    bool   staTryInProgress() const { return _staTry == StaTry::InProgress; }
+    bool   staTryFinished() const { return _staTry == StaTry::Success || _staTry == StaTry::Failed; }
+    StaTry staTryState() const { return _staTry; }
+    const char* staTryStateText() const {
+        switch (_staTry) {
+            case StaTry::Idle:       return "idle";
+            case StaTry::InProgress: return "in_progress";
+            case StaTry::Success:    return "success";
+            case StaTry::Failed:     return "failed";
+        }
+        return "idle";
+    }
+    bool   staTryResultOk() const { return _staTryResultOk; }
+    const String& staTryResultSsid() const { return _staTryResultSsid; }
+    const String& staTryAttemptedSsid() const { return _staTrySsid; }
+    const String& staTryResultIp() const { return _staTryResultIp; }
+    const String& staTryResultStatusText() const { return _staTryResultStatusText; }
+    int    staTryResultStatus() const { return _staTryResultStatus; }
+    bool   staTryTimedOut() const { return _staTryTimedOut; }
+    bool   staTrySaved() const { return _staTrySaved; }
+    void   resetStaTryState() {
+        if (_staTry == StaTry::InProgress) return;
+        _staTry = StaTry::Idle;
+        _staTrySsid = "";
+        _staTryPass = "";
+        _staTryPrevSsid = "";
+        _staTryPrevPass = "";
+        _staTryPrevApOnly = false;
+        _staTryPrevModeApplyPend = false;
+        _staTryStartMs = 0;
+        _clearStaTryResult();
+    }
     uint32_t reconnectPauseRemainingMs() const {
         return _reconnectPaused() ? (uint32_t)(_reconnectPausedUntilMs - millis()) : 0UL;
     }
@@ -325,6 +315,21 @@ private:
     int       _lastScanCount = 0;
     String    _activeApSsid = "";
     String    _activeApPass = "";
+    StaTry    _staTry = StaTry::Idle;
+    String    _staTrySsid = "";
+    String    _staTryPass = "";
+    String    _staTryPrevSsid = "";
+    String    _staTryPrevPass = "";
+    bool      _staTryPrevApOnly = false;
+    bool      _staTryPrevModeApplyPend = false;
+    uint32_t  _staTryStartMs = 0;
+    bool      _staTryResultOk = false;
+    String    _staTryResultSsid = "";
+    String    _staTryResultIp = "";
+    String    _staTryResultStatusText = "";
+    int       _staTryResultStatus = 0;
+    bool      _staTryTimedOut = false;
+    bool      _staTrySaved = false;
 
     void _startAP() {
         if (_apRunning &&
@@ -415,8 +420,103 @@ private:
     void _connectSTA(const String& ssid, const String& pass) {
         WiFi.scanDelete();
         WiFi.disconnect(false, false);
-        delay(100);
         WiFi.begin(ssid.c_str(), pass.c_str());
+    }
+
+    bool _staHasIp() const {
+        return WiFi.localIP() != IPAddress((uint32_t)0U);
+    }
+
+    void _clearStaTryResult() {
+        _staTryResultOk = false;
+        _staTryResultSsid = "";
+        _staTryResultIp = "";
+        _staTryResultStatusText = "";
+        _staTryResultStatus = WL_IDLE_STATUS;
+        _staTryTimedOut = false;
+        _staTrySaved = false;
+    }
+
+    void _completeStaTrySuccess() {
+        _apOnly = false;
+        _modeApplyPending = false;
+        if (_stor) {
+            _stor->saveWifiApOnly(false);
+            _stor->saveWifiSTA(_staTrySsid, _staTryPass);
+            _stor->saveWifiWizardDone(true);
+            _staTrySaved = true;
+        } else {
+            _staTrySaved = false;
+        }
+
+        staSSID = _staTrySsid;
+        staPass = _staTryPass;
+        staConnected = true;
+        _lastReconnectMs = millis();
+        _lastStatus = WL_CONNECTED;
+        _lastStatusText = statusText(WL_CONNECTED);
+        _ensureMDNSStarted();
+
+        _staTryResultOk = true;
+        _staTryResultSsid = _staTrySsid;
+        _staTryResultIp = WiFi.localIP().toString();
+        _staTryResultStatusText = _lastStatusText;
+        _staTryResultStatus = WL_CONNECTED;
+        _staTryTimedOut = false;
+        _staTry = StaTry::Success;
+    }
+
+    void _completeStaTryFailure(wl_status_t curEnum) {
+        _staTryResultOk = false;
+        _staTryResultStatus = (int)curEnum;
+        _staTryTimedOut = true;
+        _staTrySaved = false;
+
+        WiFi.disconnect(false, false);
+        staConnected = false;
+
+        _apOnly = _staTryPrevApOnly;
+        _modeApplyPending = _staTryPrevModeApplyPend;
+
+        if (_staTryPrevApOnly) {
+            staSSID = _staTryPrevSsid;
+            staPass = _staTryPrevPass;
+            _applyConfiguredMode(false);
+            _staTryResultSsid = "";
+            _staTryResultIp = "";
+            _staTryResultStatusText = "Не удалось подключиться к " + _staTrySsid;
+        } else if (_staTryPrevSsid.length() > 0) {
+            staSSID = _staTryPrevSsid;
+            staPass = _staTryPrevPass;
+            _connectSTA(_staTryPrevSsid, _staTryPrevPass);
+            _lastReconnectMs = millis();
+            _staTryResultSsid = "";
+            _staTryResultIp = "";
+            _staTryResultStatusText = "Не удалось подключиться к " + _staTrySsid + "; переподключаемся к " + _staTryPrevSsid;
+        } else {
+            staSSID = "";
+            staPass = "";
+            _lastReconnectMs = millis();
+            _staTryResultSsid = "";
+            _staTryResultIp = "";
+            _staTryResultStatusText = "Не удалось подключиться к " + _staTrySsid;
+        }
+
+        _lastStatus = (int)WiFi.status();
+        _lastStatusText = _staTryResultStatusText;
+        _staTry = StaTry::Failed;
+    }
+
+    void _advanceStaTry(wl_status_t curEnum) {
+        if (_staTry != StaTry::InProgress) return;
+
+        if (curEnum == WL_CONNECTED && _staHasIp()) {
+            _completeStaTrySuccess();
+            return;
+        }
+
+        if ((millis() - _staTryStartMs) < WIFI_CONNECT_TIMEOUT_MS) return;
+        _completeStaTryFailure(curEnum);
     }
 
     bool _reconnectPaused() const {

@@ -611,39 +611,44 @@ private:
 
                 String ssid = doc["ssid"] | "";
                 String pass = doc["pass"] | "";
+                DynamicJsonDocument resp(320);
                 if (ssid.length() == 0) {
-                    _sendError(req, 400, "bad_params", "ssid is required");
+                    resp["ok"] = false;
+                    resp["accepted"] = false;
+                    resp["error"] = "empty_ssid";
+                    _sendDoc(req, 400, resp);
                     return;
                 }
 
-                WifiConnectResult result = _wifi->connectSTA(ssid, pass, *_stor, WIFI_CONNECT_TIMEOUT_MS);
-                if (result.ok) {
-                    _stor->saveWifiWizardDone(true);
+                if (_wifi->beginConnectSTA(ssid, pass, *_stor)) {
                     _om->beepAcceptedCommand();
+                    _log->add("WiFi STA: connect attempt started for " + ssid,
+                              _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
+                    resp["ok"] = true;
+                    resp["accepted"] = true;
+                    resp["state"] = "in_progress";
+                    _sendDoc(req, 202, resp);
+                    return;
                 }
 
-                DynamicJsonDocument resp(640);
-                resp["ok"]             = result.ok;
-                resp["ssid"]           = result.ssid;
-                resp["ip"]             = result.ip;
-                resp["status"]         = result.status;
-                resp["statusText"]     = result.statusText;
-                resp["saved"]          = result.saved;
-                resp["timedOut"]       = result.timedOut;
-                resp["staIP"]          = _wifi->staIP();
-                resp["apStillAvailable"] = true;
-                resp["wizardPending"]  = _wifiWizardPending();
-
-                if (result.ok) {
-                    _log->add("WiFi STA подключён: " + result.ssid + " IP=" + result.ip,
-                              _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
-                } else {
-                    _log->add("WiFi STA: ошибка подключения к " + result.ssid + " status=" + result.statusText,
-                              _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
+                resp["ok"] = false;
+                resp["accepted"] = false;
+                if (_wifi->staTryInProgress()) {
+                    resp["state"] = "in_progress";
+                    resp["error"] = "connect_already_in_progress";
+                    _sendDoc(req, 409, resp);
+                    return;
                 }
 
-                _sendDoc(req, 200, resp);
+                resp["state"] = _wifi->staTryStateText();
+                resp["error"] = "connect_not_started";
+                _sendDoc(req, 500, resp);
             });
+
+        _server.on("/api/v1/wifi/connect/ack", HTTP_POST, [this](AsyncWebServerRequest* req) {
+            _wifi->resetStaTryState();
+            _sendOk(req);
+        });
 
         _server.on("/api/v1/wifi/ap", HTTP_POST,
             [](AsyncWebServerRequest*) {}, nullptr,
@@ -1799,6 +1804,14 @@ private:
         sta["statusText"] = _wifi->staStatusText();
         sta["apOnly"]     = _wifi->apOnly();
         sta["reconnectPauseMs"] = _wifi->reconnectPauseRemainingMs();
+        JsonObject connectTry = sta.createNestedObject("connectTry");
+        connectTry["state"]      = _wifi->staTryStateText();
+        connectTry["ok"]         = _wifi->staTryResultOk();
+        connectTry["ssid"]       = _wifi->staTryResultSsid();
+        connectTry["ip"]         = _wifi->staTryResultIp();
+        connectTry["statusText"] = _wifi->staTryResultStatusText();
+        connectTry["timedOut"]   = _wifi->staTryTimedOut();
+        connectTry["saved"]      = _wifi->staTrySaved();
 
         ap["clientCount"] = _wifi->apClientCount();
         ap["rssi"]        = _wifi->apRssi();
