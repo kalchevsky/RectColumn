@@ -22,6 +22,7 @@
 #include "ProcessSafety.h"
 #include "RemoteNotifier.h"
 #include "AckButton.h"
+#include "FactoryDefaults.h"
 
 // ── Глобальные объекты ───────────────────────────────────────────
 TimeBase            timeBase;
@@ -275,6 +276,10 @@ void setup() {
 
     storage.loadSensors(sensorMgr);
     storage.loadOutputs(outputMgr);
+    FactoryDefaults::prepareFactoryDefaultsMigration(storage);
+    if (FactoryDefaults::needsFactoryDefaults(storage)) {
+        FactoryDefaults::applyFactoryDefaults(storage, sensorMgr, outputMgr, &eventLog);
+    }
     syncCtrlLogicFromOutputModes();
 
     if (!storage.ready()) {

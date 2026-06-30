@@ -3,6 +3,7 @@
 #pragma once
 #include <Preferences.h>
 #include <esp_err.h>
+#include <nvs.h>
 #include <nvs_flash.h>
 #include "SensorManager.h"
 #include "OutputManager.h"
@@ -24,12 +25,17 @@ public:
         if (durationMs > _saveOutputsMaxMs) _saveOutputsMaxMs = durationMs;
     }
 
-    void saveWifiSTA(const String& ssid, const String& pass) {
+    bool saveWifiSTAChecked(const String& ssid, const String& pass) {
         Preferences p;
-        if (!_openPrefs(p, "wifi", false)) return;
-        p.putString("sta_ssid", ssid);
-        p.putString("sta_pass", pass);
+        if (!_openPrefs(p, "wifi", false)) return false;
+        const bool ok = _putAndVerifyString(p, "sta_ssid", ssid)
+                     && _putAndVerifyString(p, "sta_pass", pass);
         p.end();
+        return ok;
+    }
+
+    void saveWifiSTA(const String& ssid, const String& pass) {
+        (void)saveWifiSTAChecked(ssid, pass);
     }
 
     bool loadWifiSTA(String& ssid, String& pass) {
@@ -45,11 +51,16 @@ public:
         return ssid.length() > 0;
     }
 
-    void saveAPPassword(const String& pass) {
+    bool saveAPPasswordChecked(const String& pass) {
         Preferences p;
-        if (!_openPrefs(p, "wifi", false)) return;
-        p.putString("ap_pass", pass);
+        if (!_openPrefs(p, "wifi", false)) return false;
+        const bool ok = _putAndVerifyString(p, "ap_pass", pass);
         p.end();
+        return ok;
+    }
+
+    void saveAPPassword(const String& pass) {
+        (void)saveAPPasswordChecked(pass);
     }
 
     String loadAPPassword() {
@@ -60,11 +71,16 @@ public:
         return pass;
     }
 
-    void saveWifiWizardDone(bool done) {
+    bool saveWifiWizardDoneChecked(bool done) {
         Preferences p;
-        if (!_openPrefs(p, "wifi", false)) return;
-        p.putBool("wizard_done", done);
+        if (!_openPrefs(p, "wifi", false)) return false;
+        const bool ok = _putAndVerifyBool(p, "wizard_done", done);
         p.end();
+        return ok;
+    }
+
+    void saveWifiWizardDone(bool done) {
+        (void)saveWifiWizardDoneChecked(done);
     }
 
     bool loadWifiWizardDone() {
@@ -75,11 +91,16 @@ public:
         return done;
     }
 
-    void saveWifiApOnly(bool enabled) {
+    bool saveWifiApOnlyChecked(bool enabled) {
         Preferences p;
-        if (!_openPrefs(p, "wifi", false)) return;
-        p.putBool("ap_only", enabled);
+        if (!_openPrefs(p, "wifi", false)) return false;
+        const bool ok = _putAndVerifyBool(p, "ap_only", enabled);
         p.end();
+        return ok;
+    }
+
+    void saveWifiApOnly(bool enabled) {
+        (void)saveWifiApOnlyChecked(enabled);
     }
 
     bool loadWifiApOnly() {
@@ -90,17 +111,23 @@ public:
         return enabled;
     }
 
-    void saveSensors(SensorManager& sm) {
+    bool saveSensorsChecked(SensorManager& sm) {
         _sanitizeSensors(sm);
         SensorsBlob blob{};
         _fillSensorsBlob(sm, blob);
 
         Preferences p;
-        if (!_openPrefs(p, "sensors", false)) return;
-        if (!_writeBlob(p, "blob", blob)) {
+        if (!_openPrefs(p, "sensors", false)) return false;
+        const bool ok = _writeBlob(p, "blob", blob);
+        if (!ok) {
             _lastStatus = "Preferences write failed for namespace 'sensors'";
         }
         p.end();
+        return ok;
+    }
+
+    void saveSensors(SensorManager& sm) {
+        (void)saveSensorsChecked(sm);
     }
 
     void loadSensors(SensorManager& sm) {
@@ -150,17 +177,23 @@ public:
         if (hasLegacy) _migrateSensorsToBlob(sm);
     }
 
-    void saveOutputConfig(OutputManager& om) {
+    bool saveOutputConfigChecked(OutputManager& om) {
         _sanitizeOutputs(om);
         OutputsBlob blob{};
         _fillOutputsBlob(om, blob);
 
         Preferences p;
-        if (!_openPrefs(p, "outputs", false)) return;
-        if (!_writeBlob(p, "blob", blob)) {
+        if (!_openPrefs(p, "outputs", false)) return false;
+        const bool ok = _writeBlob(p, "blob", blob);
+        if (!ok) {
             _lastStatus = "Preferences write failed for namespace 'outputs'";
         }
         p.end();
+        return ok;
+    }
+
+    void saveOutputConfig(OutputManager& om) {
+        (void)saveOutputConfigChecked(om);
     }
 
     void loadOutputConfig(OutputManager& om) {
@@ -218,13 +251,18 @@ public:
         loadOutputConfig(om);
     }
 
-    void saveNotifyConfig(bool enabled, const String& publishUrl, const String& token) {
+    bool saveNotifyConfigChecked(bool enabled, const String& publishUrl, const String& token) {
         Preferences p;
-        if (!_openPrefs(p, "notify", false)) return;
-        p.putBool("enabled", enabled);
-        p.putString("url", publishUrl);
-        p.putString("token", token);
+        if (!_openPrefs(p, "notify", false)) return false;
+        const bool ok = _putAndVerifyBool(p, "enabled", enabled)
+                     && _putAndVerifyString(p, "url", publishUrl)
+                     && _putAndVerifyString(p, "token", token);
         p.end();
+        return ok;
+    }
+
+    void saveNotifyConfig(bool enabled, const String& publishUrl, const String& token) {
+        (void)saveNotifyConfigChecked(enabled, publishUrl, token);
     }
 
     void loadNotifyConfig(bool& enabled, String& publishUrl, String& token) {
@@ -239,6 +277,33 @@ public:
         publishUrl = p.getString("url", "");
         token      = p.getString("token", "");
         p.end();
+    }
+
+    bool saveFactoryDone(bool done) {
+        Preferences p;
+        if (!_openPrefs(p, "system", false)) return false;
+        const bool ok = _putAndVerifyBool(p, "factory_done", done);
+        p.end();
+        return ok;
+    }
+
+    bool loadFactoryDone() {
+        Preferences p;
+        if (!_openPrefs(p, "system", true)) return false;
+        const bool done = p.getBool("factory_done", false);
+        p.end();
+        return done;
+    }
+
+    bool hasAnyPersistedConfig() {
+        if (!_ensureNvs()) return false;
+
+        if (_namespaceHasSensorConfig()) return true;
+        if (_namespaceHasOutputConfig()) return true;
+        if (_namespaceHasWifiConfig()) return true;
+        if (_namespaceHasNotifyConfig()) return true;
+
+        return false;
     }
 
 private:
@@ -339,6 +404,90 @@ private:
     template <typename BlobT>
     bool _writeBlob(Preferences& p, const char* key, const BlobT& blob) {
         return p.putBytes(key, &blob, sizeof(blob)) == sizeof(blob);
+    }
+
+    bool _putAndVerifyString(Preferences& p, const char* key, const String& value) {
+        (void)p.putString(key, value);
+        const String actual = p.getString(key, "__write_failed__");
+        const bool ok = (actual == value);
+        if (!ok) {
+            _lastStatus = String("Preferences write failed for key '") + key + "'";
+        }
+        return ok;
+    }
+
+    bool _putAndVerifyBool(Preferences& p, const char* key, bool value) {
+        (void)p.putBool(key, value);
+        const bool actual = p.getBool(key, !value);
+        const bool ok = (actual == value);
+        if (!ok) {
+            _lastStatus = String("Preferences write failed for key '") + key + "'";
+        }
+        return ok;
+    }
+
+    bool _namespaceExists(const char* ns) {
+        if (!_ensureNvs()) return false;
+
+        nvs_handle_t handle = 0;
+        const esp_err_t err = nvs_open(ns, NVS_READONLY, &handle);
+        if (err == ESP_ERR_NVS_NOT_FOUND) return false;
+        if (err != ESP_OK) {
+            _lastStatus = String("NVS namespace open failed: ") + ns + " (" + esp_err_to_name(err) + ")";
+            return true; // conservative: do not treat unknown namespace state as "clean"
+        }
+        nvs_close(handle);
+        return true;
+    }
+
+    bool _namespaceHasSensorConfig() {
+        if (!_namespaceExists("sensors")) return false;
+
+        Preferences p;
+        if (!_openPrefs(p, "sensors", true)) return true;
+        (void)(p.isKey("blob") || _hasLegacySensorConfig(p));
+        p.end();
+        return true; // existing namespace is enough to suppress factory reset
+    }
+
+    bool _namespaceHasOutputConfig() {
+        if (!_namespaceExists("outputs")) return false;
+
+        Preferences p;
+        if (!_openPrefs(p, "outputs", true)) return true;
+        (void)(p.isKey("blob") || _hasLegacyOutputConfig(p));
+        p.end();
+        return true; // conservative against false negatives
+    }
+
+    bool _namespaceHasWifiConfig() {
+        if (!_namespaceExists("wifi")) return false;
+
+        Preferences p;
+        if (!_openPrefs(p, "wifi", true)) return true;
+        (void)(
+            p.isKey("sta_ssid") ||
+            p.isKey("sta_pass") ||
+            p.isKey("ap_pass") ||
+            p.isKey("ap_only") ||
+            p.isKey("wizard_done")
+        );
+        p.end();
+        return true; // any existing wifi namespace is treated as persisted state
+    }
+
+    bool _namespaceHasNotifyConfig() {
+        if (!_namespaceExists("notify")) return false;
+
+        Preferences p;
+        if (!_openPrefs(p, "notify", true)) return true;
+        (void)(
+            p.isKey("enabled") ||
+            p.isKey("url") ||
+            p.isKey("token")
+        );
+        p.end();
+        return true; // conservative against false negatives
     }
 
     void _fillSensorsBlob(SensorManager& sm, SensorsBlob& blob) {
