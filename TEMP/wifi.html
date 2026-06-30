@@ -45,14 +45,6 @@
       <div id="inlineStatusText" class="msg"></div>
     </div>
 
-    <div class="card" id="choiceStep">
-      <h2>Что сделать?</h2>
-      <div class="stack">
-        <button type="button" onclick="openStep('ap')">Продолжить работу через точку доступа</button>
-        <button type="button" class="secondary" onclick="openStep('sta')">Подключить устройство к домашнему WiFi</button>
-      </div>
-    </div>
-
     <div class="card hidden" id="staRouteStep">
       <h2>Работа через домашнюю сеть WiFi</h2>
       <div id="staRouteText"></div>
@@ -64,7 +56,7 @@
       <div class="stack">
         <button type="button" class="secondary" onclick="finishWizardWithoutPassword()">Продолжить без пароля</button>
         <button type="button" class="danger" onclick="showApPasswordForm(true)">Создать пароль</button>
-        <button type="button" class="light" onclick="openStep('choice')">Назад</button>
+        <button type="button" class="light" onclick="openStep('main')">Назад</button>
       </div>
 
       <div id="apPasswordForm" class="hidden stack">
@@ -83,7 +75,7 @@
       <p>Найдите свою сеть, введите пароль и нажмите «Подключить».</p>
       <div class="stack">
         <button id="scanBtn" type="button" onclick="scanNetworks()">Найти сети</button>
-        <button id="staBackBtn" type="button" class="light" onclick="openStep('choice')">Назад</button>
+        <button id="staBackBtn" type="button" class="light" onclick="openStep('main')">Назад</button>
       </div>
 
       <div id="scanBox" class="hidden">
@@ -180,11 +172,11 @@
     }
 
     function openStep(step){
-      toggleHidden(byId('choiceStep'), step !== 'choice');
+      setMsg('');
       toggleHidden(byId('staRouteStep'), true);
       toggleHidden(byId('apStep'), step !== 'ap');
       toggleHidden(byId('staStep'), step !== 'sta');
-      toggleHidden(byId('staBackBtn'), !(step === 'sta' && currentWifiInfo && currentWifiInfo.wifiWizardPending));
+      toggleHidden(byId('staBackBtn'), step !== 'sta');
     }
     function showApPasswordForm(show){ toggleHidden(byId('apPasswordForm'), !show); }
     function goToApp(){ window.location.href = '/app'; }
@@ -227,8 +219,20 @@
     var infoRetryCount = 0;
     var currentWifiInfo = null;
     var currentEntryMode = 'fallback';
+    var weAreConnecting = false;
+    var connectStartTs = 0;
+    var CONNECT_FRONT_TIMEOUT_MS = 25000;
+    var connectAttemptSsid = '';
     function infoBool(v){ return !!v; }
     function infoVal(obj, key, fallback){ return obj && typeof obj[key] !== 'undefined' ? obj[key] : fallback; }
+    function resetConnectAttemptState(){
+      weAreConnecting = false;
+      connectStartTs = 0;
+      connectAttemptSsid = '';
+    }
+    function sendConnectAck(){
+      try { callApi('/api/v1/wifi/connect/ack', 'POST', null, function(){}); } catch(e) {}
+    }
     function escapeHtml(text){
       return String(text == null ? '' : text)
         .replace(/&/g, '&amp;')
@@ -265,7 +269,6 @@
       var staRouteText = byId('staRouteText');
       if (mode === 'sta') {
         if (staRouteText) staRouteText.innerHTML = buildStaRouteHtml(staSsid, apSsid, apIp);
-        toggleHidden(byId('choiceStep'), true);
         toggleHidden(staRouteStep, false);
         toggleHidden(byId('apStep'), true);
         toggleHidden(byId('staStep'), true);
@@ -283,6 +286,7 @@
         : 'Восстановить подключение к домашней сети';
       html += '<a class="btn" href="/app">Открыть экран управления</a>';
       if (currentEntryMode === 'ap') {
+        html += '<button type="button" onclick="openStep(\'ap\')">Продолжить работу через точку доступа</button>';
         if (wifiMode === 'ap_only') {
           var staConfigured = !!infoVal(sta, 'configured', false) || !!staSsid;
           if (staConfigured) {
@@ -332,6 +336,49 @@
       }, 1500);
     }
 
+    function maybeHandleConnectProgress(info){
+      var sta, ct, state, ip, staName, reason;
+      if (!weAreConnecting) return;
+
+      sta = info && info.sta ? info.sta : {};
+      ct = sta && sta.connectTry ? sta.connectTry : {};
+      state = infoVal(ct, 'state', '');
+
+      if (state === 'success') {
+        ip = infoVal(ct, 'ip', infoVal(sta, 'ip', '-'));
+        staName = infoVal(ct, 'ssid', '') || connectAttemptSsid;
+        resetConnectAttemptState();
+        setBusy(false);
+        setInlineStatus('Подключение успешно. IP: ' + ip + '.', 'ok');
+        setMsg('Отключитесь от точки доступа устройства в настройках WiFi телефона или планшета, затем подключитесь к Вашей домашней сети WiFi (' + staName + '). После этого откройте интерфейс по указанному IP адресу: ' + ip + '. Обратите внимание, что при включенном VPN доступ может не работать.', 'ok');
+        sendConnectAck();
+        return;
+      }
+
+      if (state === 'failed') {
+        reason = infoVal(ct, 'statusText', '') || humanConnectFail(null);
+        if (infoBool(infoVal(ct, 'timedOut', false)) && reason.indexOf('Время ожидания истекло') < 0) {
+          reason += (reason ? ' ' : '') + 'Время ожидания истекло.';
+        }
+        resetConnectAttemptState();
+        setBusy(false);
+        setMsg('');
+        setInlineStatus('Подключение не удалось. ' + reason, 'err');
+        sendConnectAck();
+        return;
+      }
+
+      if (connectStartTs && (Date.now() - connectStartTs) > CONNECT_FRONT_TIMEOUT_MS) {
+        resetConnectAttemptState();
+        setBusy(false);
+        setMsg('');
+        setInlineStatus('Не удалось получить статус подключения, проверьте соединение и обновите страницу.', 'err');
+        return;
+      }
+
+      setTimeout(loadInfo, 1500);
+    }
+
     function loadInfo(){
       callApi('/api/v1/info', 'GET', null, function(info){
         var pending, ap, sta, apSsid, apIp, staSsid, staIp, staConnected, text, entryMode, wifiMode;
@@ -339,6 +386,17 @@
         if (!(info && (typeof info.wifiWizardPending !== 'undefined' || info.ap || info.sta || info.apIP))) {
           infoRetryCount += 1;
           byId('statusText').textContent = 'Не удалось загрузить состояние Wi‑Fi. ' + (infoRetryCount < 4 ? 'Повторяем попытку...' : 'Проверьте соединение и обновите страницу.');
+          if (weAreConnecting) {
+            if (connectStartTs && (Date.now() - connectStartTs) > CONNECT_FRONT_TIMEOUT_MS) {
+              resetConnectAttemptState();
+              setBusy(false);
+              setMsg('');
+              setInlineStatus('Не удалось получить статус подключения, проверьте соединение и обновите страницу.', 'err');
+              return;
+            }
+            setTimeout(loadInfo, 1200);
+            return;
+          }
           if (infoRetryCount < 4) setTimeout(loadInfo, 1200);
           return;
         }
@@ -359,18 +417,14 @@
         entryMode = pending ? 'ap' : (isStaEntry ? 'sta' : 'ap');
         currentEntryMode = entryMode;
         applyEntryMode(entryMode, staSsid, apSsid, apIp);
-        if (pending) {
-          toggleHidden(byId('choiceStep'), false);
-        } else {
-          toggleHidden(byId('choiceStep'), true);
+        if (currentEntryMode === 'sta') {
           toggleHidden(byId('apStep'), true);
           toggleHidden(byId('staStep'), true);
         }
-        toggleHidden(byId('staBackBtn'), !pending);
         text = '';
         if (pending) {
           text = 'Режим: ' + wifiModeLabel(wifiMode) + '. Первичная настройка ещё не завершена. Точка доступа: ' + apSsid + '. Адрес точки доступа: ' + apIp + '.';
-          setTopActions('');
+          setTopActions(buildTopActions(wifiMode));
         } else {
           text = 'Режим: ' + wifiModeLabel(wifiMode) + '. Настройка уже завершена. Точка доступа: ' + apSsid + '. Адрес точки доступа: ' + apIp + '. ';
           if (staConnected) text += 'Домашняя сеть подключена, IP: ' + staIp + '.';
@@ -378,6 +432,7 @@
           setTopActions(buildTopActions(wifiMode));
         }
         byId('statusText').textContent = text;
+        maybeHandleConnectProgress(info);
       });
     }
 
@@ -474,26 +529,45 @@
     function connectSta(){
       var ssid = (byId('ssidInput').value || '').replace(/^\s+|\s+$/g, '');
       var pass = byId('staPass').value || '';
+      var http;
       setActions('');
       if (!ssid) {
         setInlineStatus('Укажите имя сети.', 'err');
         return;
       }
+      if (currentEntryMode === 'sta') {
+        setInlineStatus('Для смены домашней сети откройте эту страницу через точку доступа устройства.', 'err');
+        return;
+      }
+      connectAttemptSsid = ssid;
       setBusy(true, 'Подключение...');
-      setMsg('Подключение к сети...');
+      setMsg('Проверяем подключение к сети...');
       callApi('/api/v1/wifi/connect', 'POST', JSON.stringify({ ssid:ssid, pass:pass }), function(res){
-        setBusy(false);
-        var ip, staName;
-        if (res && res.ok) {
-          ip = res.ip || res.staIP || '-';
-          staName = (res && res.ssid) ? res.ssid : ssid;
-          setInlineStatus('Подключение успешно. IP: ' + ip + '.', 'ok');
-          setMsg('Отключитесь от точки доступа устройства в настройках WiFi телефона или планшета, затем подключитесь к Вашей домашней сети WiFi (' + staName + '). После этого откройте интерфейс по указанному IP адресу: ' + ip + '. Обратите внимание, что при включенном VPN доступ может не работать.', 'ok');
-          loadInfo();
+        http = res ? res.__http : 0;
+
+        if (http === 202 || (res && res.accepted)) {
+          weAreConnecting = true;
+          connectStartTs = Date.now();
+          setMsg('Проверяем подключение к сети...');
+          setTimeout(loadInfo, 1200);
           return;
         }
-        setInlineStatus('Подключение не удалось. ' + humanConnectFail(res), 'err');
-        loadInfo();
+
+        if (http === 409) {
+          weAreConnecting = true;
+          connectStartTs = Date.now();
+          setMsg('Уже идёт попытка подключения, ожидаем результат...');
+          setTimeout(loadInfo, 1200);
+          return;
+        }
+
+        setBusy(false);
+        setMsg('');
+        if (http === 400 && res && res.error === 'empty_ssid') {
+          setInlineStatus('Укажите имя сети.', 'err');
+          return;
+        }
+        setInlineStatus('Не удалось начать подключение. ' + humanConnectFail(res), 'err');
       });
     }
 
