@@ -241,6 +241,13 @@ static void initWiFiLed() {
 
 static void updateWiFiLed() {
     if (PIN_WIFI_LED < 0) return;
+    const uint32_t now = millis();
+
+    if (ackButton.wifiLedOverrideMode() != AckButton::WiFiLedOverrideMode::None) {
+        digitalWrite(PIN_WIFI_LED, ackButton.wifiLedOverrideLevel(now) ? HIGH : LOW);
+        return;
+    }
+
     if (wifiMgr.staConnected) {
         digitalWrite(PIN_WIFI_LED, HIGH);
         return;
@@ -253,7 +260,6 @@ static void updateWiFiLed() {
         return;
     }
 
-    const uint32_t now = millis();
     if (now - lastWifiLedBlinkMs >= WIFI_LED_BLINK_MS) {
         lastWifiLedBlinkMs = now;
         wifiLedBlinkState = !wifiLedBlinkState;
