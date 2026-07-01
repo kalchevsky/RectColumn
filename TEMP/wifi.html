@@ -267,8 +267,14 @@
     }
     function buildStaRouteHtml(staSsid, apSsid, apIp){
       var parts = [];
+      var apName = apSsid || 'Control_System';
+      var apAddr = apIp || '192.168.4.1';
       if (staSsid) parts.push('<p>Сейчас Вы работаете через домашнюю сеть WiFi «' + escapeHtml(staSsid) + '».</p>');
       else parts.push('<p>Сейчас Вы работаете через домашнюю сеть WiFi.</p>');
+      parts.push('<p>Для изменения конфигурации WiFi необходимо зайти через точку доступа. '
+        + 'Для этого Вы должны найти в списке доступных WiFi сетей сеть «'
+        + escapeHtml(apName) + '», подключиться к ней и ввести в адресной строке браузера IP адрес: '
+        + escapeHtml(apAddr) + '</p>');
       return parts.join('');
     }
     function applyEntryMode(mode, staSsid, apSsid, apIp){
