@@ -54,8 +54,8 @@
       <h2>Работа через точку доступа</h2>
       <p>Можно оставить доступ без пароля или сразу защитить точку доступа паролем.</p>
       <div class="stack">
-        <button type="button" class="secondary" onclick="finishWizardWithoutPassword()">Продолжить без пароля</button>
-        <button type="button" class="danger" onclick="showApPasswordForm(true)">Создать пароль</button>
+        <button id="apSkipBtn" type="button" class="secondary" onclick="finishWizardWithoutPassword()">Продолжить без пароля</button>
+        <button id="apPasswordActionBtn" type="button" class="danger" onclick="showApPasswordForm(true)">Создать пароль</button>
         <button type="button" class="light" onclick="openStep('main')">Назад</button>
       </div>
 
@@ -171,6 +171,13 @@
       toggleHidden(box, !html);
     }
 
+    function syncApStepButtons(apProtected){
+      var skipBtn = byId('apSkipBtn');
+      var actionBtn = byId('apPasswordActionBtn');
+      if (skipBtn) toggleHidden(skipBtn, !!apProtected);
+      if (actionBtn) actionBtn.textContent = apProtected ? 'Сменить пароль' : 'Создать пароль';
+    }
+
     function openStep(step){
       setMsg('');
       toggleHidden(byId('staRouteStep'), true);
@@ -280,22 +287,22 @@
     function buildTopActions(wifiMode){
       var html = '';
       var sta = currentWifiInfo && currentWifiInfo.sta ? currentWifiInfo.sta : {};
+      var ap = currentWifiInfo && currentWifiInfo.ap ? currentWifiInfo.ap : {};
       var staSsid = infoVal(sta, 'ssid', '');
-      var restoreLabel = staSsid
-        ? 'Восстановить подключение к сети «' + escapeHtml(staSsid) + '»'
-        : 'Восстановить подключение к домашней сети';
+      var staConnected = infoBool(infoVal(sta, 'connected', false));
+      var staConfigured = !!infoVal(sta, 'configured', false) || !!staSsid;
+      var apProtected = infoBool(infoVal(ap, 'protected', false));
       html += '<a class="btn" href="/app">Открыть экран управления</a>';
       if (currentEntryMode === 'ap') {
-        html += '<button type="button" onclick="openStep(\'ap\')">Продолжить работу через точку доступа</button>';
-        if (wifiMode === 'ap_only') {
-          var staConfigured = !!infoVal(sta, 'configured', false) || !!staSsid;
-          if (staConfigured) {
-            html += '<button type="button" class="secondary" onclick="switchWifiMode(false)">' + restoreLabel + '</button>';
-          }
-          html += '<button type="button" class="secondary" onclick="openStep(\'sta\')">Подключиться к другой сети</button>';
-        } else if (wifiMode === 'sta_ap') {
+        if (staConnected) {
           html += '<button type="button" class="secondary" onclick="switchWifiMode(true)">Отключиться от домашней сети</button>';
+        } else if (staConfigured) {
+          html += '<button type="button" class="secondary" onclick="switchWifiMode(false)">Восстановить подключение</button>';
+          html += '<button type="button" class="secondary" onclick="openStep(\'sta\')">Подключиться к другой сети</button>';
+        } else {
+          html += '<button type="button" class="secondary" onclick="openStep(\'sta\')">Подключиться к домашней сети WiFi</button>';
         }
+        html += '<button type="button" class="danger" onclick="openStep(\'ap\')">' + (apProtected ? 'Сменить пароль точки доступа' : 'Создать пароль') + '</button>';
       }
       return html;
     }
@@ -381,7 +388,7 @@
 
     function loadInfo(){
       callApi('/api/v1/info', 'GET', null, function(info){
-        var pending, ap, sta, apSsid, apIp, staSsid, staIp, staConnected, text, entryMode, wifiMode;
+        var pending, ap, sta, apSsid, apIp, staSsid, staIp, staConnected, staConfigured, apProtected, text, entryMode, wifiMode;
         var currentHost, staHost, isStaEntry;
         if (!(info && (typeof info.wifiWizardPending !== 'undefined' || info.ap || info.sta || info.apIP))) {
           infoRetryCount += 1;
@@ -407,9 +414,11 @@
         sta = info && info.sta ? info.sta : {};
         apSsid = infoVal(ap, 'ssid', 'Control_System');
         apIp = infoVal(ap, 'ip', infoVal(info, 'apIP', '192.168.4.1'));
+        apProtected = infoBool(infoVal(ap, 'protected', false));
         staSsid = infoVal(sta, 'ssid', '');
         staIp = infoVal(sta, 'ip', infoVal(info, 'staIP', '-'));
         staConnected = infoBool(infoVal(sta, 'connected', false));
+        staConfigured = !!infoVal(sta, 'configured', false) || !!staSsid;
         wifiMode = wifiModeCode(info) || (staConnected ? 'sta_ap' : 'ap_only');
         currentHost = normalizeHost(window.location && window.location.hostname);
         staHost = normalizeHost(staIp);
@@ -421,6 +430,7 @@
           toggleHidden(byId('apStep'), true);
           toggleHidden(byId('staStep'), true);
         }
+        syncApStepButtons(apProtected);
         text = '';
         if (pending) {
           text = 'Режим: ' + wifiModeLabel(wifiMode) + '. Первичная настройка ещё не завершена. Точка доступа: ' + apSsid + '. Адрес точки доступа: ' + apIp + '.';
