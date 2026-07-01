@@ -359,6 +359,13 @@ void loop() {
     }
 
     ackButton.loop(outputMgr, sensorMgr, &eventLog);
+    if (ackButton.consumeFactoryResetReleasePending()) {
+        eventLog.add("factory reset start",
+                     sensorMgr.getT1(), sensorMgr.getT2(), sensorMgr.getT3(), sensorMgr.getDT());
+        FactoryDefaults::applyFactoryDefaults(storage, sensorMgr, outputMgr, &eventLog);
+        ESP.restart();
+        return;
+    }
     remoteNotifier.loop();
 
     if (outputMgr.consumeManualStateDirty()) {
