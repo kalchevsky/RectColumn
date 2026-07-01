@@ -455,7 +455,7 @@ public:
     void acknowledgeCurrentAlarms(const SensorManager& sm) {
         for (int si = 0; si < SEN_COUNT; si++) {
             SensorBase* s = sm.s[si];
-            const uint8_t active = s ? s->alarmMask() : 0;
+            const uint8_t active = _effectiveAlarmMask(s);
             _ackedAlarmMask[si] |= active;
         }
         SensorBase* dtSensor = sm.s[SEN_DT];
@@ -471,7 +471,7 @@ public:
         for (int si = 0; si < SEN_COUNT; si++) {
             SensorBase* s = sm.s[si];
             if (!s) continue;
-            count += _countAlarmBits(s->alarmMask());
+            count += _countAlarmBits(_effectiveAlarmMask(s));
         }
         return count;
     }
@@ -482,7 +482,7 @@ public:
         for (int si = 0; si < SEN_COUNT; si++) {
             SensorBase* s = sm.s[si];
             if (!s) continue;
-            const uint8_t mask = (uint8_t)(s->alarmMask() & (uint8_t)(~_ackedAlarmMask[si]));
+            const uint8_t mask = (uint8_t)(_effectiveAlarmMask(s) & (uint8_t)(~_ackedAlarmMask[si]));
             count += _countAlarmBits(mask);
         }
         return count;
@@ -493,7 +493,7 @@ public:
         for (int si = 0; si < SEN_COUNT; si++) {
             SensorBase* s = sm.s[si];
             if (!s) continue;
-            const uint8_t active = s->alarmMask();
+            const uint8_t active = _effectiveAlarmMask(s);
             if ((active & (uint8_t)(~_ackedAlarmMask[si])) != 0) return true;
         }
         return false;
@@ -504,7 +504,7 @@ public:
         if (sensorIdx >= SEN_COUNT) return 0;
         SensorBase* s = sm.s[sensorIdx];
         if (!s) return 0;
-        return (uint8_t)(s->alarmMask() & (uint8_t)(~_ackedAlarmMask[sensorIdx]));
+        return (uint8_t)(_effectiveAlarmMask(s) & (uint8_t)(~_ackedAlarmMask[sensorIdx]));
     }
 
     void clearSensorLostAcknowledgement(uint8_t sensorIdx) {
@@ -1082,10 +1082,15 @@ private:
         return count;
     }
 
+    uint8_t _effectiveAlarmMask(const SensorBase* s) const {
+        if (!s || !s->enabled) return 0;
+        return s->alarmMask();
+    }
+
     void _pruneAcknowledged(const SensorManager& sm) {
         for (int si = 0; si < SEN_COUNT; si++) {
             SensorBase* s = sm.s[si];
-            const uint8_t active = s ? s->alarmMask() : 0;
+            const uint8_t active = _effectiveAlarmMask(s);
             _ackedAlarmMask[si] &= active;
         }
         SensorBase* dtSensor = sm.s[SEN_DT];
