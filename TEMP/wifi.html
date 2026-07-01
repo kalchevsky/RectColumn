@@ -61,9 +61,9 @@
 
       <div id="apPasswordForm" class="hidden stack">
         <label for="apPass1">Новый пароль</label>
-        <input id="apPass1" type="password" minlength="8" maxlength="63" placeholder="8-63 символа">
+        <input id="apPass1" type="text" minlength="8" maxlength="63" placeholder="8-63 символа">
         <label for="apPass2">Повторите пароль</label>
-        <input id="apPass2" type="password" minlength="8" maxlength="63" placeholder="Повтор пароля">
+        <input id="apPass2" type="text" minlength="8" maxlength="63" placeholder="Повтор пароля">
         <div class="msg err">Подключение без пароля будет невозможно. Не потеряйте пароль. После изменения пароля может потребоваться переподключение к точке доступа.</div>
         <button type="button" onclick="saveApPassword()">Сохранить</button>
         <button type="button" class="light" onclick="showApPasswordForm(false)">Отменить</button>
@@ -86,7 +86,7 @@
       <label for="ssidInput">Имя сети</label>
       <input id="ssidInput" placeholder="SSID">
       <label for="staPass">Пароль</label>
-      <input id="staPass" type="password" placeholder="Пароль WiFi">
+      <input id="staPass" type="text" placeholder="Пароль WiFi">
       <div class="stack">
         <button id="connectBtn" type="button" onclick="connectSta()">Подключить</button>
       </div>
