@@ -1649,8 +1649,8 @@ private:
     }
 
     static String _alarmReasonText(uint8_t sensorIdx, uint8_t alarmIdx) {
-        if (sensorIdx == SEN_L && alarmIdx == 0) return "Авария уровня: цепь L разомкнута";
-        if (sensorIdx == SEN_F && alarmIdx == 0) return "Авария потока: цепь F разомкнута / нет потока";
+        if (sensorIdx == SEN_L && alarmIdx == 0) return "Уровень (L) max!";
+        if (sensorIdx == SEN_F && alarmIdx == 0) return "Нет протока!";
         return _alarmReasonSensorTitle(sensorIdx) + " · " + _fixedAlarmLabel(alarmIdx);
     }
 
