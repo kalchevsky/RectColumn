@@ -775,6 +775,17 @@ function setMute(muted){
     loadState(function(){ render(); });
   });
 }
+function testSound(){
+  clearNotice();
+  api('/api/v1/sound/test', { method:'POST' }, function(res){
+    if (res && res.ok) {
+      if (res.ch4 || res.ch5) setNotice('Проверка звука запущена', NOTICE_AUTOHIDE_MS);
+      else setNotice('Включите звонок или зуммер, чтобы проверить звук', NOTICE_AUTOHIDE_MS);
+      return;
+    }
+    setResultNotice(res, 'Проверка звука запущена', 'Не удалось запустить проверку звука.');
+  });
+}
 function muteAll(){ setMute(true); }
 function isAudibleAlarmActiveRaw(){
   var s = state.lastState || {};
@@ -1473,6 +1484,7 @@ function renderSound(){
   html += '<div class="small">CH4 - внешний звонок. CH5 - встроенный зуммер.</div>';
   html += '<label style="display:flex;gap:8px;align-items:center;margin-top:12px"><input id="snd_ch4_en" type="checkbox"' + (s.ch4Enabled ? ' checked' : '') + '><span>CH4: звонок включён</span></label>';
   html += '<label style="display:flex;gap:8px;align-items:center;margin-top:12px"><input id="snd_ch5_en" type="checkbox"' + (s.ch5Enabled ? ' checked' : '') + '><span>CH5: зуммер включён</span></label>';
+  html += '<button class="btn light" onclick="testSound()">Проверить звук</button>';
   html += '<div class="small">Квитирование выполняется кнопкой на главной странице и отключает только текущий звук тревоги. Настройки звука ниже определяют, какие звуковые каналы доступны системе.</div>';
   html += '<button class="btn" onclick="saveSoundConfig()">Сохранить настройки звука</button>';
   html += '<button class="btn light" onclick="go(\'#/menu\')">Назад</button>';

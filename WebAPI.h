@@ -331,6 +331,30 @@ private:
                 _sendDoc(req, 200, resp);
             });
 
+        _server.on("/api/v1/sound/test", HTTP_POST, [this](AsyncWebServerRequest* req) {
+            const uint32_t pulseMs = 400UL;
+            bool pulsedCh4 = false;
+            bool pulsedCh5 = false;
+
+            if (_om->ch4Enabled && _om->out[OUT_CH4]) {
+                _om->out[OUT_CH4]->requestPulse(pulseMs);
+                pulsedCh4 = true;
+            }
+            if (_om->ch5Enabled && _om->out[OUT_CH5]) {
+                _om->out[OUT_CH5]->requestPulse(pulseMs);
+                pulsedCh5 = true;
+            }
+
+            _log->add("Проверка звука (CH4/CH5)",
+                      _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
+
+            DynamicJsonDocument resp(256);
+            resp["ok"] = true;
+            resp["ch4"] = pulsedCh4;
+            resp["ch5"] = pulsedCh5;
+            _sendDoc(req, 200, resp);
+        });
+
         auto handleAckRequest = [this](AsyncWebServerRequest* req) {
             const bool compatGet = (req->method() == HTTP_GET);
 
@@ -1853,6 +1877,7 @@ private:
         endpoints.add("/api/v1/stop/release");
         endpoints.add("/api/v1/stop/release/");
         endpoints.add("/api/v1/mute");
+        endpoints.add("/api/v1/sound/test");
         endpoints.add("/api/v1/ack");
         endpoints.add("/api/v1/ack/");
         endpoints.add("/api/v1/safety/reset");
