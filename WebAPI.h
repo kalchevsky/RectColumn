@@ -1656,7 +1656,13 @@ private:
     }
 
     static const char* _pressureAlarmLabel(uint8_t idx) {
-        return idx >= 2 ? "ALmax" : "ALmin";
+        switch (idx) {
+            case 0: return "ALmin1";
+            case 1: return "ALmin2";
+            case 2: return "ALmax1";
+            case 3: return "ALmax2";
+            default: return idx >= 2 ? "ALmax" : "ALmin";
+        }
     }
 
     static String _formatFixedNumber(float value, uint8_t decimals = 1) {

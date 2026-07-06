@@ -221,7 +221,13 @@ private:
     }
 
     static const char* _pressureAlarmToken(uint8_t bitIdx) {
-        return bitIdx >= 2 ? "ALmax" : "ALmin";
+        switch (bitIdx) {
+            case 0: return "ALmin1";
+            case 1: return "ALmin2";
+            case 2: return "ALmax1";
+            case 3: return "ALmax2";
+            default: return bitIdx >= 2 ? "ALmax" : "ALmin";
+        }
     }
 
     static constexpr float CURRENT_SENSOR_CAL_ZERO_PERCENT = 31.27f;

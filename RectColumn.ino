@@ -115,7 +115,13 @@ static String formatFixedNumber(float value, uint8_t decimals = 1) {
 }
 
 static const char* pressureAlarmLabel(uint8_t bitIdx) {
-    return bitIdx >= 2 ? "ALmax" : "ALmin";
+    switch (bitIdx) {
+        case 0: return "ALmin1";
+        case 1: return "ALmin2";
+        case 2: return "ALmax1";
+        case 3: return "ALmax2";
+        default: return bitIdx >= 2 ? "ALmax" : "ALmin";
+    }
 }
 
 static uint8_t selectPrimaryUserAlarmBit(uint8_t bits) {
