@@ -916,8 +916,9 @@ private:
             const AlarmLevel& a = s->alarm[ai];
             if (!a.enabled || !a.triggered) continue;
             if (outText.length() > 0) outText += "|";
+            const uint8_t num = a.isMax ? (ai - 1) : (ai + 1);
             outText += a.isMax ? "ALmax" : "ALmin";
-            outText += String(ai + 1);
+            outText += String(num);
         }
         if (outText.length() == 0) outText = "none";
         return outText;
