@@ -1117,7 +1117,7 @@ private:
         _syncRuntimeStateNow();
         _stor->saveSensors(*_sm);
         _om->beepAcceptedCommand();
-        _log->add("Настройка датчика: " + s->name + " " + String(s->enabled ? "включён" : "отключён"),
+        _log->add(s->name + String(s->enabled ? " включен пользователем" : " отключен пользователем"),
                   _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
         if (logOperatorRestore) {
             _log->add("Датчик " + s->name + " восстановлен оператором",

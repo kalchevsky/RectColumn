@@ -31,9 +31,11 @@ public:
         const bool traceEvent =
             event.startsWith("RELAY_OFF") ||
             event.startsWith("Notify failed") ||
-            event.startsWith("Настройка датчика:") ||
+            event.indexOf("пользователем") >= 0 ||
             event.indexOf("тревога") >= 0 ||
-            event.indexOf("Авария") >= 0;
+            event.indexOf("Авария") >= 0 ||
+            event.indexOf("уровня") >= 0 ||
+            event.startsWith("Цепь L");
         const unsigned traceLen = (unsigned)event.length();
 #endif
 
