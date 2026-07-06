@@ -1153,7 +1153,7 @@ private:
         _syncRuntimeStateNow();
         _stor->saveSensors(*_sm);
         _om->beepAcceptedCommand();
-        _log->add("Настройка тревоги: " + s->name + " #" + String(ai),
+        _log->add("Настройка тревоги: " + s->name + " " + _fixedAlarmLabel(ai),
                   _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
         _sendOk(req);
     }
