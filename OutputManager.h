@@ -947,6 +947,7 @@ private:
     void _logRelayOff(EventLog* log, SensorManager& sm, uint8_t outIdx) {
         if (!log || outIdx >= OUT_COUNT || !out[outIdx] || !_isMainOutput(outIdx)) return;
 
+#if STABILITY_BOOT_DIAG
         const uint32_t now = millis();
         const uint32_t sensorMask = _lastForbid[outIdx];
         const uint32_t safetyMask = _safetyForbid[outIdx];
@@ -1018,19 +1019,12 @@ private:
         msg += " pressureState=";
         msg += _formatSensorState(sm.s[SEN_P]);
 
-#if STABILITY_BOOT_DIAG
         Serial.printf("[CTRL][relay_off] ch=%s sensorMask=%lu safetyMask=%lu reason=%s\n",
                       out[outIdx]->name,
                       (unsigned long)sensorMask,
                       (unsigned long)safetyMask,
                       msg.c_str());
 #endif
-
-        log->add(msg,
-                 sm.getT1(),
-                 sm.getT2(),
-                 sm.getT3(),
-                 sm.getDT());
     }
 
     static void _appendReason(String& dst, const char* text) {

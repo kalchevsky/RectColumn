@@ -123,7 +123,6 @@ public:
 
     void loop() {
         if (!_wifi || !_sm || !_om) return;
-        _flushQueuedFailure();
 
         for (int si = 0; si < SEN_COUNT; si++) {
             const uint8_t curMask = _audibleAlarmMask(si);
@@ -132,9 +131,7 @@ public:
                 String err;
                 const uint8_t alarmBit = _selectPrimaryAlarmBit(newBits);
                 const String message = _alarmText(si, alarmBit);
-                if (!_scheduleNotify("Система управления", message, "4", "warning,rotating_light", err)) {
-                    _logSendFailure(err);
-                }
+                (void)_scheduleNotify("Система управления", message, "4", "warning,rotating_light", err);
             }
             _lastAlarmMask[si] = curMask;
         }
@@ -151,10 +148,6 @@ private:
     String  _publishUrl;
     String  _accessToken;
     uint8_t _lastAlarmMask[SEN_COUNT] = {};
-    uint32_t _lastFailLogMs = 0;
-    portMUX_TYPE _failMux = portMUX_INITIALIZER_UNLOCKED;
-    bool _queuedFailPending = false;
-    char _queuedFailText[192] = {};
     mutable portMUX_TYPE _cfgMux = portMUX_INITIALIZER_UNLOCKED;
     bool _enabledSnap = false;
     char _publishUrlSnap[160] = {};
@@ -609,44 +602,10 @@ private:
     }
 
     void _queueSendFailure(const char* err) {
-        portENTER_CRITICAL(&_failMux);
-        _queuedFailPending = true;
-        if (!err || !err[0]) err = "unknown";
-        strncpy(_queuedFailText, err, sizeof(_queuedFailText) - 1);
-        _queuedFailText[sizeof(_queuedFailText) - 1] = '\0';
-        portEXIT_CRITICAL(&_failMux);
 #if STABILITY_BOOT_DIAG
-        Serial.printf("[NTFY] queued failure: %s\n", _queuedFailText);
+        Serial.printf("[NTFY] queued failure: %s\n", (err && err[0]) ? err : "unknown");
+#else
+        (void)err;
 #endif
-    }
-
-    void _flushQueuedFailure() {
-        char errBuf[sizeof(_queuedFailText)] = {};
-        bool hasQueuedFailure = false;
-
-        portENTER_CRITICAL(&_failMux);
-        if (_queuedFailPending) {
-            strncpy(errBuf, _queuedFailText, sizeof(errBuf) - 1);
-            errBuf[sizeof(errBuf) - 1] = '\0';
-            _queuedFailPending = false;
-            _queuedFailText[0] = '\0';
-            hasQueuedFailure = true;
-        }
-        portEXIT_CRITICAL(&_failMux);
-
-        if (!hasQueuedFailure) return;
-        _logSendFailure(String(errBuf));
-    }
-
-    void _logSendFailure(const String& err) {
-        if (!_log) return;
-        const uint32_t now = millis();
-        if (now - _lastFailLogMs < 10000UL) return;
-        _lastFailLogMs = now;
-        _log->add(String("Notify failed: ") + err,
-                  _sm ? _sm->getT1() : NAN,
-                  _sm ? _sm->getT2() : NAN,
-                  _sm ? _sm->getT3() : NAN,
-                  _sm ? _sm->getDT() : NAN);
     }
 };
