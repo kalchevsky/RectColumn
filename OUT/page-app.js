@@ -682,16 +682,19 @@ function loadLog(cb){
     var arr = [];
     if (res && res.entries && res.entries.length) arr = res.entries;
     else if (res && typeof res.length !== 'undefined') arr = res;
-    arr = (arr || []).slice();
+    arr = (arr || []).slice().map(function(e, i){
+      return { item:e, __i:i };
+    });
     // UI requirement: newest events first.  Firmware now returns this order,
     // and this client-side sort keeps the display correct even if an older
     // backend still returns chronological order.
     arr.sort(function(a, b){
-      var am = Number(a && (typeof a.ms !== 'undefined' ? a.ms : a.absMs));
-      var bm = Number(b && (typeof b.ms !== 'undefined' ? b.ms : b.absMs));
+      var am = Number(a && a.item && (typeof a.item.ms !== 'undefined' ? a.item.ms : a.item.absMs));
+      var bm = Number(b && b.item && (typeof b.item.ms !== 'undefined' ? b.item.ms : b.item.absMs));
       if (!isNaN(am) && !isNaN(bm) && am !== bm) return bm - am;
-      return 0;
+      return a.__i - b.__i;
     });
+    arr = arr.map(function(entry){ return entry.item; });
     state.logEntries = arr;
     state.logLoaded = true;
     cb && cb(state.logEntries);
