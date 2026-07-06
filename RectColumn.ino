@@ -48,6 +48,7 @@ uint8_t prevAlarmMask[SEN_COUNT]   = {};
 uint32_t lastHeartbeatMs = 0;
 uint32_t lastWifiLedBlinkMs = 0;
 bool wifiLedBlinkState = false;
+bool wifiLedOff = false;
 
 static const char* resetReasonText(esp_reset_reason_t reason) {
     switch (reason) {
@@ -248,6 +249,11 @@ static void updateWiFiLed() {
         return;
     }
 
+    if (wifiLedOff) {
+        digitalWrite(PIN_WIFI_LED, LOW);
+        return;
+    }
+
     if (wifiMgr.staConnected) {
         digitalWrite(PIN_WIFI_LED, HIGH);
         return;
@@ -302,6 +308,7 @@ void setup() {
     confirmMgr.begin(outputMgr);
     emulator.begin();
     initWiFiLed();
+    wifiLedOff = storage.loadWifiLedOff();
 
     wifiMgr.begin(storage, eventLog);
 
@@ -363,6 +370,14 @@ void loop() {
         eventLog.add("factory reset start",
                      sensorMgr.getT1(), sensorMgr.getT2(), sensorMgr.getT3(), sensorMgr.getDT());
         FactoryDefaults::applyFactoryDefaults(storage, sensorMgr, outputMgr, &eventLog);
+        // Подтверждающий сигнал после factory reset: beepAcceptedCommand() здесь
+        // уже заглушён дефолтами soundMuted/ch5Enabled, поэтому даём разовый pulse.
+        Output* buzzer = (OUT_CH5 < OUT_COUNT) ? outputMgr.out[OUT_CH5] : nullptr;
+        if (buzzer) {
+            buzzer->enabled = true;
+            buzzer->requestPulse(CMD_BEEP_MS);
+            delay(CMD_BEEP_MS + 40UL);
+        }
         ESP.restart();
         return;
     }

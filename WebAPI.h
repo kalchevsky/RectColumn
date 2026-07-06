@@ -25,6 +25,8 @@
 #include "WebPageAppCss.h"
 #include "WebPageAppJs.h"
 
+extern bool wifiLedOff;
+
 class WebAPI {
 public:
     explicit WebAPI(uint16_t port = 80) : _server(port) {}
@@ -732,6 +734,44 @@ private:
             resp["staConfigured"] = _wifi->staConfigured();
             _sendDoc(req, 200, resp);
         });
+
+        _server.on("/api/v1/wifi/led", HTTP_POST,
+            [](AsyncWebServerRequest*) {}, nullptr,
+            [this](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t) {
+                DynamicJsonDocument doc(128);
+                if (!_parseJson(req, data, len, doc)) return;
+                if (!doc.containsKey("off")) {
+                    _sendError(req, 400, "bad_params", "off is required");
+                    return;
+                }
+
+                bool off = false;
+                JsonVariant offVar = doc["off"];
+                if (offVar.is<bool>()) {
+                    off = offVar.as<bool>();
+                } else {
+                    String raw = offVar.as<String>();
+                    raw.trim();
+                    raw.toLowerCase();
+                    if (raw == "true" || raw == "1") off = true;
+                    else if (raw == "false" || raw == "0") off = false;
+                    else {
+                        _sendError(req, 400, "bad_params", "off must be true/false/1/0");
+                        return;
+                    }
+                }
+
+                _stor->saveWifiLedOff(off);
+                wifiLedOff = off;
+                _om->beepAcceptedCommand();
+                _log->add(String("LED-индикация: ") + (off ? "выключена" : "включена"),
+                          _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
+
+                DynamicJsonDocument resp(192);
+                resp["ok"] = true;
+                resp["ledIndicationOff"] = off;
+                _sendDoc(req, 200, resp);
+            });
 
         _server.on("/api/v1/wifi/wizard/complete", HTTP_POST,
             [](AsyncWebServerRequest*) {}, nullptr,
@@ -1793,6 +1833,7 @@ private:
         root["apStatusText"] = _wifi->apStatusText();
         root["staIP"]      = _wifi->staIP();
         root["wifiMode"]   = _wifi->wifiMode();
+        root["ledIndicationOff"] = (_stor ? _stor->loadWifiLedOff() : false);
         root["rssi"]       = _wifi->rssi();
         root["staRssi"]    = _wifi->staRssi();
         root["apRssi"]     = _wifi->apRssi();
@@ -1887,6 +1928,7 @@ private:
         endpoints.add("/api/v1/wifi/scan");
         endpoints.add("/api/v1/wifi/connect");
         endpoints.add("/api/v1/wifi/ap");
+        endpoints.add("/api/v1/wifi/led");
         endpoints.add("/api/v1/wifi/ap_only");
         endpoints.add("/api/v1/wifi/sta_enable");
         endpoints.add("/api/v1/wifi/wizard/complete");

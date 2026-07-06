@@ -23,6 +23,12 @@ inline bool needsFactoryDefaults(Storage& storage) {
 inline void _applyOffOnlySensor(SensorBase* sensor) {
     if (!sensor) return;
     sensor->enabled = FactoryDefaultsTable::OFF_ONLY_ENABLED;
+    sensor->periodMs = FactoryDefaultsTable::OFF_ONLY_PERIOD_MS;
+    sensor->alarmDelayMs = FactoryDefaultsTable::OFF_ONLY_ALARM_DELAY_MS;
+    sensor->ctrlDelayMs = FactoryDefaultsTable::OFF_ONLY_CTRL_DELAY_MS;
+    for (int oi = 0; oi < N_CTRL_OUT; oi++) {
+        sensor->ctrl[oi].enabled = FactoryDefaultsTable::OFF_ONLY_CTRL_ENABLED;
+    }
     for (int ai = 0; ai < N_ALARMS; ai++) {
         sensor->alarm[ai].enabled = FactoryDefaultsTable::OFF_ONLY_ALARM_ENABLED;
     }
@@ -33,6 +39,7 @@ inline void _applyTempFamilyProfile(SensorBase* sensor) {
 
     const auto& preset = FactoryDefaultsTable::TEMP_FAMILY;
     sensor->enabled = preset.enabled;
+    sensor->periodMs = preset.periodMs;
     sensor->alarmDelayMs = preset.alarmDelayMs;
     sensor->ctrlDelayMs = preset.ctrlDelayMs;
 
@@ -52,6 +59,8 @@ inline void _applyTempFamilyProfile(SensorBase* sensor) {
 
     for (int ai = 2; ai < N_ALARMS; ai++) {
         sensor->alarm[ai].enabled = false;
+        sensor->alarm[ai].threshold = 100.0f;
+        sensor->alarm[ai].isMax = true;
     }
 }
 
@@ -60,6 +69,7 @@ inline void _applyPressureProfile(SensorBase* sensor) {
 
     const auto& preset = FactoryDefaultsTable::PRESSURE;
     sensor->enabled = preset.enabled;
+    sensor->periodMs = preset.periodMs;
     sensor->alarmDelayMs = preset.alarmDelayMs;
     sensor->ctrlDelayMs = preset.ctrlDelayMs;
 
@@ -71,6 +81,8 @@ inline void _applyPressureProfile(SensorBase* sensor) {
 
     for (int ai = 0; ai < N_ALARMS; ai++) {
         sensor->alarm[ai].enabled = preset.alarmsEnabled[ai];
+        sensor->alarm[ai].threshold = preset.alarmThreshold[ai];
+        sensor->alarm[ai].isMax = preset.alarmIsMax[ai];
     }
 }
 
@@ -134,6 +146,9 @@ inline bool applyFactoryDefaults(Storage& storage,
     _applyOffOnlySensor(sm.f);
     _applyOffOnlySensor(sm.v);
     _applyOffOnlySensor(sm.c);
+    if (sm.c) {
+        sm.c->alarm[0].threshold = FactoryDefaultsTable::CURRENT_ALARM_THRESHOLD_PERCENT;
+    }
 
     _syncCtrlLogicFromOutputModes(sm, om);
 

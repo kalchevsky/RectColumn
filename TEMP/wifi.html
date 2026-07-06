@@ -22,6 +22,7 @@
     .light{background:#2a2f3a;color:#e5e7eb}
     .danger{background:#b45309;color:#fff}
     .stack > *{margin-top:12px}
+    #ledIndicationRow{margin-top:24px}
     .hidden{display:none}
     .msg{padding:14px;border-radius:14px;background:#1c2230;color:#e5e7eb;font-size:18px;line-height:1.45}
     .err{background:#3b1418;color:#fca5a5}
@@ -30,6 +31,13 @@
     .small{font-size:15px;color:#94a3b8}
     ul.networks{list-style:none;padding:0;margin:12px 0 0}
     ul.networks li{padding:14px;border:1px solid #2a2f3a;border-radius:14px;margin:10px 0;font-size:18px;background:#1c2230;color:#e5e7eb}
+    .toggle-row{display:flex;align-items:center;justify-content:space-between;gap:16px;font-size:17px;font-weight:700;margin:0;cursor:pointer}
+    .toggle-input{position:absolute;opacity:0;width:0;height:0}
+    .toggle-track{position:relative;flex:0 0 auto;width:44px;height:24px;border-radius:12px;background:#334155;border:1px solid #3a4151;transition:background .18s ease, border-color .18s ease}
+    .toggle-track::after{content:"";position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.4);transition:transform .18s ease}
+    .toggle-input:checked + .toggle-track{background:#2563eb;border-color:#2563eb}
+    .toggle-input:checked + .toggle-track::after{transform:translateX(20px)}
+    .toggle-input:focus-visible + .toggle-track{outline:2px solid #2563eb;outline-offset:2px}
   </style>
 </head>
 <body>
@@ -39,6 +47,13 @@
       <h1>Настройка WiFi</h1>
       <p id="statusText">Загрузка состояния...</p>
       <div id="topActions" class="stack hidden"></div>
+      <div id="ledIndicationRow" class="stack hidden">
+        <label class="toggle-row" role="switch" aria-checked="false">
+          <span>LED индикация WiFi</span>
+          <input type="checkbox" id="ledIndicationOff" class="toggle-input">
+          <span class="toggle-track" aria-hidden="true"></span>
+        </label>
+      </div>
     </div>
 
     <div id="inlineStatus" class="card hidden">
@@ -113,6 +128,7 @@
       toggleHidden(card, !text);
       el.className = 'msg' + (cls ? ' ' + cls : '');
       el.textContent = text || '';
+      if (text && card) card.scrollIntoView({ behavior:'smooth', block:'nearest' });
     }
 
     function setInlineStatus(text, cls){
@@ -166,8 +182,10 @@
 
     function setTopActions(html){
       var box = byId('topActions');
+      var ledRow = byId('ledIndicationRow');
       if (!box) return;
       box.innerHTML = html || '';
+      if (ledRow) box.appendChild(ledRow);
       toggleHidden(box, !html);
     }
 
@@ -185,10 +203,63 @@
       toggleHidden(byId('staStep'), step !== 'sta');
       toggleHidden(byId('staBackBtn'), step !== 'sta');
     }
-    function showApPasswordForm(show){ toggleHidden(byId('apPasswordForm'), !show); }
+    function goApStep(){
+      openStep('ap');
+      var doScroll = function(){
+        var el = byId('apStep');
+        if (el && el.scrollIntoView) el.scrollIntoView({behavior:'smooth', block:'start'});
+      };
+      if (window.requestAnimationFrame) {
+        requestAnimationFrame(function(){ requestAnimationFrame(doScroll); });
+      } else {
+        setTimeout(doScroll, 0);
+      }
+    }
+    function goStaStep(){
+      openStep('sta');
+      var doScroll = function(){
+        var el = byId('staStep');
+        if (el && el.scrollIntoView) el.scrollIntoView({behavior:'smooth', block:'start'});
+      };
+      if (window.requestAnimationFrame) {
+        requestAnimationFrame(function(){ requestAnimationFrame(doScroll); });
+      } else {
+        setTimeout(doScroll, 0);
+      }
+    }
+    function showApPasswordForm(show){
+      toggleHidden(byId('apPasswordForm'), !show);
+      if (show) {
+        var el = byId('apPass1');
+        if (el && el.scrollIntoView) el.scrollIntoView({behavior:'smooth', block:'center'});
+      }
+    }
     function goToApp(){ window.location.href = '/app'; }
     function openStaApp(ip){ if (!ip || ip === '-') { goToApp(); return; } window.location.href = 'http://' + ip + '/app'; }
     function showDisconnectHint(){ setMsg('Отключитесь от точки доступа устройства в настройках WiFi телефона или планшета, затем подключитесь к Вашей домашней сети WiFi. После этого откройте интерфейс по указанному IP адресу. Обратите внимание, что при включенном VPN доступ может не работать.', 'ok'); }
+    function syncLedToggleAria(cb){
+      var row = cb && cb.closest ? cb.closest('.toggle-row') : null;
+      if (row) row.setAttribute('aria-checked', cb.checked ? 'true' : 'false');
+    }
+    function onLedIndicationToggle(cb){
+      var wantOn = !!(cb && cb.checked);
+      if (!cb) return;
+      syncLedToggleAria(cb);
+      cb.disabled = true;
+      // UI checked = LED ON, backend field off = !wantOn.
+      callApi('/api/v1/wifi/led', 'POST', JSON.stringify({ off: !wantOn }), function(res){
+        cb.disabled = false;
+        if (res && res.ok) {
+          cb.checked = !res.ledIndicationOff;
+          syncLedToggleAria(cb);
+          setInlineStatus('LED-индикация сохранена.', 'ok');
+          return;
+        }
+        cb.checked = !wantOn;
+        syncLedToggleAria(cb);
+        setInlineStatus((res && (res.error || res.err)) ? (res.error || res.err) : 'Ошибка сохранения LED-индикации.', 'err');
+      });
+    }
 
     function callApi(url, method, body, cb){
       var xhr = new XMLHttpRequest();
@@ -304,11 +375,11 @@
           html += '<button type="button" class="secondary" onclick="switchWifiMode(true)">Отключиться от домашней сети</button>';
         } else if (staConfigured) {
           html += '<button type="button" class="secondary" onclick="switchWifiMode(false)">Восстановить подключение</button>';
-          html += '<button type="button" class="secondary" onclick="openStep(\'sta\')">Подключиться к другой сети</button>';
+          html += '<button type="button" class="secondary" onclick="goStaStep()">Подключиться к другой сети</button>';
         } else {
-          html += '<button type="button" class="secondary" onclick="openStep(\'sta\')">Подключиться к домашней сети WiFi</button>';
+          html += '<button type="button" class="secondary" onclick="goStaStep()">Подключиться к домашней сети WiFi</button>';
         }
-        html += '<button type="button" class="danger" onclick="openStep(\'ap\')">' + (apProtected ? 'Сменить пароль точки доступа' : 'Создать пароль') + '</button>';
+        html += '<button type="button" class="danger" onclick="goApStep()">' + (apProtected ? 'Сменить пароль точки доступа' : 'Создать пароль') + '</button>';
       }
       return html;
     }
@@ -426,6 +497,8 @@
         staConnected = infoBool(infoVal(sta, 'connected', false));
         staConfigured = !!infoVal(sta, 'configured', false) || !!staSsid;
         wifiMode = wifiModeCode(info) || (staConnected ? 'sta_ap' : 'ap_only');
+        var ledRow = byId('ledIndicationRow');
+        var ledCb = byId('ledIndicationOff');
         currentHost = normalizeHost(window.location && window.location.hostname);
         staHost = normalizeHost(staIp);
         isStaEntry = staConnected && currentHost && staHost && (currentHost === staHost);
@@ -436,6 +509,12 @@
           toggleHidden(byId('apStep'), true);
           toggleHidden(byId('staStep'), true);
         }
+        if (ledCb) {
+          ledCb.checked = !infoVal(info, 'ledIndicationOff', false); // UI checked = LED ON = not off.
+          syncLedToggleAria(ledCb);
+          ledCb.onchange = function(){ onLedIndicationToggle(ledCb); };
+        }
+        if (ledRow) toggleHidden(ledRow, false);
         syncApStepButtons(apProtected);
         text = '';
         if (pending) {

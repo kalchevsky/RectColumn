@@ -111,6 +111,26 @@ public:
         return enabled;
     }
 
+    bool saveWifiLedOffChecked(bool enabled) {
+        Preferences p;
+        if (!_openPrefs(p, "wifi", false)) return false;
+        const bool ok = _putAndVerifyBool(p, "led_off", enabled);
+        p.end();
+        return ok;
+    }
+
+    void saveWifiLedOff(bool enabled) {
+        (void)saveWifiLedOffChecked(enabled);
+    }
+
+    bool loadWifiLedOff() {
+        Preferences p;
+        if (!_openPrefs(p, "wifi", true)) return false;
+        bool enabled = p.getBool("led_off", false);
+        p.end();
+        return enabled;
+    }
+
     bool saveSensorsChecked(SensorManager& sm) {
         _sanitizeSensors(sm);
         SensorsBlob blob{};
