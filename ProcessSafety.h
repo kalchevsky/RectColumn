@@ -82,7 +82,7 @@ private:
 
             if (!_levelAlarmLatched && (now - _levelStartedMs >= alarmDelayMs)) {
                 _levelAlarmLatched = true;
-                _alarm("Авария уровня: цепь L разомкнута");
+                _alarm("Цепь L разомкнута");
             }
 
             if ((now - _levelStartedMs >= alarmDelayMs) && ls->alarm[0].enabled) {
@@ -95,7 +95,7 @@ private:
         }
 
         if (_levelAlarmLatched) {
-            _alarm("Авария уровня сброшена");
+            _alarm("Сигнализация уровня сброшена");
         }
         ls->alarm[0].triggered = false;
         _levelRawLatched = false;
