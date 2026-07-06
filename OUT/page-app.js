@@ -1385,20 +1385,7 @@ function translateLogEventRu(ev){
     'Web server started': 'Веб-сервер запущен',
     'Flow lost: alarm + process stop': 'Потеря протока: авария и остановка процесса',
     'Flow alarm: no flow after CH2 confirmed': 'Авария протока: нет протока после подтверждения CH2',
-    'Flow restored': 'Проток восстановлен',
-    'Pressure high: CH1 OFF': 'Превышение давления: CH1 выключен',
-    'Pressure alarm cleared': 'Авария давления снята',
-    'Level alarm: L circuit open': 'Авария уровня: цепь L разомкнута',
-    'Level alarm cleared': 'Авария уровня снята',
-    'Level control delay elapsed: CH1 OFF': 'Задержка аварии уровня истекла: CH1 выключен',
-    'Level alarm timeout: CH1 OFF': 'Авария уровня не квитирована: CH1 выключен',
-    'Level emergency cooldown: T2 below threshold, CH2 OFF': 'После аварии уровня: T2 ниже порога, CH2 выключен',
-    'Output config updated': 'Конфигурация выходов обновлена',
     'Log cleared': 'Журнал очищен',
-    'Sound muted': 'Звук отключён',
-    'Sound unmuted': 'Звук включён',
-    'Notify config updated': 'Настройки уведомлений обновлены',
-    'Notify test sent': 'Тестовое уведомление отправлено',
     'Alarms acknowledged': 'Аварии квитированы',
     'Storage: NVS recovered, saved settings reset': 'Хранилище: NVS восстановлено, сохранённые настройки сброшены',
     'WiFi: STA disconnected': 'Wi‑Fi: STA отключён',
@@ -1423,12 +1410,7 @@ function translateLogEventRu(ev){
   m = s.match(/^(T1|T2|T3|dT|P|L|F|C|V) disconnected$/); if (m) return 'Датчик ' + m[1] + ' отключён';
   m = s.match(/^(T1|T2|T3|dT|P|L|F|C|V) ERROR$/); if (m) return 'Ошибка датчика ' + m[1];
   m = s.match(/^(T1|T2|T3|dT|P|L|F|C|V) ERROR cleared$/); if (m) return 'Ошибка датчика ' + m[1] + ' снята';
-  m = s.match(/^Alarm set: (.+) #(\d+)$/); if (m) return 'Настройка сигнализации: ' + m[1];
-  m = s.match(/^Ctrl set: (.+)->(CH\d)$/); if (m) return 'Настройка управления: ' + m[1] + ' → ' + m[2];
-  m = s.match(/^Config: (.+) (enabled|disabled)$/); if (m) return 'Конфигурация датчика ' + m[1] + ': ' + (m[2] === 'enabled' ? 'включён' : 'отключён');
-  m = s.match(/^WiFi STA connected: (.+) IP=(.+)$/); if (m) return 'Подключение к Wi‑Fi: ' + m[1] + ', IP ' + m[2];
   m = s.match(/^WiFi: STA connected - (.+) IP=(.+)$/); if (m) return 'Подключение к Wi‑Fi: ' + m[1] + ', IP ' + m[2];
-  m = s.match(/^WiFi STA connect failed: (.+) status=(.+)$/); if (m) return 'Не удалось подключиться к Wi‑Fi ' + m[1] + ' (' + m[2] + ')';
   m = s.match(/^Notify failed: (.+)$/); if (m) return 'Ошибка отправки уведомления: ' + m[1];
   m = s.match(/^EMU scenario: (.+)$/); if (m) return 'Сценарий эмуляции: ' + m[1];
   m = s.match(/^(WER_CH\d) timeout: output ON but confirmation missing$/); if (m) return m[1] + ': нет подтверждения при включённом выходе';
