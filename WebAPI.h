@@ -1212,7 +1212,8 @@ private:
             _syncRuntimeStateNow();
             _stor->saveSensors(*_sm);
             _om->beepAcceptedCommand();
-            _log->add("Настройка управления: " + s->name + " -> " + _outputName(oi),
+            _log->add((next.enabled ? String("Включено управление: ") : String("Выключено управление: "))
+                          + s->name + " -> " + _outputName(oi),
                       _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
             _sendOk(req);
             return;
@@ -1250,7 +1251,8 @@ private:
         _stor->saveSensors(*_sm);
         _om->beepAcceptedCommand();
 
-        _log->add("Настройка управления: " + s->name + " -> " + _outputName(oi),
+        _log->add((next.enabled ? String("Включено управление: ") : String("Выключено управление: "))
+                      + s->name + " -> " + _outputName(oi),
                   _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
         _sendOk(req);
     }
