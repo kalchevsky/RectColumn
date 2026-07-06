@@ -1153,7 +1153,8 @@ private:
         _syncRuntimeStateNow();
         _stor->saveSensors(*_sm);
         _om->beepAcceptedCommand();
-        _log->add("Настройка тревоги: " + s->name + " " + _fixedAlarmLabel(ai),
+        _log->add(String(s->alarm[ai].enabled ? "Включена" : "Выключена")
+                      + " сигнализация " + s->name + " " + _fixedAlarmLabelLog(ai),
                   _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
         _sendOk(req);
     }
@@ -1653,6 +1654,16 @@ private:
             case 1: return "Мин 2";
             case 2: return "Макс 1";
             case 3: return "Макс 2";
+            default: return String("Уровень ") + String(idx + 1);
+        }
+    }
+
+    static String _fixedAlarmLabelLog(uint8_t idx) {
+        switch (idx) {
+            case 0: return "ALmin1";
+            case 1: return "ALmin2";
+            case 2: return "ALmax1";
+            case 3: return "ALmax2";
             default: return String("Уровень ") + String(idx + 1);
         }
     }
