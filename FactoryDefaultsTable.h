@@ -8,6 +8,7 @@
 namespace FactoryDefaultsTable {
 
 inline constexpr const char* WIFI_AP_PASS = "";
+inline constexpr const char* WIFI_AP_SSID = AP_SSID_DEF;
 inline constexpr const char* WIFI_STA_SSID = "";
 inline constexpr const char* WIFI_STA_PASS = "";
 inline constexpr bool WIFI_AP_ONLY = true;

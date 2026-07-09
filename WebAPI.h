@@ -711,6 +711,49 @@ private:
                 _sendDoc(req, 200, resp);
             });
 
+        _server.on("/api/v1/wifi/ssid", HTTP_POST,
+            [](AsyncWebServerRequest*) {}, nullptr,
+            [this](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t) {
+                DynamicJsonDocument doc(256);
+                if (!_parseJson(req, data, len, doc)) return;
+
+                String ssid = doc["ssid"] | "";
+                ssid.trim();
+
+                if (ssid.length() < 1 || ssid.length() > 32) {
+                    _sendError(req, 400, "bad_params", "ssid must be 1..32 chars");
+                    return;
+                }
+
+                for (size_t i = 0; i < ssid.length(); ++i) {
+                    const char c = ssid[i];
+                    const bool okc = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                                     (c >= '0' && c <= '9') || c == '-' || c == '_';
+                    if (!okc) {
+                        _sendError(req, 400, "bad_params",
+                                   "ssid allows only latin letters, digits, '-' and '_'");
+                        return;
+                    }
+                }
+
+                if (!_wifi->setAPSsid(ssid, *_stor)) {
+                    _sendError(req, 500, "storage", "failed to persist ssid");
+                    return;
+                }
+                _log->add(String("Имя точки доступа изменено: ") + ssid,
+                          _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
+                _om->beepAcceptedCommand();
+
+                DynamicJsonDocument resp(320);
+                resp["ok"] = true;
+                resp["ssid"] = ssid;
+                resp["rebooting"] = true;
+                resp["hint"] = String("Устройство перезагружается, подключитесь к сети «") + ssid + "»";
+                _sendDoc(req, 200, resp);
+
+                _wifi->requestReboot(800);
+            });
+
         _server.on("/api/v1/wifi/ap_only", HTTP_POST, [this](AsyncWebServerRequest* req) {
             _wifi->setApOnly(true);
             _om->beepAcceptedCommand();

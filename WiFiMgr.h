@@ -51,6 +51,7 @@ public:
         //     staPass = STA_PASS_DEF;
         // }
         apPass = stor.loadAPPassword();
+        apSSID = stor.loadApSsid();
         if (apPass.length() > 0 && (apPass.length() < 8 || apPass.length() > 63)) {
             apPass = "";
             stor.saveAPPassword("");
@@ -71,6 +72,10 @@ public:
     }
 
     void loop() {
+        if (_rebootPending && (int32_t)(millis() - _rebootAtMs) >= 0) {
+            ESP.restart();
+        }
+
         if (_modeApplyPending) {
             _modeApplyPending = false;
             _applyConfiguredMode(!_apOnly);
@@ -195,6 +200,17 @@ public:
         }
     }
 
+    bool setAPSsid(const String& ssid, Storage& stor) {
+        if (!stor.saveApSsidChecked(ssid)) return false;
+        apSSID = ssid;
+        return true;
+    }
+
+    void requestReboot(uint32_t delayMs) {
+        _rebootPending = true;
+        _rebootAtMs = millis() + delayMs;
+    }
+
     bool apOnly() const { return _apOnly; }
     const char* wifiMode() const { return _apOnly ? "ap_only" : "sta_ap"; }
 
@@ -304,6 +320,8 @@ private:
     bool      _mdnsStarted = false;
     bool      _apOnly = false;
     bool      _modeApplyPending = false;
+    bool      _rebootPending = false;
+    uint32_t  _rebootAtMs = 0;
     bool      _apRunning = false;
     bool      _apFallbackToOpen = false;
     String    _apStatusText = "idle";

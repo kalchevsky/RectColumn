@@ -59,6 +59,14 @@ public:
         return ok;
     }
 
+    bool saveApSsidChecked(const String& ssid) {
+        Preferences p;
+        if (!_openPrefs(p, "wifi", false)) return false;
+        const bool ok = _putAndVerifyString(p, "ap_ssid", ssid);
+        p.end();
+        return ok;
+    }
+
     void saveAPPassword(const String& pass) {
         (void)saveAPPasswordChecked(pass);
     }
@@ -69,6 +77,14 @@ public:
         String pass = p.getString("ap_pass", "");
         p.end();
         return pass;
+    }
+
+    String loadApSsid() {
+        Preferences p;
+        if (!_openPrefs(p, "wifi", true)) return AP_SSID_DEF;
+        String ssid = p.getString("ap_ssid", AP_SSID_DEF);
+        p.end();
+        return ssid;
     }
 
     bool saveWifiWizardDoneChecked(bool done) {
@@ -489,6 +505,7 @@ private:
             p.isKey("sta_ssid") ||
             p.isKey("sta_pass") ||
             p.isKey("ap_pass") ||
+            p.isKey("ap_ssid") ||
             p.isKey("ap_only") ||
             p.isKey("wizard_done")
         );

@@ -160,6 +160,7 @@ inline bool applyFactoryDefaults(Storage& storage,
         FactoryDefaultsTable::NOTIFY_TOKEN
     );
     ok = ok && storage.saveAPPasswordChecked(FactoryDefaultsTable::WIFI_AP_PASS);
+    ok = ok && storage.saveApSsidChecked(FactoryDefaultsTable::WIFI_AP_SSID);
     ok = ok && storage.saveWifiSTAChecked(
         FactoryDefaultsTable::WIFI_STA_SSID,
         FactoryDefaultsTable::WIFI_STA_PASS
