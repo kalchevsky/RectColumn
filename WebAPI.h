@@ -210,6 +210,7 @@ private:
             DynamicJsonDocument doc(24576);
             JsonObject root = doc.to<JsonObject>();
             _buildConfig(root);
+#if STABILITY_BOOT_DIAG
             const uint32_t nowMs = millis();
             static uint32_t lastConfigSizeLogMs = 0;
             if ((uint32_t)(nowMs - lastConfigSizeLogMs) >= 5000UL) {
@@ -221,6 +222,7 @@ private:
                     (unsigned)measureJson(root["outputs"])
                 );
             }
+#endif
             _sendDoc(req, 200, doc);
         });
 
@@ -228,6 +230,7 @@ private:
             DynamicJsonDocument doc(24576);
             JsonObject root = doc.to<JsonObject>();
             _buildLive(root);
+#if STABILITY_BOOT_DIAG
             const uint32_t nowMs = millis();
             static uint32_t lastLiveSizeLogMs = 0;
             if ((uint32_t)(nowMs - lastLiveSizeLogMs) >= 5000UL) {
@@ -240,6 +243,7 @@ private:
                     (unsigned)(measureJson(root["activeAlarmReasons"]) + measureJson(root["activeAlarmsAll"]))
                 );
             }
+#endif
             _sendDoc(req, 200, doc);
         });
 
@@ -247,6 +251,7 @@ private:
             DynamicJsonDocument doc(24576);
             JsonObject root = doc.to<JsonObject>();
             _buildState(root);
+#if STABILITY_BOOT_DIAG
             const uint32_t nowMs = millis();
             static uint32_t lastStateSizeLogMs = 0;
             if ((uint32_t)(nowMs - lastStateSizeLogMs) >= 5000UL) {
@@ -262,6 +267,7 @@ private:
                     (unsigned)measureJson(root["diag"])
                 );
             }
+#endif
             _sendDoc(req, 200, doc);
         });
 

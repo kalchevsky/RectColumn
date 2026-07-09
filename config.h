@@ -175,7 +175,7 @@ static_assert(PIN_V != PIN_WER_CH4, "PIN_V conflicts with WER_CH4");
 #define SERIAL_DEBUG_SNAPSHOT_INTERVAL_MS  5000UL
 
 // ─── Диагностика стабильности (тестовый профиль) ─────────────────
-#define STABILITY_BOOT_DIAG          1
+#define STABILITY_BOOT_DIAG          0
 #define STABILITY_HEARTBEAT_MS       30000UL
 
 // ─── Индексы датчиков и выходов ──────────────────────────────────

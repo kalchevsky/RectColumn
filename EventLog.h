@@ -25,9 +25,8 @@ public:
     {
         const uint64_t absMs = (uint64_t)millis();
         const String timeStr = _tb ? _tb->millisToStr(absMs) : (String("T+") + (absMs / 1000) + "s");
-        int traceIdx = 0;
-
 #if STABILITY_BOOT_DIAG
+        int traceIdx = 0;
         const bool traceEvent =
             event.startsWith("RELAY_OFF") ||
             event.startsWith("Notify failed") ||
@@ -40,7 +39,9 @@ public:
 #endif
 
         portENTER_CRITICAL(&_mux);
+#if STABILITY_BOOT_DIAG
         traceIdx = _head;
+#endif
         LogEntry& e  = _buf[_head];
         e.absMs      = absMs;
         e.timeStr    = timeStr;

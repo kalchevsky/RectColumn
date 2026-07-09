@@ -84,9 +84,11 @@ public:
 
         for (int i = 0; i < OUT_COUNT; i++) {
             if (out[i]->isOn() != prevState[i]) changed |= (1u << i);
+#if STABILITY_BOOT_DIAG
             if (log && prevState[i] && !out[i]->isOn()) {
                 _logRelayOff(log, sm, (uint8_t)i);
             }
+#endif
         }
         return changed;
     }
@@ -783,10 +785,12 @@ private:
         out[outIdx]->applyResolved(_effectiveForbidMask(outIdx), _lastWant[outIdx]);
         if (out[outIdx]->manualWant() != prevManual) {
             _manualStateDirty = true;
+#if STABILITY_BOOT_DIAG
             Serial.printf("[DIRTY] aux out=%u manual:%d->%d\n",
                           outIdx,
                           prevManual ? 1 : 0,
                           out[outIdx]->manualWant() ? 1 : 0);
+#endif
         }
     }
 
@@ -826,12 +830,14 @@ private:
 
         if (out[outIdx]->manualWant() != prevManual || _operatorHoldOff[outIdx] != prevHoldOff) {
             _manualStateDirty = true;
+#if STABILITY_BOOT_DIAG
             Serial.printf("[DIRTY] main out=%u manual:%d->%d hold:%d->%d\n",
                           outIdx,
                           prevManual ? 1 : 0,
                           out[outIdx]->manualWant() ? 1 : 0,
                           prevHoldOff ? 1 : 0,
                           _operatorHoldOff[outIdx] ? 1 : 0);
+#endif
         }
     }
 
@@ -902,6 +908,7 @@ private:
                  sm ? sm->getDT() : NAN);
     }
 
+#if STABILITY_BOOT_DIAG
     static int _firstSetSensorBit(uint32_t mask) {
         for (uint8_t si = 0; si < SEN_COUNT; si++) {
             if (mask & (1u << si)) return (int)si;
@@ -948,7 +955,6 @@ private:
     void _logRelayOff(EventLog* log, SensorManager& sm, uint8_t outIdx) {
         if (!log || outIdx >= OUT_COUNT || !out[outIdx] || !_isMainOutput(outIdx)) return;
 
-#if STABILITY_BOOT_DIAG
         const uint32_t now = millis();
         const uint32_t sensorMask = _lastForbid[outIdx];
         const uint32_t safetyMask = _safetyForbid[outIdx];
@@ -1025,8 +1031,8 @@ private:
                       (unsigned long)sensorMask,
                       (unsigned long)safetyMask,
                       msg.c_str());
-#endif
     }
+#endif
 
     static void _appendReason(String& dst, const char* text) {
         if (!text || !text[0]) return;
