@@ -85,6 +85,17 @@
       </div>
     </div>
 
+    <div class="card hidden" id="ssidStep">
+      <h2>Имя точки доступа (SSID)</h2>
+      <p class="hint">Разрешены латинские буквы, цифры, «-» и «_». Длина 1..32. После сохранения устройство перезагрузится с новым именем сети.</p>
+      <label for="apSsid">Имя сети</label>
+      <input id="apSsid" type="text" maxlength="32" autocomplete="off" placeholder="Control_System">
+      <div class="stack">
+        <button type="button" onclick="saveSsid()">Сохранить</button>
+        <button type="button" class="light" onclick="openStep('main')">Назад</button>
+      </div>
+    </div>
+
     <div class="card hidden" id="staStep">
       <h2>Подключение к домашнему WiFi</h2>
       <p>Найдите свою сеть, введите пароль и нажмите «Подключить».</p>
@@ -200,6 +211,7 @@
       setMsg('');
       toggleHidden(byId('staRouteStep'), true);
       toggleHidden(byId('apStep'), step !== 'ap');
+      toggleHidden(byId('ssidStep'), step !== 'ssid');
       toggleHidden(byId('staStep'), step !== 'sta');
       toggleHidden(byId('staBackBtn'), step !== 'sta');
     }
@@ -207,6 +219,18 @@
       openStep('ap');
       var doScroll = function(){
         var el = byId('apStep');
+        if (el && el.scrollIntoView) el.scrollIntoView({behavior:'smooth', block:'start'});
+      };
+      if (window.requestAnimationFrame) {
+        requestAnimationFrame(function(){ requestAnimationFrame(doScroll); });
+      } else {
+        setTimeout(doScroll, 0);
+      }
+    }
+    function goSsidStep(){
+      openStep('ssid');
+      var doScroll = function(){
+        var el = byId('ssidStep');
         if (el && el.scrollIntoView) el.scrollIntoView({behavior:'smooth', block:'start'});
       };
       if (window.requestAnimationFrame) {
@@ -380,6 +404,7 @@
           html += '<button type="button" class="secondary" onclick="goStaStep()">Подключиться к домашней сети WiFi</button>';
         }
         html += '<button type="button" class="danger" onclick="goApStep()">' + (apProtected ? 'Сменить пароль точки доступа' : 'Создать пароль') + '</button>';
+        html += '<button type="button" class="secondary" onclick="goSsidStep()">Имя точки доступа (SSID)</button>';
       }
       return html;
     }
@@ -490,6 +515,8 @@
         ap = info && info.ap ? info.ap : {};
         sta = info && info.sta ? info.sta : {};
         apSsid = infoVal(ap, 'ssid', 'Control_System');
+        var ssidInput = byId('apSsid');
+        if (ssidInput && !ssidInput.value) ssidInput.value = apSsid;
         apIp = infoVal(ap, 'ip', infoVal(info, 'apIP', '192.168.4.1'));
         apProtected = infoBool(infoVal(ap, 'protected', false));
         staSsid = infoVal(sta, 'ssid', '');
@@ -571,6 +598,27 @@
           return;
         }
         setInlineStatus((res && (res.error || res.err)) ? (res.error || res.err) : 'Не удалось сохранить пароль точки доступа.', 'err');
+        loadInfo();
+      });
+    }
+
+    function saveSsid(){
+      var el = byId('apSsid');
+      var ssid = el ? el.value.trim() : '';
+      setActions('');
+      if (!/^[A-Za-z0-9_-]{1,32}$/.test(ssid)) {
+        setInlineStatus('Имя сети: 1..32 символа, только латиница, цифры, «-» и «_».', 'err');
+        return;
+      }
+      setInlineStatus('Сохраняем имя точки доступа...', 'busy');
+      callApi('/api/v1/wifi/ssid', 'POST', JSON.stringify({ ssid:ssid }), function(res){
+        if (res && res.ok) {
+          setInlineStatus((res.hint || ('Имя сохранено: ' + (res.ssid || ssid))), 'ok');
+          setActions('<a class="btn" href="/app">Перейти на стартовую страницу</a><button type="button" class="light" onclick="goSsidStep()">Остаться на странице WiFi</button>');
+          loadInfo();
+          return;
+        }
+        setInlineStatus((res && (res.error || res.err)) ? (res.error || res.err) : 'Не удалось сохранить имя точки доступа.', 'err');
         loadInfo();
       });
     }
