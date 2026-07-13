@@ -489,9 +489,7 @@ public:
             return ((uint32_t)(now - _lastReconnectAttemptMs) >= SENSOR_RECONNECT_INTERVAL_MS);
         }
 
-        const uint32_t cappedHealthyMs =
-            (periodMs < SENSOR_LOST_TIMEOUT_DS_MS) ? periodMs : SENSOR_LOST_TIMEOUT_DS_MS;
-        const uint32_t retryMs = (error || !present) ? 1000UL : cappedHealthyMs;
+        const uint32_t retryMs = error ? 1000UL : periodMs;
         return ((uint32_t)(now - _lastPollMs) >= retryMs);
     }
 
