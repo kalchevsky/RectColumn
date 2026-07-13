@@ -573,6 +573,9 @@ public:
 
         if (_dt.getDeviceCount() > 0) {
             present = true;
+            error = false;
+            diagCode = SENSOR_DIAG_NONE;
+            sensorErrorReason = SENSOR_ERR_NONE;
             _dt.requestTemperatures();
             _conversionPending = true;
             _conversionStartedMs = now;
