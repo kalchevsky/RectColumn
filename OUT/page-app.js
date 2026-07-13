@@ -156,10 +156,19 @@ var state = {
     b: -18.724550898204,
     calibrated: false,
     calDate: 0,
+    raw: null,
+    amps: null,
+    zeroSet: false,
     loaded: false,
     loading: false
   },
-  currentCalDetailsOpen: false
+  currentCalDetailsOpen: false,
+  currentCalibrateDetailsOpen: false,
+  currentCalibrateSession: {
+    zeroDone: false,
+    x0: null,
+    busy: false
+  }
 };
 
 function esc(s){
@@ -329,7 +338,8 @@ function startPoll(ms, fn){
   }, ms);
 }
 function isLiveStateRoute(view){
-  return view === 'home' || view === 'manual' || view === 'sensor' || view === 'sensorCtrl' || view === 'sensorAlarm' || view === 'currentSensor';
+  return view === 'home' || view === 'manual' || view === 'sensor' || view === 'sensorCtrl'
+      || view === 'sensorAlarm' || view === 'currentSensor' || view === 'currentSensorCalibrate';
 }
 function startLiveStatePoll(view){
   if (!isLiveStateRoute(view)) return;
@@ -1493,14 +1503,38 @@ function renderCurrentSensorSettings(){
   startCurrentSensorPoll();
 }
 
-function renderCurrentSensorCalibratePlaceholder(){
+function renderCurrentSensorCalibrate(){
   stopPoll();
+  var cal = ensureCurrentCalState();
+  var session = ensureCurrentCalibrateSession();
+  var rawText = tplCurrentRawValue(cal.raw);
+  var ampsText = tplCurrentFromApi(cal.amps);
   var html = '<div class="app"><div class="panel"><h2>Калибровка</h2>';
   html += renderMessages('');
-  html += '<div class="small">Шаги калибровки будут добавлены на следующем этапе.</div>';
+  html += '<div class="small">Данные обновляются автоматически раз в секунду.</div>';
+  html += '<div class="field"><label>Сырое значение АЦП</label><div class="mono">' + esc(rawText) + '</div></div>';
+  html += '<div class="field"><label>Текущий ток</label><div>' + esc(ampsText) + '</div></div>';
+  html += '<div class="field"><label>Шаг 0</label><div>Отключите нагрузку от датчика тока и нажмите кнопку "Установка 0".</div></div>';
+  html += '<div class="inline-actions">';
+  html += '<button class="btn" onclick="submitCurrentCalZero()"'
+       + (session.busy ? ' disabled aria-busy="true"' : '')
+       + '>' + esc(session.busy ? 'Установка 0...' : 'Установка 0') + '</button>';
+  html += '<button class="btn secondary" onclick="toggleCurrentCalibrateDetails()">' + esc(state.currentCalibrateDetailsOpen ? 'Скрыть подробнее' : 'Подробнее') + '</button>';
+  html += '</div>';
+  if (state.currentCalibrateDetailsOpen) {
+    html += '<div class="field"><label>X(0)</label><div class="mono">' + esc(tplCurrentRawValue(session.x0)) + '</div></div>';
+    html += '<div class="field"><label>zeroSet в backend</label><div>' + esc(cal.zeroSet ? 'Да' : 'Нет') + '</div></div>';
+  }
+  html += '<div class="field"><label>Шаг 2</label><div>'
+       + esc(session.zeroDone ? 'Шаг доступен. Реализация будет добавлена на следующем этапе.' : 'Сначала выполните установку нуля.')
+       + '</div></div>';
+  html += '<button class="btn secondary"'
+       + (session.zeroDone ? ' onclick="showCurrentCalStep2Soon()"' : ' disabled')
+       + '>' + esc(session.zeroDone ? 'Шаг 2 (скоро)' : 'Шаг 2 недоступен') + '</button>';
   html += '<button class="btn light" onclick="go(\'#/currentSensor\');render();">Назад</button>';
   html += '</div></div>';
   app.innerHTML = html;
+  startCurrentCalibratePoll();
 }
 
 function renderSound(){
@@ -1986,19 +2020,26 @@ function renderStopConfirm(){
   html.push('</main></div></div>');
   app.innerHTML = html.join('');
 }
+function prepareCurrentRoute(view){
+  var nextView = view || '';
+  var prev = state.currentView || '';
+  if (prev === 'manual' && nextView !== 'manual') resetManualRelayUiState();
+  if (prev === 'currentSensorCalibrate' && nextView !== 'currentSensorCalibrate') resetCurrentCalibrateSession();
+  if (prev !== 'currentSensorCalibrate' && nextView === 'currentSensorCalibrate') resetCurrentCalibrateSession();
+  state.currentView = nextView;
+}
+
 function renderCurrentRoute(){
   var r = routeParts();
   var view = r[0];
   var arg = r[1];
-  var prev = state.currentView || '';
-  if (prev === 'manual' && view !== 'manual') resetManualRelayUiState();
-  state.currentView = view || '';
+  prepareCurrentRoute(view);
   if (view === 'home') return renderHome();
   if (view === 'menu') return renderMenu();
   if (view === 'sound') return renderSound();
   if (view === 'outputConfig') return renderOutputConfig();
   if (view === 'currentSensor') return renderCurrentSensorSettings();
-  if (view === 'currentSensorCalibrate') return renderCurrentSensorCalibratePlaceholder();
+  if (view === 'currentSensorCalibrate') return renderCurrentSensorCalibrate();
   if (view === 'theme') return renderTheme();
   if (view === 'notifications') return renderNotifications();
   if (view === 'diag') return renderDiag();
@@ -2092,11 +2133,34 @@ function ensureCurrentCalState(){
       b: CURRENT_SENSOR_CAL_B_DEFAULT,
       calibrated: false,
       calDate: 0,
+      raw: null,
+      amps: null,
+      zeroSet: false,
       loaded: false,
       loading: false
     };
   }
+  if (typeof state.currentCal.raw === 'undefined') state.currentCal.raw = null;
+  if (typeof state.currentCal.amps === 'undefined') state.currentCal.amps = null;
+  if (typeof state.currentCal.zeroSet === 'undefined') state.currentCal.zeroSet = false;
   return state.currentCal;
+}
+function ensureCurrentCalibrateSession(){
+  if (!state.currentCalibrateSession) {
+    state.currentCalibrateSession = {
+      zeroDone: false,
+      x0: null,
+      busy: false
+    };
+  }
+  return state.currentCalibrateSession;
+}
+function resetCurrentCalibrateSession(){
+  var session = ensureCurrentCalibrateSession();
+  session.zeroDone = false;
+  session.x0 = null;
+  session.busy = false;
+  state.currentCalibrateDetailsOpen = false;
 }
 function currentCalA(){
   var cal = ensureCurrentCalState();
@@ -2124,6 +2188,11 @@ function loadCurrentCalStatus(cb, forceReload){
   api('/api/v1/calibrate/status', null, function(res){
     cal.loading = false;
     cal.loaded = !!(res && res.ok);
+    if (res && res.ok && res.raw !== null && typeof res.raw !== 'undefined') cal.raw = Number(res.raw);
+    else cal.raw = null;
+    if (res && res.ok && res.amps !== null && typeof res.amps !== 'undefined') cal.amps = Number(res.amps);
+    else cal.amps = null;
+    cal.zeroSet = !!(res && res.ok && res.zeroSet);
     if (res && res.ok && res.calibrated === true) {
       cal.a = Number(res.a);
       cal.b = Number(res.b);
@@ -2192,6 +2261,12 @@ function tplCurrentPercentFromRaw(raw){
   if (!isFinite(percent)) return '—';
   return tplComma2(percent) + ' %';
 }
+function tplCurrentRawValue(raw){
+  if (raw === null || typeof raw === 'undefined') return '—';
+  var n = Number(raw);
+  if (!isFinite(n)) return '—';
+  return tplComma2(n);
+}
 function tplValueText(sensor, blankWhenDisabled){
   if (!sensor) return blankWhenDisabled ? '' : '—';
   if (!sensor.enabled) return blankWhenDisabled ? '' : '—';
@@ -2226,6 +2301,10 @@ function toggleCurrentCalDetails(){
   state.currentCalDetailsOpen = !state.currentCalDetailsOpen;
   render();
 }
+function toggleCurrentCalibrateDetails(){
+  state.currentCalibrateDetailsOpen = !state.currentCalibrateDetailsOpen;
+  render();
+}
 function startCurrentSensorPoll(){
   startPoll(LIVE_STATE_POLL_MS, function(done){
     var pending = 2;
@@ -2237,6 +2316,47 @@ function startCurrentSensorPoll(){
     }
     loadLive(finish);
     loadCurrentCalStatus(finish, true);
+  });
+}
+function startCurrentCalibratePoll(){
+  startPoll(LIVE_STATE_POLL_MS, function(done){
+    var pending = 2;
+    function finish(){
+      pending--;
+      if (pending > 0) return;
+      if (routeParts()[0] === 'currentSensorCalibrate') render();
+      done();
+    }
+    loadLive(finish);
+    loadCurrentCalStatus(finish, true);
+  });
+}
+function showCurrentCalStep2Soon(){
+  setSuccessNotice('Шаг 2 калибровки будет добавлен на следующем этапе.');
+  render();
+}
+function submitCurrentCalZero(){
+  var session = ensureCurrentCalibrateSession();
+  if (session.busy) return;
+  session.busy = true;
+  clearNotice();
+  render();
+  api('/api/v1/calibrate/zero', { method:'POST' }, function(res){
+    session.busy = false;
+    if (res && res.ok) {
+      var cal = ensureCurrentCalState();
+      session.zeroDone = true;
+      if (res.x0 !== null && typeof res.x0 !== 'undefined') session.x0 = Number(res.x0);
+      else session.x0 = cal.raw;
+      state.currentCalibrateDetailsOpen = true;
+      setSuccessNotice('Ноль установлен');
+      loadCurrentCalStatus(function(){
+        if (routeParts()[0] === 'currentSensorCalibrate') render();
+      }, true);
+      return;
+    }
+    setNotice((res && (res.error || res.err)) ? (res.error || res.err) : 'Не удалось установить ноль. Повторите попытку.');
+    if (routeParts()[0] === 'currentSensorCalibrate') render();
   });
 }
 function tplHomeValueClass(sensor){
@@ -3026,13 +3146,13 @@ function renderCurrentRoute(){
   var view = r[0];
   var arg = r[1] ? decodeURIComponent(r[1]) : '';
   var arg2 = r[2] ? decodeURIComponent(r[2]) : '';
-  state.currentView = view || '';
+  prepareCurrentRoute(view);
   if (view === 'home') return renderHome();
   if (view === 'menu') return renderMenu();
   if (view === 'sound') return renderSound();
   if (view === 'outputConfig') return renderOutputConfig();
   if (view === 'currentSensor') return renderCurrentSensorSettings();
-  if (view === 'currentSensorCalibrate') return renderCurrentSensorCalibratePlaceholder();
+  if (view === 'currentSensorCalibrate') return renderCurrentSensorCalibrate();
   if (view === 'theme') return renderTheme();
   if (view === 'notifications') return renderNotifications();
   if (view === 'diag') return renderDiag();
