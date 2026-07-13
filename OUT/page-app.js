@@ -158,7 +158,8 @@ var state = {
     calDate: 0,
     loaded: false,
     loading: false
-  }
+  },
+  currentCalDetailsOpen: false
 };
 
 function esc(s){
@@ -328,7 +329,7 @@ function startPoll(ms, fn){
   }, ms);
 }
 function isLiveStateRoute(view){
-  return view === 'home' || view === 'manual' || view === 'sensor' || view === 'sensorCtrl' || view === 'sensorAlarm';
+  return view === 'home' || view === 'manual' || view === 'sensor' || view === 'sensorCtrl' || view === 'sensorAlarm' || view === 'currentSensor';
 }
 function startLiveStatePoll(view){
   if (!isLiveStateRoute(view)) return;
@@ -1462,9 +1463,42 @@ function renderMenu(){
   html += '<button class="btn" onclick="location.href=\'/wifi\'">Конфигурация WiFi</button>';
   html += '<button class="btn" onclick="go(\'#/sound\')">Конфигурация звука</button>';
   html += '<button class="btn" onclick="go(\'#/outputConfig\')">Конфигурация выходов CH1–CH3</button>';
+  html += '<button class="btn" onclick="go(\'#/currentSensor\');render();">Датчик тока</button>';
   html += '<button class="btn" onclick="go(\'#/notifications\')">Уведомления</button>';
   html += '<button class="btn" onclick="go(\'#/log\')">Лог</button>';
   html += '<button class="btn light" onclick="go(\'#/home\')">Назад</button>';
+  html += '</div></div>';
+  app.innerHTML = html;
+}
+
+function renderCurrentSensorSettings(){
+  stopPoll();
+  var sensor = findSensor('C') || { id:'C', enabled:false, value:null };
+  var cal = ensureCurrentCalState();
+  var html = '<div class="app"><div class="panel"><h2>Настройки датчика тока</h2>';
+  html += renderMessages('');
+  html += '<div class="small">Данные обновляются автоматически раз в секунду.</div>';
+  html += '<div class="field"><label>Текущий ток</label><div>' + esc(tplCurrentFromApi(sensor && !sensor.error ? sensor.amps : null)) + '</div></div>';
+  html += '<div class="field"><label>Статус калибровки</label><div>' + esc(cal.calibrated ? 'Откалиброван' : 'Не откалиброван') + '</div></div>';
+  html += '<div class="field"><label>Дата последней калибровки</label><div>' + esc(formatUnixDateTime(cal.calDate)) + '</div></div>';
+  html += '<button class="btn secondary" onclick="toggleCurrentCalDetails()">' + esc(state.currentCalDetailsOpen ? 'Скрыть подробнее' : 'Подробнее') + '</button>';
+  if (state.currentCalDetailsOpen) {
+    html += '<div class="field"><label>Коэффициент a</label><div class="mono">' + esc(String(Number(cal.a))) + '</div></div>';
+    html += '<div class="field"><label>Коэффициент b</label><div class="mono">' + esc(String(Number(cal.b))) + '</div></div>';
+  }
+  html += '<button class="btn" onclick="go(\'#/currentSensorCalibrate\');render();">Калибровка</button>';
+  html += '<button class="btn light" onclick="go(\'#/menu\');render();">Назад</button>';
+  html += '</div></div>';
+  app.innerHTML = html;
+  startCurrentSensorPoll();
+}
+
+function renderCurrentSensorCalibratePlaceholder(){
+  stopPoll();
+  var html = '<div class="app"><div class="panel"><h2>Калибровка</h2>';
+  html += renderMessages('');
+  html += '<div class="small">Шаги калибровки будут добавлены на следующем этапе.</div>';
+  html += '<button class="btn light" onclick="go(\'#/currentSensor\');render();">Назад</button>';
   html += '</div></div>';
   app.innerHTML = html;
 }
@@ -1963,6 +1997,8 @@ function renderCurrentRoute(){
   if (view === 'menu') return renderMenu();
   if (view === 'sound') return renderSound();
   if (view === 'outputConfig') return renderOutputConfig();
+  if (view === 'currentSensor') return renderCurrentSensorSettings();
+  if (view === 'currentSensorCalibrate') return renderCurrentSensorCalibratePlaceholder();
   if (view === 'theme') return renderTheme();
   if (view === 'notifications') return renderNotifications();
   if (view === 'diag') return renderDiag();
@@ -2074,10 +2110,13 @@ function currentCalB(){
   if (!isFinite(b)) return CURRENT_SENSOR_CAL_B_DEFAULT;
   return b;
 }
-function loadCurrentCalStatus(cb){
+function loadCurrentCalStatus(cb, forceReload){
   var cal = ensureCurrentCalState();
-  if (cal.loading) return;
-  if (cal.loaded) {
+  if (cal.loading) {
+    if (cb) cb(cal);
+    return;
+  }
+  if (cal.loaded && !forceReload) {
     if (cb) cb(cal);
     return;
   }
@@ -2106,6 +2145,13 @@ function currentRawFromPercent(percent){
   if (n < 0) n = 0;
   if (n > 100) n = 100;
   return (n * 4095) / 100;
+}
+function currentPercentFromRaw(raw){
+  var n = Number(raw);
+  if (!isFinite(n)) return NaN;
+  if (n < 0) n = 0;
+  if (n > 4095) n = 4095;
+  return (n * 100) / 4095;
 }
 function ampsFromRaw(raw){
   var n = Number(raw);
@@ -2141,6 +2187,11 @@ function tplCurrentFromPercent(percent){
   if (!isFinite(amps)) return '—';
   return tplCurrentValue(amps);
 }
+function tplCurrentPercentFromRaw(raw){
+  var percent = currentPercentFromRaw(raw);
+  if (!isFinite(percent)) return '—';
+  return tplComma2(percent) + ' %';
+}
 function tplValueText(sensor, blankWhenDisabled){
   if (!sensor) return blankWhenDisabled ? '' : '—';
   if (!sensor.enabled) return blankWhenDisabled ? '' : '—';
@@ -2149,6 +2200,44 @@ function tplValueText(sensor, blankWhenDisabled){
   if (sensor.id === 'F') return flowAlarmVisible(sensor) ? 'Нет протока!' : 'OK';
   if (sensor.id === 'C') return tplCurrentFromApi(sensor.amps);
   return tplComma2(sensor.value);
+}
+function tplHomeValueText(sensor){
+  if (!sensor) return '';
+  if (!sensor.enabled) return '';
+  if (sensor.id === 'C') {
+    if (sensor.error || sensor.value == null) return '—';
+    return tplCurrentPercentFromRaw(sensor.value);
+  }
+  return tplValueText(sensor, true) || '';
+}
+function pad2(num){
+  num = Number(num) || 0;
+  return num < 10 ? ('0' + num) : String(num);
+}
+function formatUnixDateTime(unixSec){
+  var sec = Number(unixSec);
+  if (!isFinite(sec) || sec <= 0) return '—';
+  var d = new Date(sec * 1000);
+  if (!isFinite(d.getTime())) return '—';
+  return pad2(d.getDate()) + '.' + pad2(d.getMonth() + 1) + '.' + d.getFullYear()
+      + ' ' + pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds());
+}
+function toggleCurrentCalDetails(){
+  state.currentCalDetailsOpen = !state.currentCalDetailsOpen;
+  render();
+}
+function startCurrentSensorPoll(){
+  startPoll(LIVE_STATE_POLL_MS, function(done){
+    var pending = 2;
+    function finish(){
+      pending--;
+      if (pending > 0) return;
+      if (routeParts()[0] === 'currentSensor') render();
+      done();
+    }
+    loadLive(finish);
+    loadCurrentCalStatus(finish, true);
+  });
 }
 function tplHomeValueClass(sensor){
   if (!sensor || !sensor.enabled) return '';
@@ -2714,9 +2803,10 @@ function renderHome(){
     var sensor = findSensor(id) || { id:id, enabled:false, value:null };
     var ctrlDisabled = (id === 'C' || id === 'V');
     var sensorErrorText = tplHomeSensorErrorText(sensor);
+    var homeValueText = tplHomeValueText(sensor);
     html.push('<a class="btn home-main home-grid-btn" href="#/sensor/' + encodeURIComponent(id) + '">');
     html.push('<div class="sensor-label">' + esc(tplHomeSensorLabel(id)) + '</div>');
-    html.push('<div class="sensor-value">' + esc(tplValueText(sensor, true) || '') + '</div>');
+    html.push('<div class="sensor-value">' + esc(homeValueText || '') + '</div>');
     html.push('<div class="sensor-error' + (sensorErrorText ? '' : ' empty') + '">' + esc(sensorErrorText || ' ') + '</div>');
     html.push('</a>');
     html.push('<a class="btn home-stack home-grid-btn' + (ctrlDisabled ? ' disabled' : '') + '" href="' + (ctrlDisabled ? '#' : '#/sensorCtrl/' + encodeURIComponent(id)) + '">' + homeCtrlStack(sensor) + '</a>');
@@ -2941,6 +3031,8 @@ function renderCurrentRoute(){
   if (view === 'menu') return renderMenu();
   if (view === 'sound') return renderSound();
   if (view === 'outputConfig') return renderOutputConfig();
+  if (view === 'currentSensor') return renderCurrentSensorSettings();
+  if (view === 'currentSensorCalibrate') return renderCurrentSensorCalibratePlaceholder();
   if (view === 'theme') return renderTheme();
   if (view === 'notifications') return renderNotifications();
   if (view === 'diag') return renderDiag();
