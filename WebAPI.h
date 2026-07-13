@@ -2354,6 +2354,11 @@ private:
             const uint8_t unackedMask = _om->unackedAlarmMaskFor(*_sm, i);
             so["id"] = SensorManager::sensorName(i);
             _buildSensorLiveFields(so, (uint8_t)i, sensor);
+            if (i == SEN_C) {
+                const float amps = _ampsFromRaw(sensor->value);
+                if (!isnan(amps) && !sensor->error) so["amps"] = roundf(amps * 100.0f) / 100.0f;
+                else                                so["amps"] = nullptr;
+            }
 
             JsonArray alarms = so.createNestedArray("alarms");
             _buildSensorAlarmsLive(alarms, sensor, unackedMask);
