@@ -1532,7 +1532,7 @@ function renderCurrentSensorCalibrate(){
   html += '</div>';
   if (state.currentCalibrateDetailsOpen) {
     html += '<div class="field"><label>X(0)</label><div class="mono">' + esc(tplCurrentRawValue(session.x0)) + '</div></div>';
-    html += '<div class="field"><label>zeroSet в backend</label><div id="currentCalZeroSetValue">' + esc(cal.zeroSet ? 'Да' : 'Нет') + '</div></div>';
+    html += '<div class="field"><div id="currentCalZeroSetValue">' + esc(cal.zeroSet ? 'Нулевое значение установлено!' : 'Нулевое значение не установлено') + '</div></div>';
   }
   if (!session.completed) {
     html += '<div class="field"><label>Шаг 2</label><div>'
@@ -2405,7 +2405,7 @@ function refreshCurrentCalibrateLive(){
   var liveResultAmps = (cal.amps === null || typeof cal.amps === 'undefined') ? session.resultAmps : cal.amps;
   if (rawValue) rawValue.textContent = tplCurrentRawValue(cal.raw);
   if (ampsValue) ampsValue.textContent = tplCurrentFromApi(cal.amps);
-  if (zeroSetValue) zeroSetValue.textContent = cal.zeroSet ? 'Да' : 'Нет';
+  if (zeroSetValue) zeroSetValue.textContent = cal.zeroSet ? 'Нулевое значение установлено!' : 'Нулевое значение не установлено';
   if (resultAmpsValue) resultAmpsValue.textContent = tplCurrentFromApi(liveResultAmps);
 }
 function onCurrentCalKnownInput(value){
