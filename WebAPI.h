@@ -46,6 +46,7 @@ public:
         _emu  = &emu;
         _notifier = &notifier;
         _processSafety = &processSafety;
+        (void)_stor->loadCurrentCal(_currentCalA, _currentCalB, _currentCalDate, _currentCalibrated);
 
         _installCors();
         _registerServicePages();
@@ -74,6 +75,16 @@ private:
     Emulator*        _emu  = nullptr;
     RemoteNotifier*  _notifier = nullptr;
     ProcessSafety*   _processSafety = nullptr;
+    float            _currentCalA = Storage::CURRENT_CAL_A_DEFAULT;
+    float            _currentCalB = Storage::CURRENT_CAL_B_DEFAULT;
+    uint32_t         _currentCalDate = 0;
+    bool             _currentCalibrated = false;
+    float            _currentCalX0 = NAN;
+    bool             _currentCalZeroSet = false;
+
+    // 50 отсчётов АЦП ~= 1.2% от шкалы 12-битного ADC.
+    // Предупреждаем о слабом разлёте точек, но не блокируем калибровку.
+    static constexpr float CURCAL_MIN_RAW_DELTA = 50.0f;
 
     // ------------------------------------------------------------
     // Route registration
@@ -314,6 +325,103 @@ private:
                 resp["localTimeMode"] = true;
                 _sendDoc(req, 200, resp);
             });
+
+        _server.on("/api/v1/calibrate/zero", HTTP_POST, [this](AsyncWebServerRequest* req) {
+            const float raw = _currentRaw();
+            if (isnan(raw)) {
+                _sendError(req, 409, "sensor_unavailable", "Нет актуального значения датчика тока");
+                return;
+            }
+
+            _currentCalX0 = raw;
+            _currentCalZeroSet = true;
+
+            DynamicJsonDocument resp(192);
+            resp["ok"] = true;
+            resp["x0"] = raw;
+            _sendDoc(req, 200, resp);
+        });
+
+        _server.on("/api/v1/calibrate/known", HTTP_POST,
+            [](AsyncWebServerRequest*) {},
+            nullptr,
+            [this](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t) {
+                if (!_currentCalZeroSet || isnan(_currentCalX0)) {
+                    _sendError(req, 400, "zero_required", "Сначала выполните установку нуля");
+                    return;
+                }
+
+                DynamicJsonDocument doc(256);
+                if (!_parseJson(req, data, len, doc)) return;
+
+                if (!doc.containsKey("value") || !doc["value"].is<float>()) {
+                    _sendError(req, 400, "bad_value", "Введите положительное числовое значение тока");
+                    return;
+                }
+
+                const float knownAmps = doc["value"].as<float>();
+                if (isnan(knownAmps) || knownAmps <= 0.0f) {
+                    _sendError(req, 400, "bad_value", "Введите положительное числовое значение тока");
+                    return;
+                }
+
+                const float xKnown = _currentRaw();
+                if (isnan(xKnown)) {
+                    _sendError(req, 409, "sensor_unavailable", "Нет актуального значения датчика тока");
+                    return;
+                }
+                if (xKnown == _currentCalX0) {
+                    _sendError(req, 400, "no_load_change",
+                               "Не обнаружено изменение показаний. Проверьте, что нагрузка действительно подключена, и повторите");
+                    return;
+                }
+
+                const float delta = xKnown - _currentCalX0;
+                const float deltaAbs = (delta >= 0.0f) ? delta : -delta;
+                const float a = knownAmps / delta;
+                const float b = -a * _currentCalX0;
+                const uint32_t nowUnix = _currentUnixSec();
+                const bool hasWarning = (deltaAbs < CURCAL_MIN_RAW_DELTA);
+
+                if (!_stor->saveCurrentCal(a, b, nowUnix)) {
+                    _sendError(req, 500, "storage", "Не удалось сохранить калибровку тока");
+                    return;
+                }
+
+                _currentCalA = a;
+                _currentCalB = b;
+                _currentCalDate = nowUnix;
+                _currentCalibrated = true;
+
+                DynamicJsonDocument resp(384);
+                resp["ok"] = true;
+                resp["a"] = a;
+                resp["b"] = b;
+                resp["amps"] = _ampsFromRaw(xKnown);
+                if (hasWarning) {
+                    resp["warning"] =
+                        "Разница показаний слишком мала для точной калибровки. Рекомендуется использовать нагрузку большего тока";
+                }
+                _sendDoc(req, 200, resp);
+            });
+
+        _server.on("/api/v1/calibrate/status", HTTP_GET, [this](AsyncWebServerRequest* req) {
+            const float raw = _currentRaw();
+            const float amps = _ampsFromRaw(raw);
+
+            DynamicJsonDocument resp(320);
+            resp["ok"] = true;
+            if (!isnan(raw)) resp["raw"] = raw;
+            else             resp["raw"] = nullptr;
+            if (!isnan(amps)) resp["amps"] = amps;
+            else              resp["amps"] = nullptr;
+            resp["a"] = _currentCalA;
+            resp["b"] = _currentCalB;
+            resp["calibrated"] = _currentCalibrated;
+            resp["calDate"] = _currentCalDate;
+            resp["zeroSet"] = _currentCalZeroSet;
+            _sendDoc(req, 200, resp);
+        });
 
         _server.on("/api/v1/mute", HTTP_POST,
             [](AsyncWebServerRequest*) {},
@@ -1980,6 +2088,9 @@ private:
         endpoints.add("/api/v1/log");
         endpoints.add("/api/v1/log/download");
         endpoints.add("/api/v1/time/sync");
+        endpoints.add("/api/v1/calibrate/zero");
+        endpoints.add("/api/v1/calibrate/known");
+        endpoints.add("/api/v1/calibrate/status");
         endpoints.add("/api/v1/stop");
         endpoints.add("/api/v1/stop?release=1");
         endpoints.add("/api/v1/stop/");
@@ -2479,6 +2590,20 @@ private:
         resp->addHeader("Pragma", "no-cache");
         resp->addHeader("Expires", "0");
         req->send(resp);
+    }
+
+    float _currentRaw() const {
+        return _sm ? _sm->getC() : NAN;
+    }
+
+    float _ampsFromRaw(float raw) const {
+        if (isnan(raw)) return NAN;
+        return (_currentCalA * raw) + _currentCalB;
+    }
+
+    uint32_t _currentUnixSec() const {
+        if (!_tb || !_tb->isSynced()) return 0U;
+        return (uint32_t)(_tb->nowMs() / 1000ULL);
     }
 
     void _sendError(AsyncWebServerRequest* req, int status, const String& code, const String& message) {
