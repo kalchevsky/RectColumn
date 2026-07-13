@@ -150,7 +150,15 @@ var state = {
   manualVisualTimers: {},
   relayErrorSeen: {},
   currentView: '',
-  ackPending: false
+  ackPending: false,
+  currentCal: {
+    a: 0.014622769114,
+    b: -18.724550898204,
+    calibrated: false,
+    calDate: 0,
+    loaded: false,
+    loading: false
+  }
 };
 
 function esc(s){
@@ -2016,6 +2024,8 @@ var tplLabels = {
   P:'давление', L:'уровень', F:'проток',
   C:'ток нагрузки', V:'напряжение нагрузки'
 };
+var CURRENT_SENSOR_CAL_A_DEFAULT = 0.014622769114;
+var CURRENT_SENSOR_CAL_B_DEFAULT = -18.724550898204;
 
 function tplSensorLabel(id){
   return tplLabels[id] || sensorLabels[id] || id;
@@ -2038,41 +2048,98 @@ function tplParseComma(text){
   var normalized = String(text || '').replace(/\s+/g, '').replace(',', '.');
   return Number(normalized);
 }
-var CURRENT_SENSOR_CAL_ZERO_PERCENT = 31.27;
-var CURRENT_SENSOR_CAL_SLOPE_PERCENT_PER_AMP = 1.67;
-var CURRENT_SENSOR_CAL_MIN_AMPS = 0.05;
 
-function currentPercentFromRaw(raw){
+function ensureCurrentCalState(){
+  if (!state.currentCal) {
+    state.currentCal = {
+      a: CURRENT_SENSOR_CAL_A_DEFAULT,
+      b: CURRENT_SENSOR_CAL_B_DEFAULT,
+      calibrated: false,
+      calDate: 0,
+      loaded: false,
+      loading: false
+    };
+  }
+  return state.currentCal;
+}
+function currentCalA(){
+  var cal = ensureCurrentCalState();
+  var a = Number(cal.a);
+  if (!isFinite(a) || a === 0) return CURRENT_SENSOR_CAL_A_DEFAULT;
+  return a;
+}
+function currentCalB(){
+  var cal = ensureCurrentCalState();
+  var b = Number(cal.b);
+  if (!isFinite(b)) return CURRENT_SENSOR_CAL_B_DEFAULT;
+  return b;
+}
+function loadCurrentCalStatus(cb){
+  var cal = ensureCurrentCalState();
+  if (cal.loading) return;
+  if (cal.loaded) {
+    if (cb) cb(cal);
+    return;
+  }
+  cal.loading = true;
+  api('/api/v1/calibrate/status', null, function(res){
+    cal.loading = false;
+    cal.loaded = !!(res && res.ok);
+    if (res && res.ok && res.calibrated === true) {
+      cal.a = Number(res.a);
+      cal.b = Number(res.b);
+      cal.calibrated = true;
+      cal.calDate = Number(res.calDate || 0) || 0;
+    } else {
+      cal.a = CURRENT_SENSOR_CAL_A_DEFAULT;
+      cal.b = CURRENT_SENSOR_CAL_B_DEFAULT;
+      cal.calibrated = false;
+      cal.calDate = 0;
+    }
+    if (cb) cb(cal);
+  });
+}
+
+function currentRawFromPercent(percent){
+  var n = Number(percent);
+  if (!isFinite(n)) return NaN;
+  if (n < 0) n = 0;
+  if (n > 100) n = 100;
+  return (n * 4095) / 100;
+}
+function ampsFromRaw(raw){
   var n = Number(raw);
   if (!isFinite(n)) return NaN;
   if (n < 0) n = 0;
   if (n > 4095) n = 4095;
-  return (n * 100) / 4095;
+  return (currentCalA() * n) + currentCalB();
 }
 function ampsFromPercent(percent){
-  var n = Number(percent);
-  if (!isFinite(n)) return NaN;
-  var amps = (n - CURRENT_SENSOR_CAL_ZERO_PERCENT) / CURRENT_SENSOR_CAL_SLOPE_PERCENT_PER_AMP;
-  return amps < CURRENT_SENSOR_CAL_MIN_AMPS ? 0 : amps;
-}
-function ampsFromRaw(raw){
-  return ampsFromPercent(currentPercentFromRaw(raw));
+  var raw = currentRawFromPercent(percent);
+  if (!isFinite(raw)) return NaN;
+  return ampsFromRaw(raw);
 }
 function percentFromAmps(amps){
   var n = Number(amps);
   if (!isFinite(n)) return NaN;
-  if (n < CURRENT_SENSOR_CAL_MIN_AMPS) return CURRENT_SENSOR_CAL_ZERO_PERCENT;
-  return (n * CURRENT_SENSOR_CAL_SLOPE_PERCENT_PER_AMP) + CURRENT_SENSOR_CAL_ZERO_PERCENT;
+  return (((n - currentCalB()) / currentCalA()) * 100) / 4095;
 }
-function tplCurrentFromRaw(raw){
-  var amps = ampsFromRaw(raw);
-  if (!isFinite(amps)) return '—';
-  return tplComma2(amps) + ' А';
+function tplCurrentValue(amps){
+  if (amps === null || typeof amps === 'undefined') return '—';
+  var n = Number(amps);
+  if (!isFinite(n)) return '—';
+  return tplComma2(n) + ' А';
+}
+function tplCurrentFromApi(amps){
+  if (amps === null || typeof amps === 'undefined') return '—';
+  var value = Number(amps);
+  if (!isFinite(value)) return '—';
+  return tplCurrentValue(value);
 }
 function tplCurrentFromPercent(percent){
   var amps = ampsFromPercent(percent);
   if (!isFinite(amps)) return '—';
-  return tplComma2(amps) + ' А';
+  return tplCurrentValue(amps);
 }
 function tplValueText(sensor, blankWhenDisabled){
   if (!sensor) return blankWhenDisabled ? '' : '—';
@@ -2080,7 +2147,7 @@ function tplValueText(sensor, blankWhenDisabled){
   if (sensor.error || sensor.value == null) return '—';
   if (sensor.id === 'L') return (typeof sensor.circuitOpen === 'boolean' ? sensor.circuitOpen : (Number(sensor.value) <= 0.5)) ? 'MAX!' : 'OK';
   if (sensor.id === 'F') return flowAlarmVisible(sensor) ? 'Нет протока!' : 'OK';
-  if (sensor.id === 'C') return tplCurrentFromRaw(sensor.value);
+  if (sensor.id === 'C') return tplCurrentFromApi(sensor.amps);
   return tplComma2(sensor.value);
 }
 function tplHomeValueClass(sensor){
@@ -2787,6 +2854,11 @@ function renderSensorAlarm(id){
   var s = findSensor(id);
   if (!s) { go('#/home'); return; }
   stopPoll();
+  if (id === 'C') {
+    loadCurrentCalStatus(function(){
+      if ((routeParts()[0] || '') === 'sensorAlarm' && decodeURIComponent(routeParts()[1] || '') === 'C') render();
+    });
+  }
   var ui = getAlarmUi(id);
   var html = [];
   html.push('<div class="tpl-screen"><div class="phone tpl-page">');
