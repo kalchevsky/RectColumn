@@ -167,7 +167,12 @@ var state = {
   currentCalibrateSession: {
     zeroDone: false,
     x0: null,
-    busy: false
+    busy: false,
+    knownBusy: false,
+    knownValue: '',
+    completed: false,
+    resultAmps: null,
+    resultWarning: ''
   }
 };
 
@@ -1509,28 +1514,55 @@ function renderCurrentSensorCalibrate(){
   var session = ensureCurrentCalibrateSession();
   var rawText = tplCurrentRawValue(cal.raw);
   var ampsText = tplCurrentFromApi(cal.amps);
+  var anyBusy = !!(session.busy || session.knownBusy);
+  var knownError = session.zeroDone ? currentCalKnownValueError(session.knownValue) : '';
+  var knownDisabled = (!session.zeroDone) || !!knownError || anyBusy;
+  var resultAmps = (session.resultAmps !== null && typeof session.resultAmps !== 'undefined') ? session.resultAmps : cal.amps;
   var html = '<div class="app"><div class="panel"><h2>Калибровка</h2>';
   html += renderMessages('');
   html += '<div class="small">Данные обновляются автоматически раз в секунду.</div>';
-  html += '<div class="field"><label>Сырое значение АЦП</label><div class="mono">' + esc(rawText) + '</div></div>';
-  html += '<div class="field"><label>Текущий ток</label><div>' + esc(ampsText) + '</div></div>';
+  html += '<div class="field"><label>Сырое значение АЦП</label><div id="currentCalRawValue" class="mono">' + esc(rawText) + '</div></div>';
+  html += '<div class="field"><label>Текущий ток</label><div id="currentCalAmpsValue">' + esc(ampsText) + '</div></div>';
   html += '<div class="field"><label>Шаг 0</label><div>Отключите нагрузку от датчика тока и нажмите кнопку "Установка 0".</div></div>';
   html += '<div class="inline-actions">';
   html += '<button class="btn" onclick="submitCurrentCalZero()"'
-       + (session.busy ? ' disabled aria-busy="true"' : '')
+       + (anyBusy ? ' disabled aria-busy="true"' : '')
        + '>' + esc(session.busy ? 'Установка 0...' : 'Установка 0') + '</button>';
   html += '<button class="btn secondary" onclick="toggleCurrentCalibrateDetails()">' + esc(state.currentCalibrateDetailsOpen ? 'Скрыть подробнее' : 'Подробнее') + '</button>';
   html += '</div>';
   if (state.currentCalibrateDetailsOpen) {
     html += '<div class="field"><label>X(0)</label><div class="mono">' + esc(tplCurrentRawValue(session.x0)) + '</div></div>';
-    html += '<div class="field"><label>zeroSet в backend</label><div>' + esc(cal.zeroSet ? 'Да' : 'Нет') + '</div></div>';
+    html += '<div class="field"><label>zeroSet в backend</label><div id="currentCalZeroSetValue">' + esc(cal.zeroSet ? 'Да' : 'Нет') + '</div></div>';
   }
-  html += '<div class="field"><label>Шаг 2</label><div>'
-       + esc(session.zeroDone ? 'Шаг доступен. Реализация будет добавлена на следующем этапе.' : 'Сначала выполните установку нуля.')
-       + '</div></div>';
-  html += '<button class="btn secondary"'
-       + (session.zeroDone ? ' onclick="showCurrentCalStep2Soon()"' : ' disabled')
-       + '>' + esc(session.zeroDone ? 'Шаг 2 (скоро)' : 'Шаг 2 недоступен') + '</button>';
+  if (!session.completed) {
+    html += '<div class="field"><label>Шаг 2</label><div>'
+         + esc(session.zeroDone
+             ? 'Подключите нагрузку с известным потреблением тока. Измерьте ток любым доступным способом и введите значение.'
+             : 'Сначала выполните установку нуля.')
+         + '</div></div>';
+    html += '<div class="field"><label>Известное значение тока, А</label><input id="currentCalKnownValue" class="mono" type="text" inputmode="decimal" value="'
+         + esc(session.knownValue || '')
+         + '" oninput="onCurrentCalKnownInput(this.value)"'
+         + (session.zeroDone ? '' : ' disabled')
+         + '></div>';
+    html += '<div id="currentCalKnownError" class="small">' + esc(session.zeroDone && knownError ? knownError : '') + '</div>';
+    html += '<div class="inline-actions">';
+    html += '<button id="currentCalKnownSubmit" class="btn secondary" onclick="submitCurrentCalKnown()"'
+         + (knownDisabled ? ' disabled' : '')
+         + (session.knownBusy ? ' aria-busy="true"' : '')
+         + '>' + esc(session.knownBusy ? 'Сохранение...' : 'Готово') + '</button>';
+    html += '</div>';
+  } else {
+    html += '<div class="field"><label>Шаг 3</label><div>Калибровка завершена. Коэффициенты сохранены в контроллере.</div></div>';
+    html += '<div class="field"><label>Скорректированный ток</label><div id="currentCalResultAmpsValue">' + esc(tplCurrentFromApi(resultAmps)) + '</div></div>';
+    if (session.resultWarning) {
+      html += '<div class="small">' + esc(session.resultWarning) + '</div>';
+    }
+    html += '<div class="inline-actions">';
+    html += '<button class="btn secondary" onclick="restartCurrentCalibration()">Калибровать заново</button>';
+    html += '<button class="btn" onclick="go(\'#/currentSensor\');render();">Вернуться в настройки</button>';
+    html += '</div>';
+  }
   html += '<button class="btn light" onclick="go(\'#/currentSensor\');render();">Назад</button>';
   html += '</div></div>';
   app.innerHTML = html;
@@ -2150,7 +2182,12 @@ function ensureCurrentCalibrateSession(){
     state.currentCalibrateSession = {
       zeroDone: false,
       x0: null,
-      busy: false
+      busy: false,
+      knownBusy: false,
+      knownValue: '',
+      completed: false,
+      resultAmps: null,
+      resultWarning: ''
     };
   }
   return state.currentCalibrateSession;
@@ -2160,6 +2197,11 @@ function resetCurrentCalibrateSession(){
   session.zeroDone = false;
   session.x0 = null;
   session.busy = false;
+  session.knownBusy = false;
+  session.knownValue = '';
+  session.completed = false;
+  session.resultAmps = null;
+  session.resultWarning = '';
   state.currentCalibrateDetailsOpen = false;
 }
 function currentCalA(){
@@ -2267,6 +2309,28 @@ function tplCurrentRawValue(raw){
   if (!isFinite(n)) return '—';
   return tplComma2(n);
 }
+function currentCalKnownValueError(value){
+  var text = String(value == null ? '' : value).trim();
+  if (!text) return 'Введите положительное числовое значение тока';
+  var amps = tplParseComma(text);
+  if (!isFinite(amps) || amps <= 0) return 'Введите положительное числовое значение тока';
+  return '';
+}
+function currentCalKnownSubmitErrorText(res){
+  var type = String(res && res.type ? res.type : '');
+  if (type === 'zero_required') return 'Сначала выполните установку нуля';
+  if (type === 'bad_value') return 'Введите положительное числовое значение тока';
+  if (type === 'no_load_change') {
+    return 'Не обнаружено изменение показаний. Проверьте, что нагрузка действительно подключена, и повторите';
+  }
+  if (type === 'sensor_unavailable') return 'Нет актуального значения датчика тока';
+  if (type === 'storage') return 'Не удалось сохранить калибровку тока';
+  if (res && (res.error === 'network_error' || res.error === 'network_timeout' || res.error === 'bad_json')) {
+    return 'Не удалось завершить калибровку. Проверьте связь с контроллером и повторите попытку.';
+  }
+  if (res && (res.error || res.err)) return String(res.error || res.err);
+  return 'Не удалось завершить калибровку. Повторите попытку.';
+}
 function tplValueText(sensor, blankWhenDisabled){
   if (!sensor) return blankWhenDisabled ? '' : '—';
   if (!sensor.enabled) return blankWhenDisabled ? '' : '—';
@@ -2324,20 +2388,47 @@ function startCurrentCalibratePoll(){
     function finish(){
       pending--;
       if (pending > 0) return;
-      if (routeParts()[0] === 'currentSensorCalibrate') render();
+      if (routeParts()[0] === 'currentSensorCalibrate') refreshCurrentCalibrateLive();
       done();
     }
     loadLive(finish);
     loadCurrentCalStatus(finish, true);
   });
 }
-function showCurrentCalStep2Soon(){
-  setSuccessNotice('Шаг 2 калибровки будет добавлен на следующем этапе.');
-  render();
+function refreshCurrentCalibrateLive(){
+  var cal = ensureCurrentCalState();
+  var session = ensureCurrentCalibrateSession();
+  var rawValue = byId('currentCalRawValue');
+  var ampsValue = byId('currentCalAmpsValue');
+  var zeroSetValue = byId('currentCalZeroSetValue');
+  var resultAmpsValue = byId('currentCalResultAmpsValue');
+  var liveResultAmps = (cal.amps === null || typeof cal.amps === 'undefined') ? session.resultAmps : cal.amps;
+  if (rawValue) rawValue.textContent = tplCurrentRawValue(cal.raw);
+  if (ampsValue) ampsValue.textContent = tplCurrentFromApi(cal.amps);
+  if (zeroSetValue) zeroSetValue.textContent = cal.zeroSet ? 'Да' : 'Нет';
+  if (resultAmpsValue) resultAmpsValue.textContent = tplCurrentFromApi(liveResultAmps);
+}
+function onCurrentCalKnownInput(value){
+  var session = ensureCurrentCalibrateSession();
+  var knownError = '';
+  var submit = null;
+  var errorBox = null;
+  session.knownValue = String(value == null ? '' : value);
+  if (routeParts()[0] !== 'currentSensorCalibrate') return;
+  knownError = session.zeroDone ? currentCalKnownValueError(session.knownValue) : '';
+  submit = byId('currentCalKnownSubmit');
+  errorBox = byId('currentCalKnownError');
+  if (errorBox) errorBox.textContent = session.zeroDone ? knownError : '';
+  if (submit) submit.disabled = (!session.zeroDone) || !!knownError || !!(session.busy || session.knownBusy);
+}
+function restartCurrentCalibration(){
+  clearNotice();
+  resetCurrentCalibrateSession();
+  if (routeParts()[0] === 'currentSensorCalibrate') render();
 }
 function submitCurrentCalZero(){
   var session = ensureCurrentCalibrateSession();
-  if (session.busy) return;
+  if (session.busy || session.knownBusy) return;
   session.busy = true;
   clearNotice();
   render();
@@ -2346,6 +2437,10 @@ function submitCurrentCalZero(){
     if (res && res.ok) {
       var cal = ensureCurrentCalState();
       session.zeroDone = true;
+      session.knownValue = '';
+      session.completed = false;
+      session.resultAmps = null;
+      session.resultWarning = '';
       if (res.x0 !== null && typeof res.x0 !== 'undefined') session.x0 = Number(res.x0);
       else session.x0 = cal.raw;
       state.currentCalibrateDetailsOpen = true;
@@ -2356,6 +2451,53 @@ function submitCurrentCalZero(){
       return;
     }
     setNotice((res && (res.error || res.err)) ? (res.error || res.err) : 'Не удалось установить ноль. Повторите попытку.');
+    if (routeParts()[0] === 'currentSensorCalibrate') render();
+  });
+}
+function submitCurrentCalKnown(){
+  var session = ensureCurrentCalibrateSession();
+  if (session.knownBusy || session.busy) return;
+  if (!session.zeroDone) {
+    setNotice('Сначала выполните установку нуля');
+    render();
+    return;
+  }
+  var knownError = currentCalKnownValueError(session.knownValue);
+  if (knownError) {
+    setNotice(knownError);
+    render();
+    return;
+  }
+
+  session.knownBusy = true;
+  clearNotice();
+  render();
+  api('/api/v1/calibrate/known', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ value: tplParseComma(session.knownValue) })
+  }, function(res){
+    session.knownBusy = false;
+    if (res && res.ok) {
+      var cal = ensureCurrentCalState();
+      cal.a = Number(res.a);
+      cal.b = Number(res.b);
+      cal.calibrated = true;
+      session.completed = true;
+      session.resultWarning = String((res && res.warning) ? res.warning : '');
+      session.resultAmps = (res && res.amps !== null && typeof res.amps !== 'undefined') ? Number(res.amps) : cal.amps;
+      state.currentCalibrateDetailsOpen = true;
+      setSuccessNotice('Калибровка завершена');
+      loadCurrentCalStatus(function(updatedCal){
+        if (session.resultAmps === null || typeof session.resultAmps === 'undefined') {
+          session.resultAmps = updatedCal.amps;
+        }
+        if (routeParts()[0] === 'currentSensorCalibrate') render();
+      }, true);
+      return;
+    }
+    if (res && res.type === 'zero_required') session.zeroDone = false;
+    setNotice(currentCalKnownSubmitErrorText(res));
     if (routeParts()[0] === 'currentSensorCalibrate') render();
   });
 }
