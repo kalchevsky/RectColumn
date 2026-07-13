@@ -10,6 +10,21 @@
 
 class Storage {
 public:
+    struct CurrentCalData {
+        float a;
+        float b;
+        uint32_t calDate;
+        bool calibrated;
+    };
+
+    // Текущая формула:
+    //   percent = raw * 100 / 4095
+    //   amps    = (percent - 31.27) / 1.67
+    // Разворачиваем:
+    //   amps = raw * ((100 / 4095) / 1.67) + (-31.27 / 1.67)
+    static constexpr float CURRENT_CAL_A_DEFAULT = (100.0f / 4095.0f) / 1.67f;
+    static constexpr float CURRENT_CAL_B_DEFAULT = -31.27f / 1.67f;
+
     bool ready() const { return _nvsReady; }
     bool recovered() const { return _nvsRecovered; }
     uint32_t saveOutputsLastMs() const { return _saveOutputsLastMs; }
@@ -315,6 +330,51 @@ public:
         p.end();
     }
 
+    bool loadCurrentCal(float& a, float& b, uint32_t& date, bool& calibrated) {
+        _setDefaultCurrentCal(a, b, date, calibrated);
+
+        Preferences p;
+        if (!_openPrefs(p, "curcal", true)) return false;
+
+        if (!p.isKey("a") || !p.isKey("b") || !p.isKey("date") || !p.isKey("cal")) {
+            p.end();
+            return true;
+        }
+
+        a = p.getFloat("a", CURRENT_CAL_A_DEFAULT);
+        b = p.getFloat("b", CURRENT_CAL_B_DEFAULT);
+        date = p.getUInt("date", 0U);
+        calibrated = p.getBool("cal", false);
+        p.end();
+        return true;
+    }
+
+    bool saveCurrentCal(float a, float b, uint32_t date) {
+        Preferences p;
+        if (!_openPrefs(p, "curcal", false)) return false;
+        const bool ok = _putAndVerifyFloat(p, "a", a)
+                     && _putAndVerifyFloat(p, "b", b)
+                     && _putAndVerifyUInt(p, "date", date)
+                     && _putAndVerifyBool(p, "cal", true);
+        p.end();
+        return ok;
+    }
+
+    bool resetCurrentCal() {
+        float a = CURRENT_CAL_A_DEFAULT;
+        float b = CURRENT_CAL_B_DEFAULT;
+        uint32_t date = 0U;
+
+        Preferences p;
+        if (!_openPrefs(p, "curcal", false)) return false;
+        const bool ok = _putAndVerifyFloat(p, "a", a)
+                     && _putAndVerifyFloat(p, "b", b)
+                     && _putAndVerifyUInt(p, "date", date)
+                     && _putAndVerifyBool(p, "cal", false);
+        p.end();
+        return ok;
+    }
+
     bool saveFactoryDone(bool done) {
         Preferences p;
         if (!_openPrefs(p, "system", false)) return false;
@@ -455,6 +515,26 @@ private:
     bool _putAndVerifyBool(Preferences& p, const char* key, bool value) {
         (void)p.putBool(key, value);
         const bool actual = p.getBool(key, !value);
+        const bool ok = (actual == value);
+        if (!ok) {
+            _lastStatus = String("Preferences write failed for key '") + key + "'";
+        }
+        return ok;
+    }
+
+    bool _putAndVerifyFloat(Preferences& p, const char* key, float value) {
+        (void)p.putFloat(key, value);
+        const float actual = p.getFloat(key, value + 1.0f);
+        const bool ok = (actual == value);
+        if (!ok) {
+            _lastStatus = String("Preferences write failed for key '") + key + "'";
+        }
+        return ok;
+    }
+
+    bool _putAndVerifyUInt(Preferences& p, const char* key, uint32_t value) {
+        (void)p.putUInt(key, value);
+        const uint32_t actual = p.getUInt(key, value + 1U);
         const bool ok = (actual == value);
         if (!ok) {
             _lastStatus = String("Preferences write failed for key '") + key + "'";
@@ -793,5 +873,12 @@ private:
         if (p.begin(ns, readOnly)) return true;
         _lastStatus = String("Preferences open failed for namespace '") + ns + "'";
         return false;
+    }
+
+    void _setDefaultCurrentCal(float& a, float& b, uint32_t& date, bool& calibrated) {
+        a = CURRENT_CAL_A_DEFAULT;
+        b = CURRENT_CAL_B_DEFAULT;
+        date = 0U;
+        calibrated = false;
     }
 };
