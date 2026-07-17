@@ -66,3 +66,10 @@ local_config.h
 RectColumn.zip
 tools/report.md
 /docs/
+
+# Временные дампы распаковки ассетов
+TEMP/page-app.from-WebPageAppJs.js
+
+# Дистрибутив uPlot (в репо только сгенерённые *.h и *.min.*)
+tools/uPlot-1.6.32.zip
+tools/uPlot-1.6.32/
