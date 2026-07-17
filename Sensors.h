@@ -691,10 +691,26 @@ public:
     }
 
     bool isDueToPoll(uint32_t now) const {
-        const uint32_t cappedHealthyMs =
-            (periodMs < SENSOR_LOST_TIMEOUT_MS) ? periodMs : SENSOR_LOST_TIMEOUT_MS;
-        const uint32_t retryMs = (error || !present) ? 1000UL : cappedHealthyMs;
+        const uint32_t retryMs = (error || !present) ? 1000UL : periodMs;
         return enabled && ((uint32_t)(now - _lastPollMs) >= retryMs);
+    }
+
+    void onEnabledByOperator(uint32_t now) override {
+        _healthySinceMs = 0;
+        _lastPollMs = now;
+
+        // Легкий I2C-probe без реинициализации шины.
+        present = (_probeI2c() == 0);
+
+        if (present) {
+            error = false;
+            diagCode = SENSOR_DIAG_NONE;
+            sensorErrorReason = SENSOR_ERR_NONE;
+        } else {
+            value = NAN;
+            hwLimited = false;
+        }
+        // Реальную валидацию/fault выполнит ближайший poll().
     }
 
     void poll() override {
