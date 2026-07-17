@@ -5,17 +5,19 @@
 #include <esp_err.h>
 #include <nvs.h>
 #include <nvs_flash.h>
+#include <string.h>
 #include "SensorManager.h"
 #include "OutputManager.h"
 
+struct CalPoint {
+    float raw = 0.0f;
+    float amps = 0.0f;
+    bool used = false;
+};
+
 class Storage {
 public:
-    struct CurrentCalData {
-        float a;
-        float b;
-        uint32_t calDate;
-        bool calibrated;
-    };
+    static constexpr uint8_t CURRENT_CAL_MAX_POINTS = 10;
 
     // Текущая формула:
     //   percent = raw * 100 / 4095
@@ -24,6 +26,18 @@ public:
     //   amps = raw * ((100 / 4095) / 1.67) + (-31.27 / 1.67)
     static constexpr float CURRENT_CAL_A_DEFAULT = (100.0f / 4095.0f) / 1.67f;
     static constexpr float CURRENT_CAL_B_DEFAULT = -31.27f / 1.67f;
+
+    struct CurrentCalData {
+        float a = CURRENT_CAL_A_DEFAULT;
+        float b = CURRENT_CAL_B_DEFAULT;
+        uint32_t calDate = 0U;
+        uint32_t zeroDate = 0U;
+        bool calibrated = false;
+        float x0 = NAN;
+        bool zeroSet = false;
+        uint8_t pointCount = 0;
+        CalPoint points[CURRENT_CAL_MAX_POINTS] = {};
+    };
 
     bool ready() const { return _nvsReady; }
     bool recovered() const { return _nvsRecovered; }
@@ -330,49 +344,93 @@ public:
         p.end();
     }
 
-    bool loadCurrentCal(float& a, float& b, uint32_t& date, bool& calibrated) {
-        _setDefaultCurrentCal(a, b, date, calibrated);
+    bool loadCurrentCal(CurrentCalData& data) {
+        _setDefaultCurrentCal(data);
 
         Preferences p;
         if (!_openPrefs(p, "curcal", true)) return false;
 
-        if (!p.isKey("a") || !p.isKey("b") || !p.isKey("date") || !p.isKey("cal")) {
-            p.end();
-            return true;
+        if (p.isKey("a")) data.a = p.getFloat("a", CURRENT_CAL_A_DEFAULT);
+        if (p.isKey("b")) data.b = p.getFloat("b", CURRENT_CAL_B_DEFAULT);
+        if (p.isKey("date")) data.calDate = p.getUInt("date", 0U);
+        if (p.isKey("zero_date")) data.zeroDate = p.getUInt("zero_date", 0U);
+        if (p.isKey("cal")) data.calibrated = p.getBool("cal", false);
+        if (p.isKey("x0")) data.x0 = p.getFloat("x0", NAN);
+        if (p.isKey("zero_set")) data.zeroSet = p.getBool("zero_set", false);
+        if (data.zeroDate == 0U && data.zeroSet) data.zeroDate = data.calDate;
+
+        uint8_t pointCount = p.isKey("cal_cnt")
+            ? p.getUChar("cal_cnt", 0)
+            : 0;
+        if (pointCount > CURRENT_CAL_MAX_POINTS) pointCount = CURRENT_CAL_MAX_POINTS;
+
+        if (pointCount > 0 && p.isKey("cal_pts")) {
+            CurrentCalPointsBlob blob{};
+            if (p.getBytesLength("cal_pts") == sizeof(blob) &&
+                p.getBytes("cal_pts", &blob, sizeof(blob)) == sizeof(blob)) {
+                for (uint8_t i = 0; i < pointCount; i++) {
+                    data.points[i].raw = blob.points[i].raw;
+                    data.points[i].amps = blob.points[i].amps;
+                    data.points[i].used = true;
+                }
+                data.pointCount = pointCount;
+            }
         }
 
-        a = p.getFloat("a", CURRENT_CAL_A_DEFAULT);
-        b = p.getFloat("b", CURRENT_CAL_B_DEFAULT);
-        date = p.getUInt("date", 0U);
-        calibrated = p.getBool("cal", false);
         p.end();
         return true;
     }
 
-    bool saveCurrentCal(float a, float b, uint32_t date) {
+    bool loadCurrentCal(float& a, float& b, uint32_t& date, bool& calibrated) {
+        CurrentCalData data{};
+        const bool ok = loadCurrentCal(data);
+        a = data.a;
+        b = data.b;
+        date = data.calDate;
+        calibrated = data.calibrated;
+        return ok;
+    }
+
+    bool saveCurrentCal(const CurrentCalData& data) {
         Preferences p;
         if (!_openPrefs(p, "curcal", false)) return false;
-        const bool ok = _putAndVerifyFloat(p, "a", a)
-                     && _putAndVerifyFloat(p, "b", b)
-                     && _putAndVerifyUInt(p, "date", date)
-                     && _putAndVerifyBool(p, "cal", true);
+
+        CurrentCalPointsBlob blob{};
+        uint8_t pointCount = data.pointCount;
+        if (pointCount > CURRENT_CAL_MAX_POINTS) pointCount = CURRENT_CAL_MAX_POINTS;
+        for (uint8_t i = 0; i < pointCount; i++) {
+            if (!data.points[i].used) continue;
+            blob.points[i].raw = data.points[i].raw;
+            blob.points[i].amps = data.points[i].amps;
+        }
+
+        const bool ok = _putAndVerifyFloat(p, "a", data.a)
+                     && _putAndVerifyFloat(p, "b", data.b)
+                     && _putAndVerifyUInt(p, "date", data.calDate)
+                     && _putAndVerifyUInt(p, "zero_date", data.zeroDate)
+                     && _putAndVerifyBool(p, "cal", data.calibrated)
+                     && _putAndVerifyFloat(p, "x0", data.x0)
+                     && _putAndVerifyBool(p, "zero_set", data.zeroSet)
+                     && _putAndVerifyUChar(p, "cal_cnt", pointCount)
+                     && _putAndVerifyBlob(p, "cal_pts", blob);
         p.end();
         return ok;
     }
 
-    bool resetCurrentCal() {
-        float a = CURRENT_CAL_A_DEFAULT;
-        float b = CURRENT_CAL_B_DEFAULT;
-        uint32_t date = 0U;
+    bool saveCurrentCal(float a, float b, uint32_t date) {
+        CurrentCalData data{};
+        _setDefaultCurrentCal(data);
+        data.a = a;
+        data.b = b;
+        data.calDate = date;
+        data.calibrated = true;
+        return saveCurrentCal(data);
+    }
 
-        Preferences p;
-        if (!_openPrefs(p, "curcal", false)) return false;
-        const bool ok = _putAndVerifyFloat(p, "a", a)
-                     && _putAndVerifyFloat(p, "b", b)
-                     && _putAndVerifyUInt(p, "date", date)
-                     && _putAndVerifyBool(p, "cal", false);
-        p.end();
-        return ok;
+    bool resetCurrentCal() {
+        CurrentCalData data{};
+        _setDefaultCurrentCal(data);
+        return saveCurrentCal(data);
     }
 
     bool saveFactoryDone(bool done) {
@@ -483,6 +541,15 @@ private:
         uint8_t  reserved[5] = {};
     };
 
+    struct CurrentCalPointBlob {
+        float raw = 0.0f;
+        float amps = 0.0f;
+    };
+
+    struct CurrentCalPointsBlob {
+        CurrentCalPointBlob points[CURRENT_CAL_MAX_POINTS] = {};
+    };
+
     bool   _nvsChecked = false;
     bool   _nvsReady = false;
     bool   _nvsRecovered = false;
@@ -524,7 +591,18 @@ private:
 
     bool _putAndVerifyFloat(Preferences& p, const char* key, float value) {
         (void)p.putFloat(key, value);
-        const float actual = p.getFloat(key, value + 1.0f);
+        const float fallback = isnan(value) ? 1234567.0f : (value + 1.0f);
+        const float actual = p.getFloat(key, fallback);
+        const bool ok = isnan(value) ? isnan(actual) : (actual == value);
+        if (!ok) {
+            _lastStatus = String("Preferences write failed for key '") + key + "'";
+        }
+        return ok;
+    }
+
+    bool _putAndVerifyUChar(Preferences& p, const char* key, uint8_t value) {
+        (void)p.putUChar(key, value);
+        const uint8_t actual = p.getUChar(key, value + 1U);
         const bool ok = (actual == value);
         if (!ok) {
             _lastStatus = String("Preferences write failed for key '") + key + "'";
@@ -536,6 +614,23 @@ private:
         (void)p.putUInt(key, value);
         const uint32_t actual = p.getUInt(key, value + 1U);
         const bool ok = (actual == value);
+        if (!ok) {
+            _lastStatus = String("Preferences write failed for key '") + key + "'";
+        }
+        return ok;
+    }
+
+    template <typename BlobT>
+    bool _putAndVerifyBlob(Preferences& p, const char* key, const BlobT& value) {
+        if (p.putBytes(key, &value, sizeof(value)) != sizeof(value)) {
+            _lastStatus = String("Preferences write failed for key '") + key + "'";
+            return false;
+        }
+
+        BlobT actual{};
+        const bool ok = (p.getBytesLength(key) == sizeof(actual))
+                     && (p.getBytes(key, &actual, sizeof(actual)) == sizeof(actual))
+                     && (memcmp(&actual, &value, sizeof(value)) == 0);
         if (!ok) {
             _lastStatus = String("Preferences write failed for key '") + key + "'";
         }
@@ -880,5 +975,21 @@ private:
         b = CURRENT_CAL_B_DEFAULT;
         date = 0U;
         calibrated = false;
+    }
+
+    void _setDefaultCurrentCal(CurrentCalData& data) {
+        data.a = CURRENT_CAL_A_DEFAULT;
+        data.b = CURRENT_CAL_B_DEFAULT;
+        data.calDate = 0U;
+        data.zeroDate = 0U;
+        data.calibrated = false;
+        data.x0 = NAN;
+        data.zeroSet = false;
+        data.pointCount = 0;
+        for (uint8_t i = 0; i < CURRENT_CAL_MAX_POINTS; i++) {
+            data.points[i].raw = 0.0f;
+            data.points[i].amps = 0.0f;
+            data.points[i].used = false;
+        }
     }
 };

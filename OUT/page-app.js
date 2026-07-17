@@ -10,6 +10,7 @@ var outputTitles = {
   CH1:'CH1', CH2:'CH2', CH3:'CH3', CH4:'Звонок', CH5:'Буззер'
 };
 var LIVE_STATE_POLL_MS = 1000;
+var CAL_BASIC_POLL_MS = 500;
 var MANUAL_RELAY_POLL_MS = 500;
 var MANUAL_VISUAL_FEEDBACK_MS = 150;
 var MANUAL_PENDING_HARD_TIMEOUT_MS = 8000;
@@ -27,9 +28,15 @@ var NOTICE_ALLOWED_VIEWS = {
   notifications:true,
   diag:true,
   log:true,
-  num:true
+  num:true,
+  'cal-basic':true,
+  'cal-expert':true
 };
 var noticeHideTimer = 0;
+var CURRENT_CAL_EXPERT_UPLOT_JS_URL = '/uplot.js';
+var CURRENT_CAL_EXPERT_UPLOT_CSS_URL = '/uplot.css';
+var CURRENT_CAL_EXPERT_CHART_HEIGHT = 292;
+var currentCalExpertUPlotLoadPromise = null;
 
 /* ===== UI font config ===== */
 var uiFontConfig = {
@@ -114,6 +121,53 @@ function ensureHeaderClockStyles(){
   document.head.appendChild(style);
 }
 
+function ensureCalExpertStyles(){
+  if (byId('rc-cal-expert-style')) return;
+  var style = document.createElement('style');
+  style.id = 'rc-cal-expert-style';
+  style.textContent = [
+    '.cal-expert-summary{display:flex;flex-wrap:wrap;justify-content:space-between;gap:12px;}',
+    '.cal-expert-stat{flex:1 1 160px;min-width:0;}',
+    '.cal-expert-stat strong{display:block;margin-top:4px;font-size:18px;line-height:1.2;}',
+    '.cal-expert-coeffs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:12px;}',
+    '.cal-expert-coeff{padding:10px 12px;border-radius:14px;background:rgba(148,163,184,.10);border:1px solid rgba(148,163,184,.18);}',
+    '.cal-expert-chart-card{padding:0;overflow:hidden;}',
+    '.cal-expert-chart-head{display:flex;flex-wrap:wrap;align-items:flex-start;justify-content:space-between;gap:10px;padding:14px 16px 0;}',
+    '.cal-expert-chart-title{margin:2px 0 0;font-size:18px;line-height:1.2;}',
+    '.cal-expert-chart-caption{opacity:.82;}',
+    '.cal-expert-chart-legend{display:flex;flex-wrap:wrap;gap:8px 10px;font-size:12px;line-height:1.25;}',
+    '.cal-expert-chart-legend-item{display:inline-flex;align-items:center;gap:6px;}',
+    '.cal-expert-chart-legend-swatch{display:inline-block;width:12px;height:12px;border-radius:999px;}',
+    '.cal-expert-chart-shell{position:relative;padding:14px 16px 16px;}',
+    '.cal-expert-chart-frame{position:relative;min-height:292px;border-radius:18px;overflow:hidden;border:1px solid rgba(148,163,184,.18);background:radial-gradient(circle at top,rgba(37,99,235,.18),transparent 52%),linear-gradient(180deg,rgba(15,23,42,.96),rgba(15,23,42,.82));}',
+    '.cal-expert-chart-canvas{min-height:292px;}',
+    '.cal-expert-chart-fallback{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:18px;text-align:center;background:rgba(15,23,42,.74);}',
+    '.cal-expert-chart-note{max-width:420px;font-size:14px;line-height:1.45;color:#dbeafe;}',
+    '.cal-expert-chart-note strong{display:block;margin-bottom:6px;font-size:15px;line-height:1.25;color:#f8fafc;}',
+    '.cal-expert-chart-canvas .uplot{width:100%;border-radius:18px;overflow:hidden;background:transparent;color:#e2e8f0;}',
+    '.cal-expert-chart-canvas .u-title{color:#f8fafc;}',
+    '.cal-expert-chart-canvas .u-legend{display:none;}',
+    '.cal-expert-table{margin-top:8px;border-radius:16px;overflow:hidden;border:1px solid rgba(148,163,184,.18);background:rgba(148,163,184,.06);}',
+    '.cal-expert-table-head,.cal-expert-table-row{display:grid;grid-template-columns:56px minmax(96px,1fr) minmax(112px,1fr) 118px;gap:10px;align-items:center;padding:12px;}',
+    '.cal-expert-table-head{background:rgba(148,163,184,.12);font-size:12px;font-weight:700;line-height:1.2;text-transform:uppercase;letter-spacing:.04em;}',
+    '.cal-expert-table-row + .cal-expert-table-row{border-top:1px solid rgba(148,163,184,.18);}',
+    '.cal-expert-table-cell{min-width:0;word-break:break-word;}',
+    '.cal-expert-table-cell.action{display:flex;justify-content:flex-end;}',
+    '.cal-expert-table-empty{padding:14px 12px;font-size:14px;line-height:1.4;opacity:.82;}',
+    '@media (max-width:640px){',
+    '.cal-expert-chart-head{padding:14px 14px 0;}',
+    '.cal-expert-chart-shell{padding:12px 14px 14px;}',
+    '.cal-expert-chart-frame,.cal-expert-chart-canvas{min-height:248px;}',
+    '.cal-expert-table-head{display:none;}',
+    '.cal-expert-table-row{grid-template-columns:1fr;gap:8px;}',
+    '.cal-expert-table-cell[data-label]::before{content:attr(data-label) ": ";font-size:12px;font-weight:700;opacity:.72;}',
+    '.cal-expert-table-cell.action{justify-content:flex-start;}',
+    '.cal-expert-coeffs{grid-template-columns:1fr;}',
+    '}'
+  ].join('');
+  document.head.appendChild(style);
+}
+
 function routeParts(){
   var h = location.hash || '#/home';
   if (h.indexOf('#/') !== 0) h = '#/home';
@@ -156,23 +210,29 @@ var state = {
     b: -18.724550898204,
     calibrated: false,
     calDate: 0,
+    zeroDate: 0,
     raw: null,
     amps: null,
     zeroSet: false,
     loaded: false,
-    loading: false
-  },
-  currentCalDetailsOpen: false,
-  currentCalibrateDetailsOpen: false,
-  currentCalibrateSession: {
-    zeroDone: false,
+    loading: false,
     x0: null,
-    busy: false,
-    knownBusy: false,
-    knownValue: '',
-    completed: false,
-    resultAmps: null,
-    resultWarning: ''
+    points: [],
+    pointCount: 0,
+    stateError: '',
+    stateLoaded: false,
+    stateLoading: false
+  },
+  currentCalBasicBusy: false,
+  currentCalExpert: {
+    ampsValue: '',
+    addBusy: false,
+    clearBusy: false,
+    deleteIndex: -1,
+    chart: null,
+    chartError: '',
+    chartRefreshQueued: false,
+    chartResizeCleanup: null
   }
 };
 
@@ -278,7 +338,8 @@ function updateConnectionOverlay(){
 function updateConnectionWatchdog(){
   updateHeaderClock();
   if (document.hidden) return;
-  if (!isLiveStateRoute(routeParts()[0])) return;
+  var view = routeParts()[0];
+  if (!isLiveStateRoute(view) && !isCurrentCalLiveRoute(view)) return;
   if (!state.lastValidStateMs) return;
   if (Date.now() - state.lastValidStateMs > CONNECTION_STALE_MS) {
     markConnectionLost('stale');
@@ -342,9 +403,18 @@ function startPoll(ms, fn){
     fn(function(){ state.pollBusy = false; });
   }, ms);
 }
+function isCalBasicRoute(view){
+  return view === 'cal-basic';
+}
+function isCalExpertRoute(view){
+  return view === 'cal-expert';
+}
+function isCurrentCalLiveRoute(view){
+  return isCalBasicRoute(view) || isCalExpertRoute(view);
+}
 function isLiveStateRoute(view){
   return view === 'home' || view === 'manual' || view === 'sensor' || view === 'sensorCtrl'
-      || view === 'sensorAlarm' || view === 'currentSensor' || view === 'currentSensorCalibrate';
+      || view === 'sensorAlarm';
 }
 function startLiveStatePoll(view){
   if (!isLiveStateRoute(view)) return;
@@ -1478,7 +1548,7 @@ function renderMenu(){
   html += '<button class="btn" onclick="location.href=\'/wifi\'">Конфигурация WiFi</button>';
   html += '<button class="btn" onclick="go(\'#/sound\')">Конфигурация звука</button>';
   html += '<button class="btn" onclick="go(\'#/outputConfig\')">Конфигурация выходов CH1–CH3</button>';
-  html += '<button class="btn" onclick="go(\'#/currentSensor\');render();">Датчик тока</button>';
+  html += '<button class="btn" onclick="go(\'#/cal-basic\');render();">Датчик тока</button>';
   html += '<button class="btn" onclick="go(\'#/notifications\')">Уведомления</button>';
   html += '<button class="btn" onclick="go(\'#/log\')">Лог</button>';
   html += '<button class="btn light" onclick="go(\'#/home\')">Назад</button>';
@@ -1486,87 +1556,127 @@ function renderMenu(){
   app.innerHTML = html;
 }
 
-function renderCurrentSensorSettings(){
+function renderCalBasic(){
   stopPoll();
-  var sensor = findSensor('C') || { id:'C', enabled:false, value:null };
   var cal = ensureCurrentCalState();
-  var html = '<div class="app"><div class="panel"><h2>Настройки датчика тока</h2>';
-  html += renderMessages('');
-  html += '<div class="small">Данные обновляются автоматически раз в секунду.</div>';
-  html += '<div class="field"><label>Текущий ток</label><div>' + esc(tplCurrentFromApi(sensor && !sensor.error ? sensor.amps : null)) + '</div></div>';
-  html += '<div class="field"><label>Статус калибровки</label><div>' + esc(cal.calibrated ? 'Откалиброван' : 'Не откалиброван') + '</div></div>';
-  html += '<div class="field"><label>Дата последней калибровки</label><div>' + esc(formatUnixDateTime(cal.calDate)) + '</div></div>';
-  html += '<button class="btn secondary" onclick="toggleCurrentCalDetails()">' + esc(state.currentCalDetailsOpen ? 'Скрыть подробнее' : 'Подробнее') + '</button>';
-  if (state.currentCalDetailsOpen) {
-    html += '<div class="field"><label>Коэффициент a</label><div class="mono">' + esc(String(Number(cal.a))) + '</div></div>';
-    html += '<div class="field"><label>Коэффициент b</label><div class="mono">' + esc(String(Number(cal.b))) + '</div></div>';
+  var sensor = findSensor('C') || { enabled:false };
+  var busy = !!state.currentCalBasicBusy;
+  var html = '<div class="app"><div class="panel"><h2>Калибровка нуля</h2>';
+  html += '<div id="calBasicMessages">' + renderMessages('') + '</div>';
+  html += '<div class="field"><label>Дата установки нуля</label><div id="calBasicZeroDateValue">' + esc(formatUnixDateTime(cal.zeroDate)) + '</div></div>';
+  if (!sensor.enabled) {
+    html += '<div class="error-box">Датчик тока отключён. Включите его в настройках, чтобы выполнить калибровку.</div>';
   }
-  html += '<button class="btn" onclick="go(\'#/currentSensorCalibrate\');render();">Калибровка</button>';
+  html += '<div class="field rule-card">';
+  html += '<div class="small">Текущие данные</div>';
+  html += '<div id="calBasicAmpsValue" style="font-size:28px;font-weight:700;line-height:1.2">Нагрузка: ' + esc(tplCurrentFromApi(cal.amps)) + '</div>';
+  html += '<div id="calBasicRawValue" class="mono" style="font-size:18px;margin-top:6px">Raw: ' + esc(tplCurrentRawIntValue(cal.raw)) + '</div>';
+  html += '</div>';
+  html += '<div class="field"><div>Отключите нагрузку и нажмите кнопку</div></div>';
+  html += '<div class="inline-actions">';
+  html += '<button class="btn" onclick="submitCalBasicZero()"'
+       + ((!sensor.enabled || busy) ? ' disabled' : '')
+       + (busy ? ' aria-busy="true"' : '')
+       + '>' + esc(busy ? 'Устанавливаем...' : 'Установить ноль') + '</button>';
+  html += '<button class="btn secondary" onclick="go(\'#/cal-expert\');render();">Экспертная калибровка</button>';
+  html += '</div>';
   html += '<button class="btn light" onclick="go(\'#/menu\');render();">Назад</button>';
   html += '</div></div>';
   app.innerHTML = html;
-  startCurrentSensorPoll();
+  updateCalBasicLiveFields();
+  updateCalBasicStatusFields();
+  if (!document.hidden) {
+    loadCurrentCalLive(function(calState, res){
+      if (!isCalBasicRoute(routeParts()[0])) return;
+      updateCalBasicLiveFields();
+      updateCurrentCalRouteMessages('calBasicMessages');
+      if (!currentCalApiSuccess(res)) render();
+    });
+    loadCurrentCalStatus(function(){
+      if (!isCalBasicRoute(routeParts()[0])) return;
+      updateCalBasicStatusFields();
+      updateCurrentCalRouteMessages('calBasicMessages');
+    });
+  }
+  startCalBasicPoll();
 }
 
-function renderCurrentSensorCalibrate(){
+function renderCalExpert(){
   stopPoll();
+  destroyCurrentCalExpertChart();
+  ensureCalExpertStyles();
   var cal = ensureCurrentCalState();
-  var session = ensureCurrentCalibrateSession();
-  var rawText = tplCurrentRawValue(cal.raw);
-  var ampsText = tplCurrentFromApi(cal.amps);
-  var anyBusy = !!(session.busy || session.knownBusy);
-  var knownError = session.zeroDone ? currentCalKnownValueError(session.knownValue) : '';
-  var knownDisabled = (!session.zeroDone) || !!knownError || anyBusy;
-  var resultAmps = (session.resultAmps !== null && typeof session.resultAmps !== 'undefined') ? session.resultAmps : cal.amps;
-  var html = '<div class="app"><div class="panel"><h2>Калибровка</h2>';
-  html += renderMessages('');
-  html += '<div class="small">Данные обновляются автоматически раз в секунду.</div>';
-  html += '<div class="field"><label>Сырое значение АЦП</label><div id="currentCalRawValue" class="mono">' + esc(rawText) + '</div></div>';
-  html += '<div class="field"><label>Текущий ток</label><div id="currentCalAmpsValue">' + esc(ampsText) + '</div></div>';
-  html += '<div class="field"><label>Шаг 0</label><div>Отключите нагрузку от датчика тока и нажмите кнопку "Установка 0".</div></div>';
-  html += '<div class="inline-actions">';
-  html += '<button class="btn" onclick="submitCurrentCalZero()"'
-       + (anyBusy ? ' disabled aria-busy="true"' : '')
-       + '>' + esc(session.busy ? 'Установка 0...' : 'Установка 0') + '</button>';
-  html += '<button class="btn secondary" onclick="toggleCurrentCalibrateDetails()">' + esc(state.currentCalibrateDetailsOpen ? 'Скрыть подробнее' : 'Подробнее') + '</button>';
+  var expert = ensureCurrentCalExpertState();
+  var sensor = findSensor('C') || { enabled:false };
+  var inputError = currentCalExpertInputError(expert.ampsValue);
+  var html = '<div class="app"><div class="panel"><h2>Экспертная калибровка</h2>';
+  html += '<div id="calExpertMessages">' + renderMessages('') + '</div>';
+  if (!sensor.enabled) {
+    html += '<div class="error-box">Датчик тока отключён. Live-данные и таблица доступны только для просмотра, добавление точек заблокировано.</div>';
+  }
+  html += '<div class="field rule-card">';
+  html += '<div class="small">Текущие данные</div>';
+  html += '<div id="calExpertAmpsValue" style="font-size:28px;font-weight:700;line-height:1.2">Нагрузка: ' + esc(tplCurrentFromApi(cal.amps)) + '</div>';
+  html += '<div id="calExpertRawValue" class="mono" style="font-size:18px;margin-top:6px">Raw: ' + esc(tplCurrentRawIntValue(cal.raw)) + '</div>';
   html += '</div>';
-  if (state.currentCalibrateDetailsOpen) {
-    html += '<div class="field"><label>X(0)</label><div class="mono">' + esc(tplCurrentRawValue(session.x0)) + '</div></div>';
-    html += '<div class="field"><div id="currentCalZeroSetValue">' + esc(cal.zeroSet ? 'Нулевое значение установлено!' : 'Нулевое значение не установлено') + '</div></div>';
-  }
-  if (!session.completed) {
-    html += '<div class="field"><label>Шаг 2</label><div>'
-         + esc(session.zeroDone
-             ? 'Подключите нагрузку с известным потреблением тока. Измерьте ток любым доступным способом и введите значение.'
-             : 'Сначала выполните установку нуля.')
-         + '</div></div>';
-    html += '<div class="field"><label>Известное значение тока, А</label><input id="currentCalKnownValue" class="mono" type="text" inputmode="decimal" value="'
-         + esc(session.knownValue || '')
-         + '" oninput="onCurrentCalKnownInput(this.value)"'
-         + (session.zeroDone ? '' : ' disabled')
-         + '></div>';
-    html += '<div id="currentCalKnownError" class="small">' + esc(session.zeroDone && knownError ? knownError : '') + '</div>';
-    html += '<div class="inline-actions">';
-    html += '<button id="currentCalKnownSubmit" class="btn secondary" onclick="submitCurrentCalKnown()"'
-         + (knownDisabled ? ' disabled' : '')
-         + (session.knownBusy ? ' aria-busy="true"' : '')
-         + '>' + esc(session.knownBusy ? 'Сохранение...' : 'Готово') + '</button>';
-    html += '</div>';
-  } else {
-    html += '<div class="field"><label>Шаг 3</label><div>Калибровка завершена. Коэффициенты сохранены в контроллере.</div></div>';
-    html += '<div class="field"><label>Скорректированный ток</label><div id="currentCalResultAmpsValue">' + esc(tplCurrentFromApi(resultAmps)) + '</div></div>';
-    if (session.resultWarning) {
-      html += '<div class="small">' + esc(session.resultWarning) + '</div>';
-    }
-    html += '<div class="inline-actions">';
-    html += '<button class="btn secondary" onclick="restartCurrentCalibration()">Калибровать заново</button>';
-    html += '<button class="btn" onclick="go(\'#/currentSensor\');render();">Вернуться в настройки</button>';
-    html += '</div>';
-  }
-  html += '<button class="btn light" onclick="go(\'#/currentSensor\');render();">Назад</button>';
+  html += '<div class="field rule-card">';
+  html += '<div class="cal-expert-summary">';
+  html += '<div class="cal-expert-stat"><div class="small">Точек</div><strong id="calExpertCountValue">' + esc(currentCalExpertCountText()) + '</strong></div>';
+  html += '</div>';
+  html += '<div id="calExpertLinearValues">' + currentCalExpertLinearHtml() + '</div>';
+  html += '<div class="small" style="margin-top:10px;line-height:1.4">Модель линейная: прямая проходит через ноль (x0), а точки задают наклон по методу наименьших квадратов. Чем больше точек в рабочем диапазоне — тем точнее наклон.</div>';
+  html += '</div>';
+  html += currentCalExpertChartCardHtml();
+  html += '<div class="field"><label>Известный ток (A)</label><input id="calExpertAmpsInput" class="mono" type="text" inputmode="decimal" value="'
+       + esc(expert.ampsValue || '')
+       + '" oninput="onCurrentCalExpertAmpsInput(this.value)"></div>';
+  html += '<div id="calExpertInputError" class="small">' + esc(inputError) + '</div>';
+  html += '<div class="small">Raw берётся автоматически из текущего live-значения датчика.</div>';
+  html += '<div class="inline-actions">';
+  html += '<button type="button" id="calExpertAddBtn" class="btn secondary" onclick="submitCurrentCalExpertPoint()"'
+       + (currentCalExpertAddDisabled(sensor.enabled) ? ' disabled' : '')
+       + (expert.addBusy ? ' aria-busy="true"' : '')
+       + '>' + esc(expert.addBusy ? 'Добавляем...' : 'Добавить точку') + '</button>';
+  html += '<button type="button" id="calExpertClearBtn" class="btn danger" onclick="clearCurrentCalExpertPoints()"'
+       + (currentCalExpertClearDisabled() ? ' disabled' : '')
+       + (expert.clearBusy ? ' aria-busy="true"' : '')
+       + '>' + esc(expert.clearBusy ? 'Очищаем...' : 'Очистить все') + '</button>';
+  html += '</div>';
+  html += '<div id="calExpertPointsTable">' + currentCalExpertPointsTableHtml() + '</div>';
+  html += '<button type="button" class="btn light" onclick="go(\'#/cal-basic\');render();">Назад</button>';
   html += '</div></div>';
   app.innerHTML = html;
-  startCurrentCalibratePoll();
+  updateCalExpertLiveFields();
+  updateCurrentCalExpertUi();
+  loadCurrentCalExpertChartAssets().then(function(){
+    var current = ensureCurrentCalExpertState();
+    current.chartError = '';
+    if (isCalExpertRoute(routeParts()[0])) {
+      updateCurrentCalRouteMessages('calExpertMessages');
+      scheduleCurrentCalExpertChartRefresh();
+    }
+  }).catch(function(err){
+    var current = ensureCurrentCalExpertState();
+    current.chartError = (err && err.message) ? err.message : 'uPlot не удалось загрузить.';
+    if (isCalExpertRoute(routeParts()[0])) {
+      updateCurrentCalRouteMessages('calExpertMessages');
+      updateCurrentCalExpertUi();
+    }
+  });
+  if (!document.hidden) {
+    loadCurrentCalLive(function(calState, res){
+      if (!isCalExpertRoute(routeParts()[0])) return;
+      updateCalExpertLiveFields();
+      updateCurrentCalRouteMessages('calExpertMessages');
+      if (!currentCalApiSuccess(res)) render();
+    });
+    loadCurrentCalStateData(function(){
+      if (!isCalExpertRoute(routeParts()[0])) return;
+      updateCurrentCalRouteMessages('calExpertMessages');
+      updateCurrentCalExpertUi();
+    });
+  }
+  startCalExpertPoll();
 }
 
 function renderSound(){
@@ -2056,8 +2166,9 @@ function prepareCurrentRoute(view){
   var nextView = view || '';
   var prev = state.currentView || '';
   if (prev === 'manual' && nextView !== 'manual') resetManualRelayUiState();
-  if (prev === 'currentSensorCalibrate' && nextView !== 'currentSensorCalibrate') resetCurrentCalibrateSession();
-  if (prev !== 'currentSensorCalibrate' && nextView === 'currentSensorCalibrate') resetCurrentCalibrateSession();
+  if (isCurrentCalLiveRoute(prev) && !isCurrentCalLiveRoute(nextView)) stopPoll();
+  if (isCalExpertRoute(prev) && !isCalExpertRoute(nextView)) destroyCurrentCalExpertChart();
+  if (!isCalExpertRoute(prev) && isCalExpertRoute(nextView)) invalidateCurrentCalStateData();
   state.currentView = nextView;
 }
 
@@ -2070,8 +2181,8 @@ function renderCurrentRoute(){
   if (view === 'menu') return renderMenu();
   if (view === 'sound') return renderSound();
   if (view === 'outputConfig') return renderOutputConfig();
-  if (view === 'currentSensor') return renderCurrentSensorSettings();
-  if (view === 'currentSensorCalibrate') return renderCurrentSensorCalibrate();
+  if (view === 'cal-basic') return renderCalBasic();
+  if (view === 'cal-expert') return renderCalExpert();
   if (view === 'theme') return renderTheme();
   if (view === 'notifications') return renderNotifications();
   if (view === 'diag') return renderDiag();
@@ -2104,7 +2215,12 @@ function render(){
 window.addEventListener('hashchange', function(){ setTimeout(render, 0); });
 document.addEventListener('visibilitychange', function(){
   var view = routeParts()[0];
-  if (!document.hidden && isLiveStateRoute(view)) render();
+  if (document.hidden) {
+    if (isCurrentCalLiveRoute(view)) stopPoll();
+    return;
+  }
+  if (isCalExpertRoute(view)) invalidateCurrentCalStateData();
+  if (isCurrentCalLiveRoute(view) || isLiveStateRoute(view)) render();
 });
 
 window.addEventListener('online', function(){ loadState(function(){ render(); }); });
@@ -2165,44 +2281,61 @@ function ensureCurrentCalState(){
       b: CURRENT_SENSOR_CAL_B_DEFAULT,
       calibrated: false,
       calDate: 0,
+      zeroDate: 0,
       raw: null,
       amps: null,
       zeroSet: false,
       loaded: false,
-      loading: false
+      loading: false,
+      x0: null,
+      points: [],
+      pointCount: 0,
+      stateError: '',
+      stateLoaded: false,
+      stateLoading: false
     };
   }
+  if (typeof state.currentCal.calDate === 'undefined') state.currentCal.calDate = 0;
+  if (typeof state.currentCal.zeroDate === 'undefined') state.currentCal.zeroDate = 0;
   if (typeof state.currentCal.raw === 'undefined') state.currentCal.raw = null;
   if (typeof state.currentCal.amps === 'undefined') state.currentCal.amps = null;
   if (typeof state.currentCal.zeroSet === 'undefined') state.currentCal.zeroSet = false;
+  if (typeof state.currentCal.x0 === 'undefined') state.currentCal.x0 = null;
+  if (!Array.isArray(state.currentCal.points)) state.currentCal.points = [];
+  if (typeof state.currentCal.pointCount === 'undefined') state.currentCal.pointCount = state.currentCal.points.length;
+  if (typeof state.currentCal.stateError === 'undefined') state.currentCal.stateError = '';
+  if (typeof state.currentCal.stateLoaded === 'undefined') state.currentCal.stateLoaded = false;
+  if (typeof state.currentCal.stateLoading === 'undefined') state.currentCal.stateLoading = false;
   return state.currentCal;
 }
-function ensureCurrentCalibrateSession(){
-  if (!state.currentCalibrateSession) {
-    state.currentCalibrateSession = {
-      zeroDone: false,
-      x0: null,
-      busy: false,
-      knownBusy: false,
-      knownValue: '',
-      completed: false,
-      resultAmps: null,
-      resultWarning: ''
+function ensureCurrentCalExpertState(){
+  if (!state.currentCalExpert) {
+    state.currentCalExpert = {
+      ampsValue: '',
+      addBusy: false,
+      clearBusy: false,
+      deleteIndex: -1,
+      chart: null,
+      chartError: '',
+      chartRefreshQueued: false,
+      chartResizeCleanup: null
     };
   }
-  return state.currentCalibrateSession;
+  if (typeof state.currentCalExpert.ampsValue === 'undefined') state.currentCalExpert.ampsValue = '';
+  if (typeof state.currentCalExpert.addBusy === 'undefined') state.currentCalExpert.addBusy = false;
+  if (typeof state.currentCalExpert.clearBusy === 'undefined') state.currentCalExpert.clearBusy = false;
+  if (typeof state.currentCalExpert.deleteIndex === 'undefined') state.currentCalExpert.deleteIndex = -1;
+  if (typeof state.currentCalExpert.chart === 'undefined') state.currentCalExpert.chart = null;
+  if (typeof state.currentCalExpert.chartError === 'undefined') state.currentCalExpert.chartError = '';
+  if (typeof state.currentCalExpert.chartRefreshQueued === 'undefined') state.currentCalExpert.chartRefreshQueued = false;
+  if (typeof state.currentCalExpert.chartResizeCleanup === 'undefined') state.currentCalExpert.chartResizeCleanup = null;
+  return state.currentCalExpert;
 }
-function resetCurrentCalibrateSession(){
-  var session = ensureCurrentCalibrateSession();
-  session.zeroDone = false;
-  session.x0 = null;
-  session.busy = false;
-  session.knownBusy = false;
-  session.knownValue = '';
-  session.completed = false;
-  session.resultAmps = null;
-  session.resultWarning = '';
-  state.currentCalibrateDetailsOpen = false;
+function invalidateCurrentCalStateData(){
+  var cal = ensureCurrentCalState();
+  cal.stateError = '';
+  cal.stateLoaded = false;
+  cal.stateLoading = false;
 }
 function currentCalA(){
   var cal = ensureCurrentCalState();
@@ -2229,24 +2362,84 @@ function loadCurrentCalStatus(cb, forceReload){
   cal.loading = true;
   api('/api/v1/calibrate/status', null, function(res){
     cal.loading = false;
-    cal.loaded = !!(res && res.ok);
-    if (res && res.ok && res.raw !== null && typeof res.raw !== 'undefined') cal.raw = Number(res.raw);
-    else cal.raw = null;
-    if (res && res.ok && res.amps !== null && typeof res.amps !== 'undefined') cal.amps = Number(res.amps);
-    else cal.amps = null;
-    cal.zeroSet = !!(res && res.ok && res.zeroSet);
-    if (res && res.ok && res.calibrated === true) {
-      cal.a = Number(res.a);
-      cal.b = Number(res.b);
-      cal.calibrated = true;
-      cal.calDate = Number(res.calDate || 0) || 0;
-    } else {
-      cal.a = CURRENT_SENSOR_CAL_A_DEFAULT;
-      cal.b = CURRENT_SENSOR_CAL_B_DEFAULT;
-      cal.calibrated = false;
-      cal.calDate = 0;
-    }
+    if (currentCalApiSuccess(res)) applyCurrentCalStatusPayload(res);
+    else cal.loaded = false;
     if (cb) cb(cal);
+  });
+}
+function currentCalApiSuccess(res){
+  if (!res) return false;
+  if (res.ok === false) return false;
+  if (res.error || res.err) return false;
+  var http = Number(res.__http || 0);
+  if (http && (http < 200 || http >= 300)) return false;
+  return true;
+}
+function applyCurrentCalLivePayload(res){
+  var cal = ensureCurrentCalState();
+  cal.raw = (res && res.raw !== null && typeof res.raw !== 'undefined') ? Number(res.raw) : null;
+  cal.amps = (res && res.amps !== null && typeof res.amps !== 'undefined') ? Number(res.amps) : null;
+  return cal;
+}
+function applyCurrentCalStatusPayload(res){
+  var cal = ensureCurrentCalState();
+  var pointsSrc = [];
+  var points = [];
+  var count = 0;
+  applyCurrentCalLivePayload(res);
+  pointsSrc = (res && Array.isArray(res.points)) ? res.points : ((res && Array.isArray(res.calPoints)) ? res.calPoints : []);
+  for (var i = 0; i < pointsSrc.length; i++) {
+    var point = pointsSrc[i] || {};
+    points.push({
+      raw: (point.raw !== null && typeof point.raw !== 'undefined') ? Number(point.raw) : null,
+      amps: (point.amps !== null && typeof point.amps !== 'undefined') ? Number(point.amps) : null
+    });
+  }
+  count = Number(res && (typeof res.count !== 'undefined' ? res.count : res.calPointCount));
+  if (res && res.a !== null && typeof res.a !== 'undefined') cal.a = Number(res.a);
+  else cal.a = CURRENT_SENSOR_CAL_A_DEFAULT;
+  if (res && res.b !== null && typeof res.b !== 'undefined') cal.b = Number(res.b);
+  else cal.b = CURRENT_SENSOR_CAL_B_DEFAULT;
+  cal.x0 = (res && res.x0 !== null && typeof res.x0 !== 'undefined') ? Number(res.x0) : null;
+  cal.zeroSet = (res && typeof res.zeroSet !== 'undefined') ? !!res.zeroSet : (cal.x0 !== null);
+  cal.points = points;
+  cal.pointCount = (isFinite(count) && count >= 0) ? count : points.length;
+  cal.calibrated = !!(res && res.calibrated);
+  var zeroDate = Number(res && res.zeroDate) || 0;
+  var calDate = Number(res && res.calDate) || 0;
+  cal.zeroDate = zeroDate || calDate || 0;
+  cal.calDate = calDate || zeroDate || 0;
+  cal.loaded = true;
+  cal.loading = false;
+  cal.stateError = '';
+  cal.stateLoaded = true;
+  cal.stateLoading = false;
+  clearError();
+  return cal;
+}
+function applyCurrentCalStatePayload(res){
+  return applyCurrentCalStatusPayload(res);
+}
+function loadCurrentCalStateData(cb, forceReload){
+  var cal = ensureCurrentCalState();
+  if (cal.stateLoading) {
+    if (cb) cb(cal, null);
+    return;
+  }
+  if (cal.stateLoaded && !forceReload) {
+    if (cb) cb(cal, null);
+    return;
+  }
+  cal.stateLoading = true;
+  api('/api/v1/calibrate/status', null, function(res){
+    cal.stateLoading = false;
+    if (currentCalApiSuccess(res)) {
+      applyCurrentCalStatePayload(res);
+    } else {
+      cal.stateLoaded = false;
+      cal.stateError = (res && (res.error || res.err)) ? String(res.error || res.err) : 'Не удалось получить точки калибровки.';
+    }
+    if (cb) cb(cal, res);
   });
 }
 
@@ -2309,27 +2502,522 @@ function tplCurrentRawValue(raw){
   if (!isFinite(n)) return '—';
   return tplComma2(n);
 }
+function tplCurrentRawIntValue(raw){
+  if (raw === null || typeof raw === 'undefined') return '—';
+  var n = Number(raw);
+  if (!isFinite(n)) return '—';
+  return String(Math.round(n));
+}
 function currentCalKnownValueError(value){
   var text = String(value == null ? '' : value).trim();
-  if (!text) return 'Введите положительное числовое значение тока';
+  if (!text) return 'Введите ток от 0 до 20 A';
   var amps = tplParseComma(text);
-  if (!isFinite(amps) || amps <= 0) return 'Введите положительное числовое значение тока';
+  if (!isFinite(amps) || amps < 0 || amps > 20) return 'Введите ток от 0 до 20 A';
   return '';
 }
-function currentCalKnownSubmitErrorText(res){
+function currentCalPointAddErrorText(res){
   var type = String(res && res.type ? res.type : '');
-  if (type === 'zero_required') return 'Сначала выполните установку нуля';
-  if (type === 'bad_value') return 'Введите положительное числовое значение тока';
-  if (type === 'no_load_change') {
-    return 'Не обнаружено изменение показаний. Проверьте, что нагрузка действительно подключена, и повторите';
-  }
+  if (type === 'bad_amps' || type === 'bad_value') return 'Введите ток от 0 до 20 A';
   if (type === 'sensor_unavailable') return 'Нет актуального значения датчика тока';
+  if (type === 'too_many_points') return 'Максимум 10 точек калибровки';
+  if (type === 'duplicate_raw') return 'Точка с таким raw уже существует';
+  if (type === 'non_monotonic') return 'Точка нарушает монотонность зависимости raw(ток). Проверьте значения.';
+  if (type === 'point_add_failed') return 'Не удалось добавить точку калибровки';
   if (type === 'storage') return 'Не удалось сохранить калибровку тока';
   if (res && (res.error === 'network_error' || res.error === 'network_timeout' || res.error === 'bad_json')) {
-    return 'Не удалось завершить калибровку. Проверьте связь с контроллером и повторите попытку.';
+    return 'Не удалось добавить точку. Проверьте связь с контроллером и повторите попытку.';
   }
   if (res && (res.error || res.err)) return String(res.error || res.err);
-  return 'Не удалось завершить калибровку. Повторите попытку.';
+  return 'Не удалось добавить точку. Повторите попытку.';
+}
+function currentCalPointDeleteErrorText(res){
+  var type = String(res && res.type ? res.type : '');
+  if (type === 'bad_index') return 'Точка с таким номером не найдена';
+  if (type === 'storage') return 'Не удалось сохранить калибровку тока';
+  if (res && (res.error === 'network_error' || res.error === 'network_timeout' || res.error === 'bad_json')) {
+    return 'Не удалось удалить точку. Проверьте связь с контроллером и повторите попытку.';
+  }
+  if (res && (res.error || res.err)) return String(res.error || res.err);
+  return 'Не удалось удалить точку. Повторите попытку.';
+}
+function currentCalClearErrorText(res){
+  var type = String(res && res.type ? res.type : '');
+  if (type === 'storage') return 'Не удалось сохранить калибровку тока';
+  if (res && (res.error === 'network_error' || res.error === 'network_timeout' || res.error === 'bad_json')) {
+    return 'Не удалось очистить точки. Проверьте связь с контроллером и повторите попытку.';
+  }
+  if (res && (res.error || res.err)) return String(res.error || res.err);
+  return 'Не удалось очистить точки калибровки. Повторите попытку.';
+}
+function currentCalStateErrorHtml(){
+  var cal = ensureCurrentCalState();
+  if (!cal.stateError) return '';
+  return '<div class="error-box">' + esc(cal.stateError) + '</div>';
+}
+function currentCalExpertChartErrorHtml(){
+  var expert = ensureCurrentCalExpertState();
+  if (!expert.chartError) return '';
+  return '<div class="notice-box">График временно недоступен. ' + esc(expert.chartError) + '</div>';
+}
+function currentCalExpertBusy(){
+  var expert = ensureCurrentCalExpertState();
+  return !!(expert.addBusy || expert.clearBusy || expert.deleteIndex >= 0);
+}
+function currentCalExpertCountText(){
+  var cal = ensureCurrentCalState();
+  if (!cal.stateLoaded) return '... / 10';
+  return String(Math.max(0, Number(cal.pointCount) || 0)) + ' / 10';
+}
+function currentCalExpertInputError(value){
+  var cal = ensureCurrentCalState();
+  var text = String(value == null ? '' : value).trim();
+  if (cal.stateLoaded && Number(cal.pointCount) >= 10) return 'Достигнут лимит 10 точек. Удалите одну из существующих, чтобы добавить новую.';
+  if (!text) return '';
+  return currentCalKnownValueError(text);
+}
+function currentCalExpertAddDisabled(sensorEnabled){
+  var expert = ensureCurrentCalExpertState();
+  var cal = ensureCurrentCalState();
+  return !sensorEnabled || expert.addBusy || expert.clearBusy || expert.deleteIndex >= 0
+      || cal.stateLoading || !cal.stateLoaded || Number(cal.pointCount) >= 10
+      || !!currentCalExpertInputError(expert.ampsValue);
+}
+function currentCalExpertClearDisabled(){
+  var cal = ensureCurrentCalState();
+  return currentCalExpertBusy() || !cal.stateLoaded || !(Number(cal.pointCount) > 0);
+}
+function currentCalExpertLinearHtml(){
+  var cal = ensureCurrentCalState();
+  if (!cal.stateLoaded) {
+    return '<div class="small" style="margin-top:12px">Загрузка параметров калибровки...</div>';
+  }
+  var x0Text = (cal.x0 !== null && typeof cal.x0 !== 'undefined' && isFinite(Number(cal.x0)))
+      ? tplCurrentRawIntValue(cal.x0)
+      : 'не задан';
+  return '<div class="cal-expert-coeffs">'
+      + '<div class="cal-expert-coeff"><div class="small">a</div><div class="mono">' + esc(String(Number(cal.a))) + '</div></div>'
+      + '<div class="cal-expert-coeff"><div class="small">b</div><div class="mono">' + esc(String(Number(cal.b))) + '</div></div>'
+      + '<div class="cal-expert-coeff"><div class="small">Ноль (x0), raw</div><div class="mono">' + esc(String(x0Text)) + '</div></div>'
+      + '</div>';
+}
+function currentCalExpertPointsTableHtml(){
+  var cal = ensureCurrentCalState();
+  var expert = ensureCurrentCalExpertState();
+  var points = Array.isArray(cal.points) ? cal.points : [];
+  var html = '';
+  if (!cal.stateLoaded) {
+    return '<div class="cal-expert-table"><div class="cal-expert-table-empty">Загрузка точек калибровки...</div></div>';
+  }
+  if (!points.length) {
+    return '<div class="cal-expert-table"><div class="cal-expert-table-empty">Точки калибровки пока не добавлены.</div></div>';
+  }
+  html += '<div class="cal-expert-table">';
+  html += '<div class="cal-expert-table-head"><div class="cal-expert-table-cell">№</div><div class="cal-expert-table-cell">Raw</div><div class="cal-expert-table-cell">Ток (A)</div><div class="cal-expert-table-cell">Действие</div></div>';
+  for (var i = 0; i < points.length; i++) {
+    var point = points[i] || {};
+    var deleting = expert.deleteIndex === i;
+    html += '<div class="cal-expert-table-row">';
+    html += '<div class="cal-expert-table-cell" data-label="№">' + esc(String(i + 1)) + '</div>';
+    html += '<div class="cal-expert-table-cell mono" data-label="Raw">' + esc(tplCurrentRawIntValue(point.raw)) + '</div>';
+    html += '<div class="cal-expert-table-cell mono" data-label="Ток (A)">' + esc(tplCurrentFromApi(point.amps)) + '</div>';
+    html += '<div class="cal-expert-table-cell action" data-label="Действие"><button type="button" class="btn danger" onclick="deleteCurrentCalExpertPoint(' + i + ')"'
+         + (currentCalExpertBusy() ? ' disabled' : '')
+         + (deleting ? ' aria-busy="true"' : '')
+         + '>' + esc(deleting ? 'Удаляем...' : 'Удалить') + '</button></div>';
+    html += '</div>';
+  }
+  html += '</div>';
+  return html;
+}
+function currentCalExpertChartStatusHtml(){
+  var cal = ensureCurrentCalState();
+  var expert = ensureCurrentCalExpertState();
+  if (expert.chartError) {
+    return '<div class="cal-expert-chart-note"><strong>График временно недоступен</strong>' + esc(expert.chartError) + '</div>';
+  }
+  if (cal.stateLoading && !cal.stateLoaded) {
+    return '<div class="cal-expert-chart-note"><strong>Подготавливаем график</strong>Загружаем текущее состояние калибровки и список точек.</div>';
+  }
+  if (!cal.stateLoaded) {
+    return '<div class="cal-expert-chart-note"><strong>График ждёт данные</strong>' + esc(cal.stateError || 'Не удалось получить точки калибровки.') + '</div>';
+  }
+  if (!window.uPlot) {
+    return '<div class="cal-expert-chart-note"><strong>Подготавливаем график</strong>Загружаем локальный модуль uPlot. Таблица точек уже доступна ниже.</div>';
+  }
+  return '';
+}
+function currentCalExpertChartCardHtml(){
+  var fallback = currentCalExpertChartStatusHtml();
+  return '<div class="field rule-card cal-expert-chart-card">'
+      + '<div class="cal-expert-chart-head">'
+      + '<div><div class="small">График калибровки</div>'
+      + '<h3 class="cal-expert-chart-title">Ток 0..20 A -> Raw</h3>'
+      + '<div class="small cal-expert-chart-caption">Кривая строится по текущему режиму, точки и live-значение накладываются поверх.</div></div>'
+      + '<div class="cal-expert-chart-legend">'
+      + '<span class="cal-expert-chart-legend-item"><span class="cal-expert-chart-legend-swatch" style="background:#2563eb"></span>Кривая</span>'
+      + '<span class="cal-expert-chart-legend-item"><span class="cal-expert-chart-legend-swatch" style="background:#b91c1c"></span>Точки</span>'
+      + '<span class="cal-expert-chart-legend-item"><span class="cal-expert-chart-legend-swatch" style="background:#166534"></span>Текущее</span>'
+      + '</div></div>'
+      + '<div class="cal-expert-chart-shell"><div class="cal-expert-chart-frame">'
+      + '<div id="calExpertChart" class="cal-expert-chart-canvas"></div>'
+      + '<div id="calExpertChartFallback" class="cal-expert-chart-fallback"' + (fallback ? '' : ' style="display:none"') + '>'
+      + fallback
+      + '</div></div></div></div>';
+}
+function currentCalExpertSortedPoints(cal){
+  var points = Array.isArray(cal && cal.points) ? cal.points : [];
+  var list = [];
+  for (var i = 0; i < points.length; i++) {
+    var point = points[i] || {};
+    var raw = Number(point.raw);
+    var amps = Number(point.amps);
+    if (!isFinite(raw) || !isFinite(amps)) continue;
+    list.push({ raw: raw, amps: amps });
+  }
+  list.sort(function(a, b){
+    if (a.amps === b.amps) return a.raw - b.raw;
+    return a.amps - b.amps;
+  });
+  return list;
+}
+function currentCalExpertRawFromLinear(cal, amps){
+  var a = Number(cal && cal.a);
+  var b = Number(cal && cal.b);
+  if (!isFinite(a) || a === 0) a = currentCalA();
+  if (!isFinite(b)) b = currentCalB();
+  if (!isFinite(a) || a === 0) return NaN;
+  return (Number(amps) - b) / a;
+}
+function currentCalExpertClampRaw(raw){
+  var value = Number(raw);
+  if (!isFinite(value)) return NaN;
+  if (value < 0) return 0;
+  if (value > 4095) return 4095;
+  return value;
+}
+function currentCalExpertRawFromAmps(cal, amps, points){
+  var raw = currentCalExpertRawFromLinear(cal, amps);
+  return currentCalExpertClampRaw(raw);
+}
+function currentCalExpertBuildChartModel(){
+  var cal = ensureCurrentCalState();
+  if (!cal.stateLoaded) return null;
+  var points = currentCalExpertSortedPoints(cal);
+  var xValues = [];
+  var xSeen = {};
+  var pointMap = {};
+  var liveAmps = Number(cal.amps);
+  var liveRaw = currentCalExpertClampRaw(cal.raw);
+  function xKey(value){
+    return Number(value).toFixed(6);
+  }
+  function clampAmps(value){
+    var n = Number(value);
+    if (!isFinite(n)) return NaN;
+    if (n < 0) return 0;
+    if (n > 20) return 20;
+    return n;
+  }
+  function addX(value){
+    var x = clampAmps(value);
+    if (!isFinite(x)) return;
+    var key = xKey(x);
+    if (xSeen[key]) return;
+    xSeen[key] = true;
+    xValues.push(x);
+  }
+  addX(0);
+  addX(20);
+  for (var j = 0; j < points.length; j++) {
+    var point = points[j];
+    var pointX = clampAmps(point.amps);
+    if (!isFinite(pointX)) continue;
+    addX(pointX);
+    pointMap[xKey(pointX)] = currentCalExpertClampRaw(point.raw);
+  }
+  var liveX = clampAmps(liveAmps);
+  if (isFinite(liveX) && isFinite(liveRaw)) addX(liveX);
+  xValues.sort(function(a, b){ return a - b; });
+  if (!xValues.length) return null;
+  var curve = [];
+  var pointSeries = [];
+  var liveSeries = [];
+  var yValues = [];
+  for (var k = 0; k < xValues.length; k++) {
+    var x = xValues[k];
+    var key = xKey(x);
+    var curveRaw = currentCalExpertRawFromAmps(cal, x, points);
+    curve.push(isFinite(curveRaw) ? curveRaw : null);
+    if (isFinite(curveRaw)) yValues.push(curveRaw);
+    var pointRaw = pointMap.hasOwnProperty(key) ? pointMap[key] : null;
+    pointSeries.push(isFinite(pointRaw) ? pointRaw : null);
+    if (isFinite(pointRaw)) yValues.push(pointRaw);
+    var livePointRaw = (isFinite(liveX) && isFinite(liveRaw) && key === xKey(liveX)) ? liveRaw : null;
+    liveSeries.push(isFinite(livePointRaw) ? livePointRaw : null);
+    if (isFinite(livePointRaw)) yValues.push(livePointRaw);
+  }
+  if (!yValues.length) return null;
+  var yMin = yValues[0];
+  var yMax = yValues[0];
+  for (var m = 1; m < yValues.length; m++) {
+    if (yValues[m] < yMin) yMin = yValues[m];
+    if (yValues[m] > yMax) yMax = yValues[m];
+  }
+  var pad = (yMax - yMin) * 0.12;
+  if (!isFinite(pad) || pad < 40) pad = 40;
+  yMin = currentCalExpertClampRaw(yMin - pad);
+  yMax = currentCalExpertClampRaw(yMax + pad);
+  if (!isFinite(yMin)) yMin = 0;
+  if (!isFinite(yMax)) yMax = 4095;
+  if (yMax <= yMin) {
+    yMin = currentCalExpertClampRaw(yMin - 40);
+    yMax = currentCalExpertClampRaw(yMax + 40);
+  }
+  if (yMax <= yMin) {
+    yMin = 0;
+    yMax = 4095;
+  }
+  return {
+    data: [xValues, curve, pointSeries, liveSeries],
+    yMin: yMin,
+    yMax: yMax
+  };
+}
+function currentCalExpertChartTextColor(){
+  if (typeof getComputedStyle === 'function' && typeof document !== 'undefined' && document.documentElement) {
+    var muted = getComputedStyle(document.documentElement).getPropertyValue('--muted');
+    if (muted) {
+      muted = String(muted).trim();
+      if (muted) return muted;
+    }
+  }
+  return '#64748b';
+}
+function currentCalExpertLoadCss(url, id){
+  return new Promise(function(resolve, reject){
+    if (byId(id)) {
+      resolve(true);
+      return;
+    }
+    var link = document.createElement('link');
+    link.id = id;
+    link.rel = 'stylesheet';
+    link.href = url;
+    link.onload = function(){ resolve(true); };
+    link.onerror = function(){
+      if (link.parentNode) link.parentNode.removeChild(link);
+      reject(new Error('Не удалось загрузить локальный стиль uPlot.'));
+    };
+    document.head.appendChild(link);
+  });
+}
+function currentCalExpertLoadScript(url, id){
+  return new Promise(function(resolve, reject){
+    if (window.uPlot) {
+      resolve(window.uPlot);
+      return;
+    }
+    var existing = byId(id);
+    if (existing) {
+      existing.addEventListener('load', function(){ resolve(window.uPlot); }, { once:true });
+      existing.addEventListener('error', function(){ reject(new Error('Не удалось загрузить локальный скрипт uPlot.')); }, { once:true });
+      return;
+    }
+    var script = document.createElement('script');
+    script.id = id;
+    script.src = url;
+    script.async = true;
+    script.onload = function(){
+      if (!window.uPlot) {
+        reject(new Error('Локальный uPlot загружен некорректно.'));
+        return;
+      }
+      resolve(window.uPlot);
+    };
+    script.onerror = function(){
+      if (script.parentNode) script.parentNode.removeChild(script);
+      reject(new Error('Не удалось загрузить локальный скрипт uPlot.'));
+    };
+    document.head.appendChild(script);
+  });
+}
+function loadCurrentCalExpertChartAssets(){
+  if (window.uPlot) return Promise.resolve(window.uPlot);
+  if (currentCalExpertUPlotLoadPromise) return currentCalExpertUPlotLoadPromise;
+  currentCalExpertUPlotLoadPromise = currentCalExpertLoadCss(CURRENT_CAL_EXPERT_UPLOT_CSS_URL, 'rc-uplot-css').then(function(){
+    return currentCalExpertLoadScript(CURRENT_CAL_EXPERT_UPLOT_JS_URL, 'rc-uplot-js');
+  }).then(function(lib){
+    if (!window.uPlot) throw new Error('Локальный uPlot недоступен после загрузки.');
+    return lib;
+  }).catch(function(err){
+    currentCalExpertUPlotLoadPromise = null;
+    throw err;
+  });
+  return currentCalExpertUPlotLoadPromise;
+}
+function destroyCurrentCalExpertChart(){
+  var expert = ensureCurrentCalExpertState();
+  if (expert.chartResizeCleanup) {
+    try { expert.chartResizeCleanup(); } catch (e) {}
+    expert.chartResizeCleanup = null;
+  }
+  if (expert.chart && typeof expert.chart.destroy === 'function') {
+    try { expert.chart.destroy(); } catch (e2) {}
+  }
+  expert.chart = null;
+  expert.chartRefreshQueued = false;
+  var node = byId('calExpertChart');
+  if (node) node.innerHTML = '';
+}
+function currentCalExpertEnsureChartResizeBinding(){
+  var expert = ensureCurrentCalExpertState();
+  if (expert.chartResizeCleanup) return;
+  var node = byId('calExpertChart');
+  if (!node) return;
+  var frame = node.parentNode;
+  var onResize = function(){
+    if (isCalExpertRoute(routeParts()[0])) scheduleCurrentCalExpertChartRefresh();
+  };
+  var cleanup = [];
+  window.addEventListener('resize', onResize);
+  cleanup.push(function(){ window.removeEventListener('resize', onResize); });
+  if (typeof ResizeObserver !== 'undefined' && frame) {
+    var observer = new ResizeObserver(onResize);
+    observer.observe(frame);
+    cleanup.push(function(){ observer.disconnect(); });
+  }
+  expert.chartResizeCleanup = function(){
+    for (var i = 0; i < cleanup.length; i++) {
+      try { cleanup[i](); } catch (e) {}
+    }
+  };
+}
+function currentCalExpertRefreshChart(){
+  var expert = ensureCurrentCalExpertState();
+  expert.chartRefreshQueued = false;
+  if (!isCalExpertRoute(routeParts()[0])) return;
+  var chartNode = byId('calExpertChart');
+  var fallbackNode = byId('calExpertChartFallback');
+  if (!chartNode) return;
+  var fallbackHtml = currentCalExpertChartStatusHtml();
+  if (fallbackNode) {
+    fallbackNode.innerHTML = fallbackHtml;
+    fallbackNode.style.display = fallbackHtml ? 'flex' : 'none';
+  }
+  if (fallbackHtml) {
+    if (expert.chart && typeof expert.chart.destroy === 'function') {
+      try { expert.chart.destroy(); } catch (e) {}
+      expert.chart = null;
+    }
+    return;
+  }
+  if (!window.uPlot) return;
+  var model = currentCalExpertBuildChartModel();
+  if (!model) {
+    if (fallbackNode) {
+      fallbackNode.innerHTML = '<div class="cal-expert-chart-note"><strong>График ждёт данные</strong>Пока недостаточно корректных значений для построения кривой.</div>';
+      fallbackNode.style.display = 'flex';
+    }
+    if (expert.chart && typeof expert.chart.destroy === 'function') {
+      try { expert.chart.destroy(); } catch (e2) {}
+      expert.chart = null;
+    }
+    return;
+  }
+  if (fallbackNode) {
+    fallbackNode.innerHTML = '';
+    fallbackNode.style.display = 'none';
+  }
+  var width = chartNode.clientWidth || (chartNode.parentNode && chartNode.parentNode.clientWidth) || 320;
+  width = Math.max(280, Math.round(width));
+  var height = CURRENT_CAL_EXPERT_CHART_HEIGHT;
+  var textColor = currentCalExpertChartTextColor();
+  if (!expert.chart) {
+    chartNode.innerHTML = '';
+    expert.chart = new uPlot({
+      width: width,
+      height: height,
+      padding: [14, 12, 10, 12],
+      legend: { show: false },
+      cursor: { drag: { x: false, y: false } },
+      scales: {
+        x: { time: false, auto: false, min: 0, max: 20 },
+        y: { auto: false, min: model.yMin, max: model.yMax }
+      },
+      axes: [
+        {
+          stroke: textColor,
+          grid: { stroke: '#cfd6de', width: 1 },
+          values: function(u, values){
+            var out = [];
+            for (var i = 0; i < values.length; i++) out.push(tplComma2(values[i]));
+            return out;
+          }
+        },
+        {
+          stroke: textColor,
+          grid: { stroke: '#cfd6de', width: 1 },
+          values: function(u, values){
+            var out = [];
+            for (var i = 0; i < values.length; i++) out.push(String(Math.round(values[i])));
+            return out;
+          }
+        }
+      ],
+      series: [
+        {},
+        {
+          label: 'Curve',
+          stroke: '#2563eb',
+          width: 2,
+          spanGaps: true,
+          points: { show: false }
+        },
+        {
+          label: 'Points',
+          stroke: 'rgba(0,0,0,0)',
+          width: 0,
+          spanGaps: true,
+          points: {
+            show: true,
+            size: 8,
+            width: 2,
+            stroke: '#f8fafc',
+            fill: '#b91c1c'
+          }
+        },
+        {
+          label: 'Live',
+          stroke: 'rgba(0,0,0,0)',
+          width: 0,
+          spanGaps: true,
+          points: {
+            show: true,
+            size: 10,
+            width: 3,
+            stroke: '#0f172a',
+            fill: '#166534'
+          }
+        }
+      ]
+    }, model.data, chartNode);
+    currentCalExpertEnsureChartResizeBinding();
+  } else {
+    expert.chart.setSize({ width: width, height: height });
+    expert.chart.setScale('x', { min: 0, max: 20 });
+    expert.chart.setScale('y', { min: model.yMin, max: model.yMax });
+    expert.chart.setData(model.data);
+  }
+}
+function scheduleCurrentCalExpertChartRefresh(){
+  var expert = ensureCurrentCalExpertState();
+  if (expert.chartRefreshQueued) return;
+  expert.chartRefreshQueued = true;
+  if (typeof requestAnimationFrame === 'function') {
+    requestAnimationFrame(currentCalExpertRefreshChart);
+  } else {
+    setTimeout(currentCalExpertRefreshChart, 16);
+  }
 }
 function tplValueText(sensor, blankWhenDisabled){
   if (!sensor) return blankWhenDisabled ? '' : '—';
@@ -2344,8 +3032,8 @@ function tplHomeValueText(sensor){
   if (!sensor) return '';
   if (!sensor.enabled) return '';
   if (sensor.id === 'C') {
-    if (sensor.error || sensor.value == null) return '—';
-    return tplCurrentPercentFromRaw(sensor.value);
+    if (sensor.error) return '—';
+    return tplCurrentFromApi(sensor.amps);
   }
   return tplValueText(sensor, true) || '';
 }
@@ -2361,144 +3049,221 @@ function formatUnixDateTime(unixSec){
   return pad2(d.getDate()) + '.' + pad2(d.getMonth() + 1) + '.' + d.getFullYear()
       + ' ' + pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds());
 }
-function toggleCurrentCalDetails(){
-  state.currentCalDetailsOpen = !state.currentCalDetailsOpen;
-  render();
+function updateCurrentCalRouteMessages(targetId){
+  var node = byId(targetId);
+  if (!node) return;
+  var extra = currentCalStateErrorHtml();
+  if (targetId === 'calExpertMessages') extra += currentCalExpertChartErrorHtml();
+  node.innerHTML = renderMessages(extra);
 }
-function toggleCurrentCalibrateDetails(){
-  state.currentCalibrateDetailsOpen = !state.currentCalibrateDetailsOpen;
-  render();
+function refreshCurrentCalExpertRoute(options){
+  if (!isCalExpertRoute(routeParts()[0])) return;
+  updateCurrentCalRouteMessages('calExpertMessages');
+  updateCurrentCalExpertUi(options);
 }
-function startCurrentSensorPoll(){
-  startPoll(LIVE_STATE_POLL_MS, function(done){
-    var pending = 2;
-    function finish(){
-      pending--;
-      if (pending > 0) return;
-      if (routeParts()[0] === 'currentSensor') render();
-      done();
-    }
-    loadLive(finish);
-    loadCurrentCalStatus(finish, true);
-  });
-}
-function startCurrentCalibratePoll(){
-  startPoll(LIVE_STATE_POLL_MS, function(done){
-    var pending = 2;
-    function finish(){
-      pending--;
-      if (pending > 0) return;
-      if (routeParts()[0] === 'currentSensorCalibrate') refreshCurrentCalibrateLive();
-      done();
-    }
-    loadLive(finish);
-    loadCurrentCalStatus(finish, true);
-  });
-}
-function refreshCurrentCalibrateLive(){
+function loadCurrentCalLive(cb){
   var cal = ensureCurrentCalState();
-  var session = ensureCurrentCalibrateSession();
-  var rawValue = byId('currentCalRawValue');
-  var ampsValue = byId('currentCalAmpsValue');
-  var zeroSetValue = byId('currentCalZeroSetValue');
-  var resultAmpsValue = byId('currentCalResultAmpsValue');
-  var liveResultAmps = (cal.amps === null || typeof cal.amps === 'undefined') ? session.resultAmps : cal.amps;
-  if (rawValue) rawValue.textContent = tplCurrentRawValue(cal.raw);
-  if (ampsValue) ampsValue.textContent = tplCurrentFromApi(cal.amps);
-  if (zeroSetValue) zeroSetValue.textContent = cal.zeroSet ? 'Нулевое значение установлено!' : 'Нулевое значение не установлено';
-  if (resultAmpsValue) resultAmpsValue.textContent = tplCurrentFromApi(liveResultAmps);
+  api('/api/v1/calibrate/live', null, function(res){
+    if (currentCalApiSuccess(res)) {
+      applyCurrentCalLivePayload(res);
+      state.lastValidStateMs = Date.now();
+      clearError();
+    } else if (res && (res.error || res.err)) {
+      setError(res.error || res.err);
+    } else {
+      setError('Не удалось получить live-данные калибровки.');
+    }
+    if (cb) cb(cal, res);
+  });
 }
-function onCurrentCalKnownInput(value){
-  var session = ensureCurrentCalibrateSession();
-  var knownError = '';
-  var submit = null;
-  var errorBox = null;
-  session.knownValue = String(value == null ? '' : value);
-  if (routeParts()[0] !== 'currentSensorCalibrate') return;
-  knownError = session.zeroDone ? currentCalKnownValueError(session.knownValue) : '';
-  submit = byId('currentCalKnownSubmit');
-  errorBox = byId('currentCalKnownError');
-  if (errorBox) errorBox.textContent = session.zeroDone ? knownError : '';
-  if (submit) submit.disabled = (!session.zeroDone) || !!knownError || !!(session.busy || session.knownBusy);
+function updateCalBasicLiveFields(){
+  var cal = ensureCurrentCalState();
+  var ampsValue = byId('calBasicAmpsValue');
+  var rawValue = byId('calBasicRawValue');
+  if (ampsValue) ampsValue.textContent = 'Нагрузка: ' + tplCurrentFromApi(cal.amps);
+  if (rawValue) rawValue.textContent = 'Raw: ' + tplCurrentRawIntValue(cal.raw);
 }
-function restartCurrentCalibration(){
+function updateCalBasicStatusFields(){
+  var cal = ensureCurrentCalState();
+  var zeroDateValue = byId('calBasicZeroDateValue');
+  if (zeroDateValue) zeroDateValue.textContent = formatUnixDateTime(cal.zeroDate);
+}
+function updateCalExpertLiveFields(){
+  var cal = ensureCurrentCalState();
+  var ampsValue = byId('calExpertAmpsValue');
+  var rawValue = byId('calExpertRawValue');
+  if (ampsValue) ampsValue.textContent = 'Нагрузка: ' + tplCurrentFromApi(cal.amps);
+  if (rawValue) rawValue.textContent = 'Raw: ' + tplCurrentRawIntValue(cal.raw);
+  scheduleCurrentCalExpertChartRefresh();
+}
+function updateCurrentCalExpertUi(options){
+  options = options || {};
+  var cal = ensureCurrentCalState();
+  var expert = ensureCurrentCalExpertState();
+  var sensor = findSensor('C') || { enabled:false };
+  var countValue = byId('calExpertCountValue');
+  var linearValues = byId('calExpertLinearValues');
+  var inputError = byId('calExpertInputError');
+  var addBtn = byId('calExpertAddBtn');
+  var clearBtn = byId('calExpertClearBtn');
+  var tableWrap = byId('calExpertPointsTable');
+  var chartFallback = byId('calExpertChartFallback');
+  if (countValue) countValue.textContent = currentCalExpertCountText();
+  if (linearValues) linearValues.innerHTML = currentCalExpertLinearHtml();
+  if (inputError && !options.keepInputError) inputError.textContent = currentCalExpertInputError(expert.ampsValue);
+  if (addBtn) {
+    addBtn.disabled = currentCalExpertAddDisabled(sensor.enabled);
+    addBtn.textContent = expert.addBusy ? 'Добавляем...' : 'Добавить точку';
+    if (expert.addBusy) addBtn.setAttribute('aria-busy', 'true');
+    else addBtn.removeAttribute('aria-busy');
+  }
+  if (clearBtn) {
+    clearBtn.disabled = currentCalExpertClearDisabled();
+    clearBtn.textContent = expert.clearBusy ? 'Очищаем...' : 'Очистить все';
+    if (expert.clearBusy) clearBtn.setAttribute('aria-busy', 'true');
+    else clearBtn.removeAttribute('aria-busy');
+  }
+  if (tableWrap) tableWrap.innerHTML = currentCalExpertPointsTableHtml();
+  if (chartFallback) {
+    var fallbackHtml = currentCalExpertChartStatusHtml();
+    chartFallback.innerHTML = fallbackHtml;
+    chartFallback.style.display = fallbackHtml ? 'flex' : 'none';
+  }
+  scheduleCurrentCalExpertChartRefresh();
+}
+function startCalBasicPoll(){
+  startPoll(CAL_BASIC_POLL_MS, function(done){
+    loadCurrentCalLive(function(calState, res){
+      if (isCalBasicRoute(routeParts()[0])) {
+        updateCalBasicLiveFields();
+        updateCurrentCalRouteMessages('calBasicMessages');
+        if (!currentCalApiSuccess(res)) render();
+      }
+      done();
+    });
+  });
+}
+function startCalExpertPoll(){
+  startPoll(CAL_BASIC_POLL_MS, function(done){
+    loadCurrentCalLive(function(calState, res){
+      if (isCalExpertRoute(routeParts()[0])) {
+        updateCalExpertLiveFields();
+        updateCurrentCalRouteMessages('calExpertMessages');
+        if (!currentCalApiSuccess(res)) render();
+      }
+      done();
+    });
+  });
+}
+function onCurrentCalExpertAmpsInput(value){
+  var expert = ensureCurrentCalExpertState();
+  var input = byId('calExpertAmpsInput');
+  expert.ampsValue = String(value == null ? '' : value);
+  if (input && input.value !== expert.ampsValue) input.value = expert.ampsValue;
+  if (isCalExpertRoute(routeParts()[0])) updateCurrentCalExpertUi();
+}
+function submitCalBasicZero(){
+  if (state.currentCalBasicBusy) return;
+  state.currentCalBasicBusy = true;
   clearNotice();
-  resetCurrentCalibrateSession();
-  if (routeParts()[0] === 'currentSensorCalibrate') render();
-}
-function submitCurrentCalZero(){
-  var session = ensureCurrentCalibrateSession();
-  if (session.busy || session.knownBusy) return;
-  session.busy = true;
-  clearNotice();
-  render();
+  if (isCalBasicRoute(routeParts()[0])) render();
   api('/api/v1/calibrate/zero', { method:'POST' }, function(res){
-    session.busy = false;
-    if (res && res.ok) {
-      var cal = ensureCurrentCalState();
-      session.zeroDone = true;
-      session.knownValue = '';
-      session.completed = false;
-      session.resultAmps = null;
-      session.resultWarning = '';
-      if (res.x0 !== null && typeof res.x0 !== 'undefined') session.x0 = Number(res.x0);
-      else session.x0 = cal.raw;
-      state.currentCalibrateDetailsOpen = true;
+    state.currentCalBasicBusy = false;
+    if (currentCalApiSuccess(res)) {
+      applyCurrentCalStatePayload(res);
       setSuccessNotice('Ноль установлен');
-      loadCurrentCalStatus(function(){
-        if (routeParts()[0] === 'currentSensorCalibrate') render();
-      }, true);
+      loadCurrentCalLive(function(){
+        if (isCalBasicRoute(routeParts()[0])) render();
+      });
       return;
     }
     setNotice((res && (res.error || res.err)) ? (res.error || res.err) : 'Не удалось установить ноль. Повторите попытку.');
-    if (routeParts()[0] === 'currentSensorCalibrate') render();
+    if (isCalBasicRoute(routeParts()[0])) render();
   });
 }
-function submitCurrentCalKnown(){
-  var session = ensureCurrentCalibrateSession();
-  if (session.knownBusy || session.busy) return;
-  if (!session.zeroDone) {
-    setNotice('Сначала выполните установку нуля');
-    render();
+function submitCurrentCalExpertPoint(){
+  var expert = ensureCurrentCalExpertState();
+  var cal = ensureCurrentCalState();
+  var sensor = findSensor('C') || { enabled:false };
+  if (currentCalExpertAddDisabled(sensor.enabled)) {
+    if (Number(cal.pointCount) >= 10) setNotice('Максимум 10 точек калибровки');
+    else {
+      var inputError = currentCalExpertInputError(expert.ampsValue);
+      if (inputError) setNotice(inputError);
+    }
+    if (isCalExpertRoute(routeParts()[0])) render();
     return;
   }
-  var knownError = currentCalKnownValueError(session.knownValue);
-  if (knownError) {
-    setNotice(knownError);
-    render();
-    return;
-  }
-
-  session.knownBusy = true;
+  expert.addBusy = true;
   clearNotice();
-  render();
-  api('/api/v1/calibrate/known', {
+  if (isCalExpertRoute(routeParts()[0])) render();
+  api('/api/v1/calibrate/point', {
     method:'POST',
     headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ value: tplParseComma(session.knownValue) })
+    body: JSON.stringify({ value: tplParseComma(expert.ampsValue) })
   }, function(res){
-    session.knownBusy = false;
-    if (res && res.ok) {
-      var cal = ensureCurrentCalState();
-      cal.a = Number(res.a);
-      cal.b = Number(res.b);
-      cal.calibrated = true;
-      session.completed = true;
-      session.resultWarning = String((res && res.warning) ? res.warning : '');
-      session.resultAmps = (res && res.amps !== null && typeof res.amps !== 'undefined') ? Number(res.amps) : cal.amps;
-      state.currentCalibrateDetailsOpen = true;
-      setSuccessNotice('Калибровка завершена');
-      loadCurrentCalStatus(function(updatedCal){
-        if (session.resultAmps === null || typeof session.resultAmps === 'undefined') {
-          session.resultAmps = updatedCal.amps;
-        }
-        if (routeParts()[0] === 'currentSensorCalibrate') render();
+    expert.addBusy = false;
+    if (currentCalApiSuccess(res)) {
+      expert.ampsValue = '';
+      applyCurrentCalStatePayload(res);
+      setSuccessNotice('Точка добавлена');
+      loadCurrentCalLive(function(){
+        if (isCalExpertRoute(routeParts()[0])) render();
+      });
+      return;
+    }
+    setNotice(currentCalPointAddErrorText(res));
+    if (isCalExpertRoute(routeParts()[0])) render();
+  });
+}
+function deleteCurrentCalExpertPoint(index){
+  var expert = ensureCurrentCalExpertState();
+  var cal = ensureCurrentCalState();
+  var idx = Number(index);
+  if (!cal.stateLoaded || currentCalExpertBusy() || !isFinite(idx) || idx < 0) return;
+  expert.deleteIndex = idx;
+  clearNotice();
+  refreshCurrentCalExpertRoute({ keepInputError:true });
+  api('/api/v1/calibrate/point/delete', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ index: Math.floor(idx) })
+  }, function(res){
+    expert.deleteIndex = -1;
+    if (currentCalApiSuccess(res)) {
+      applyCurrentCalStatePayload(res);
+      setSuccessNotice('Точка удалена');
+      refreshCurrentCalExpertRoute({ keepInputError:true });
+      loadCurrentCalStateData(function(){
+        refreshCurrentCalExpertRoute({ keepInputError:true });
       }, true);
       return;
     }
-    if (res && res.type === 'zero_required') session.zeroDone = false;
-    setNotice(currentCalKnownSubmitErrorText(res));
-    if (routeParts()[0] === 'currentSensorCalibrate') render();
+    setNotice(currentCalPointDeleteErrorText(res));
+    refreshCurrentCalExpertRoute({ keepInputError:true });
+  });
+}
+function clearCurrentCalExpertPoints(){
+  var expert = ensureCurrentCalExpertState();
+  var cal = ensureCurrentCalState();
+  if (currentCalExpertClearDisabled()) return;
+  if (!window.confirm('Удалить все точки калибровки?')) return;
+  expert.clearBusy = true;
+  clearNotice();
+  refreshCurrentCalExpertRoute({ keepInputError:true });
+  api('/api/v1/calibrate/clear', { method:'POST' }, function(res){
+    expert.clearBusy = false;
+    if (currentCalApiSuccess(res)) {
+      applyCurrentCalStatePayload(res);
+      setSuccessNotice('Точки калибровки очищены');
+      refreshCurrentCalExpertRoute({ keepInputError:true });
+      loadCurrentCalStateData(function(){
+        refreshCurrentCalExpertRoute({ keepInputError:true });
+      }, true);
+      return;
+    }
+    setNotice(currentCalClearErrorText(res));
+    refreshCurrentCalExpertRoute({ keepInputError:true });
   });
 }
 function tplHomeValueClass(sensor){
@@ -3293,8 +4058,8 @@ function renderCurrentRoute(){
   if (view === 'menu') return renderMenu();
   if (view === 'sound') return renderSound();
   if (view === 'outputConfig') return renderOutputConfig();
-  if (view === 'currentSensor') return renderCurrentSensorSettings();
-  if (view === 'currentSensorCalibrate') return renderCurrentSensorCalibrate();
+  if (view === 'cal-basic') return renderCalBasic();
+  if (view === 'cal-expert') return renderCalExpert();
   if (view === 'theme') return renderTheme();
   if (view === 'notifications') return renderNotifications();
   if (view === 'diag') return renderDiag();

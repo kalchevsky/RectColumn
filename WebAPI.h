@@ -6,6 +6,7 @@
 #include <ESPAsyncWebServer.h>
 #include <ArduinoJson.h>
 #include <esp_heap_caps.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "config.h"
@@ -24,6 +25,8 @@
 #include "WebPageApp.h"
 #include "WebPageAppCss.h"
 #include "WebPageAppJs.h"
+#include "WebUplotCss.h"
+#include "WebUplotJs.h"
 
 extern bool wifiLedOff;
 
@@ -46,7 +49,9 @@ public:
         _emu  = &emu;
         _notifier = &notifier;
         _processSafety = &processSafety;
-        (void)_stor->loadCurrentCal(_currentCalA, _currentCalB, _currentCalDate, _currentCalibrated);
+        Storage::CurrentCalData calData{};
+        (void)_stor->loadCurrentCal(calData);
+        _loadCurrentCalState(calData);
 
         _installCors();
         _registerServicePages();
@@ -63,6 +68,18 @@ public:
         _server.begin();
     }
 
+    bool addCalPoint(float raw, float amps) { return _addCalPointRuntime(raw, amps); }
+
+    bool removeCalPoint(uint8_t index) { return _removeCalPointRuntime(index); }
+
+    void clearCalPoints() { _clearCalPointsRuntime(); }
+    uint8_t calPointCount() const { return _calPointCount; }
+    const CalPoint* calPoints() const { return _calPoints; }
+    float currentCalA() const { return _currentCalA; }
+    float currentCalB() const { return _currentCalB; }
+    float currentCalX0() const { return _currentCalX0; }
+    bool currentCalZeroSet() const { return _currentCalZeroSet; }
+
 private:
     AsyncWebServer   _server;
     TimeBase*        _tb   = nullptr;
@@ -78,9 +95,12 @@ private:
     float            _currentCalA = Storage::CURRENT_CAL_A_DEFAULT;
     float            _currentCalB = Storage::CURRENT_CAL_B_DEFAULT;
     uint32_t         _currentCalDate = 0;
+    uint32_t         _currentZeroDate = 0;
     bool             _currentCalibrated = false;
     float            _currentCalX0 = NAN;
     bool             _currentCalZeroSet = false;
+    CalPoint         _calPoints[Storage::CURRENT_CAL_MAX_POINTS] = {};
+    uint8_t          _calPointCount = 0;
 
     // 50 отсчётов АЦП ~= 1.2% от шкалы 12-битного ADC.
     // Предупреждаем о слабом разлёте точек, но не блокируем калибровку.
@@ -138,6 +158,14 @@ private:
 
         _server.on("/app.js", HTTP_GET, [this](AsyncWebServerRequest* req) {
             _sendGzip(req, "application/javascript; charset=utf-8", PAGE_APP_JS_GZ, PAGE_APP_JS_GZ_LEN, "no-cache, no-store, must-revalidate");
+        });
+
+        _server.on("/uplot.css", HTTP_GET, [this](AsyncWebServerRequest* req) {
+            _sendGzip(req, "text/css; charset=utf-8", UPLOT_CSS_GZ, UPLOT_CSS_GZ_LEN, "no-cache, no-store, must-revalidate");
+        });
+
+        _server.on("/uplot.js", HTTP_GET, [this](AsyncWebServerRequest* req) {
+            _sendGzip(req, "application/javascript; charset=utf-8", UPLOT_JS_GZ, UPLOT_JS_GZ_LEN, "no-cache, no-store, must-revalidate");
         });
     }
 
@@ -326,101 +354,129 @@ private:
                 _sendDoc(req, 200, resp);
             });
 
+        _server.on("/api/v1/calibrate/live", HTTP_GET, [this](AsyncWebServerRequest* req) {
+            DynamicJsonDocument resp(256);
+            _buildCalLivePayload(resp.to<JsonObject>());
+            _sendDocNoCache(req, 200, resp);
+        });
+
         _server.on("/api/v1/calibrate/zero", HTTP_POST, [this](AsyncWebServerRequest* req) {
             const float raw = _currentRaw();
             if (isnan(raw)) {
-                _sendError(req, 409, "sensor_unavailable", "Нет актуального значения датчика тока");
+                _sendErrorNoCache(req, 409, "sensor_unavailable", "Нет актуального значения датчика тока");
                 return;
             }
 
-            _currentCalX0 = raw;
-            _currentCalZeroSet = true;
+            _applyLinearZeroRuntime(raw);
+            _currentZeroDate = _currentUnixSec();
+            _currentCalDate = _currentZeroDate;
 
-            DynamicJsonDocument resp(192);
-            resp["ok"] = true;
-            resp["x0"] = raw;
-            _sendDoc(req, 200, resp);
+            if (!_saveCurrentCalState()) {
+                _sendErrorNoCache(req, 500, "storage", "Не удалось сохранить калибровку тока");
+                return;
+            }
+
+            _sendCalStatusNoCache(req);
         });
 
-        _server.on("/api/v1/calibrate/known", HTTP_POST,
+        _server.on("/api/v1/calibrate/status", HTTP_GET, [this](AsyncWebServerRequest* req) {
+            _sendCalStatusNoCache(req);
+        });
+
+        // ВНИМАНИЕ: ESP Async WebServer матчит вложенные пути (startsWith).
+        // Вложенные /point/delete и /point/clear ОБЯЗАНЫ регистрироваться РАНЬШЕ
+        // /point, иначе delete/clear перехватит add-handler. См. также обход STOP release.
+        _server.on("/api/v1/calibrate/point/delete", HTTP_POST,
             [](AsyncWebServerRequest*) {},
             nullptr,
             [this](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t) {
-                if (!_currentCalZeroSet || isnan(_currentCalX0)) {
-                    _sendError(req, 400, "zero_required", "Сначала выполните установку нуля");
-                    return;
-                }
-
                 DynamicJsonDocument doc(256);
-                if (!_parseJson(req, data, len, doc)) return;
-
-                if (!doc.containsKey("value") || !doc["value"].is<float>()) {
-                    _sendError(req, 400, "bad_value", "Введите положительное числовое значение тока");
+                if (!_parseJsonNoCache(req, data, len, doc)) return;
+                if (!doc.containsKey("index") || !doc["index"].is<uint8_t>()) {
+                    _sendErrorNoCache(req, 400, "bad_index", "Введите корректный индекс точки");
                     return;
                 }
 
-                const float knownAmps = doc["value"].as<float>();
-                if (isnan(knownAmps) || knownAmps <= 0.0f) {
-                    _sendError(req, 400, "bad_value", "Введите положительное числовое значение тока");
+                const uint8_t index = doc["index"].as<uint8_t>();
+                if (!_removeCalPointRuntime(index)) {
+                    _sendErrorNoCache(req, 400, "bad_index", "Точка с таким index не найдена");
                     return;
                 }
 
-                const float xKnown = _currentRaw();
-                if (isnan(xKnown)) {
-                    _sendError(req, 409, "sensor_unavailable", "Нет актуального значения датчика тока");
-                    return;
-                }
-                if (xKnown == _currentCalX0) {
-                    _sendError(req, 400, "no_load_change",
-                               "Не обнаружено изменение показаний. Проверьте, что нагрузка действительно подключена, и повторите");
+                _currentCalDate = _currentUnixSec();
+                if (!_saveCurrentCalState()) {
+                    _sendErrorNoCache(req, 500, "storage", "Не удалось сохранить калибровку тока");
                     return;
                 }
 
-                const float delta = xKnown - _currentCalX0;
-                const float deltaAbs = (delta >= 0.0f) ? delta : -delta;
-                const float a = knownAmps / delta;
-                const float b = -a * _currentCalX0;
-                const uint32_t nowUnix = _currentUnixSec();
-                const bool hasWarning = (deltaAbs < CURCAL_MIN_RAW_DELTA);
-
-                if (!_stor->saveCurrentCal(a, b, nowUnix)) {
-                    _sendError(req, 500, "storage", "Не удалось сохранить калибровку тока");
-                    return;
-                }
-
-                _currentCalA = a;
-                _currentCalB = b;
-                _currentCalDate = nowUnix;
-                _currentCalibrated = true;
-
-                DynamicJsonDocument resp(384);
-                resp["ok"] = true;
-                resp["a"] = a;
-                resp["b"] = b;
-                resp["amps"] = _ampsFromRaw(xKnown);
-                if (hasWarning) {
-                    resp["warning"] =
-                        "Разница показаний слишком мала для точной калибровки. Рекомендуется использовать нагрузку большего тока";
-                }
-                _sendDoc(req, 200, resp);
+                _sendCalStatusNoCache(req);
             });
 
-        _server.on("/api/v1/calibrate/status", HTTP_GET, [this](AsyncWebServerRequest* req) {
-            const float raw = _currentRaw();
-            const float amps = _ampsFromRaw(raw);
+        _server.on("/api/v1/calibrate/point", HTTP_POST,
+            [](AsyncWebServerRequest*) {},
+            nullptr,
+            [this](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t) {
+                DynamicJsonDocument doc(256);
+                if (!_parseJsonNoCache(req, data, len, doc)) return;
+                if (!doc.containsKey("value") || !doc["value"].is<float>()) {
+                    _sendErrorNoCache(req, 400, "bad_value", "Введите ток от 0 до 20 A");
+                    return;
+                }
 
-            DynamicJsonDocument resp(320);
-            resp["ok"] = true;
-            if (!isnan(raw)) resp["raw"] = raw;
-            else             resp["raw"] = nullptr;
-            if (!isnan(amps)) resp["amps"] = amps;
-            else              resp["amps"] = nullptr;
-            resp["a"] = _currentCalA;
-            resp["b"] = _currentCalB;
-            resp["calibrated"] = _currentCalibrated;
-            resp["calDate"] = _currentCalDate;
-            resp["zeroSet"] = _currentCalZeroSet;
-            _sendDoc(req, 200, resp);
+                const float amps = doc["value"].as<float>();
+                if (!isfinite(amps) || amps < 0.0f || amps > 20.0f) {
+                    _sendErrorNoCache(req, 400, "bad_value", "Введите ток от 0 до 20 A");
+                    return;
+                }
+
+                const float raw = _currentRaw();
+                if (isnan(raw)) {
+                    _sendErrorNoCache(req, 409, "sensor_unavailable", "Нет актуального значения датчика тока");
+                    return;
+                }
+
+                _normalizeCalPoints();
+                if (_calPointCount >= Storage::CURRENT_CAL_MAX_POINTS) {
+                    _sendErrorNoCache(req, 400, "too_many_points", "Максимум 10 точек калибровки");
+                    return;
+                }
+                if (_findCalPointByRaw(raw) >= 0) {
+                    _sendErrorNoCache(req, 400, "duplicate_raw", "Точка с таким raw уже существует");
+                    return;
+                }
+                if (!_canAddCalPointMonotonic(raw, amps)) {
+                    _sendErrorNoCache(
+                        req,
+                        400,
+                        "non_monotonic",
+                        "Точка нарушает монотонность зависимости raw(ток). Проверьте значения."
+                    );
+                    return;
+                }
+                if (!_addCalPointRuntime(raw, amps)) {
+                    _sendErrorNoCache(req, 400, "point_add_failed", "Не удалось добавить точку калибровки");
+                    return;
+                }
+
+                _currentCalDate = _currentUnixSec();
+                if (!_saveCurrentCalState()) {
+                    _sendErrorNoCache(req, 500, "storage", "Не удалось сохранить калибровку тока");
+                    return;
+                }
+
+                _sendCalStatusNoCache(req);
+            });
+
+        _server.on("/api/v1/calibrate/clear", HTTP_POST, [this](AsyncWebServerRequest* req) {
+            _clearCalPointsRuntime();
+            _currentCalDate = _currentUnixSec();
+
+            if (!_saveCurrentCalState()) {
+                _sendErrorNoCache(req, 500, "storage", "Не удалось сохранить калибровку тока");
+                return;
+            }
+
+            _sendCalStatusNoCache(req);
         });
 
         _server.on("/api/v1/mute", HTTP_POST,
@@ -2074,6 +2130,10 @@ private:
         operatorPages.add("/app");
 
         JsonArray endpoints = root.createNestedArray("endpoints");
+        endpoints.add("/app.css");
+        endpoints.add("/app.js");
+        endpoints.add("/uplot.css");
+        endpoints.add("/uplot.js");
         endpoints.add("/api/v1/info");
         endpoints.add("/api/v1/version");
         endpoints.add("/api/v1/health");
@@ -2088,9 +2148,12 @@ private:
         endpoints.add("/api/v1/log");
         endpoints.add("/api/v1/log/download");
         endpoints.add("/api/v1/time/sync");
+        endpoints.add("/api/v1/calibrate/live");
         endpoints.add("/api/v1/calibrate/zero");
-        endpoints.add("/api/v1/calibrate/known");
         endpoints.add("/api/v1/calibrate/status");
+        endpoints.add("/api/v1/calibrate/point");
+        endpoints.add("/api/v1/calibrate/point/delete");
+        endpoints.add("/api/v1/calibrate/clear");
         endpoints.add("/api/v1/stop");
         endpoints.add("/api/v1/stop?release=1");
         endpoints.add("/api/v1/stop/");
@@ -2564,17 +2627,33 @@ private:
         _sm->normalizeDigitalOffOnlyRules();
     }
 
-    bool _parseJson(AsyncWebServerRequest* req, uint8_t* data, size_t len, DynamicJsonDocument& doc) {
+    bool _parseJsonWithPolicy(
+        AsyncWebServerRequest* req,
+        uint8_t* data,
+        size_t len,
+        DynamicJsonDocument& doc,
+        bool noCacheErrors
+    ) {
         if (len == 0) {
-            _sendError(req, 400, "invalid_json", "Пустое тело запроса");
+            if (noCacheErrors) _sendErrorNoCache(req, 400, "invalid_json", "Пустое тело запроса");
+            else               _sendError(req, 400, "invalid_json", "Пустое тело запроса");
             return false;
         }
         DeserializationError err = deserializeJson(doc, data, len);
         if (err) {
-            _sendError(req, 400, "invalid_json", "Некорректный JSON");
+            if (noCacheErrors) _sendErrorNoCache(req, 400, "invalid_json", "Некорректный JSON");
+            else               _sendError(req, 400, "invalid_json", "Некорректный JSON");
             return false;
         }
         return true;
+    }
+
+    bool _parseJson(AsyncWebServerRequest* req, uint8_t* data, size_t len, DynamicJsonDocument& doc) {
+        return _parseJsonWithPolicy(req, data, len, doc, false);
+    }
+
+    bool _parseJsonNoCache(AsyncWebServerRequest* req, uint8_t* data, size_t len, DynamicJsonDocument& doc) {
+        return _parseJsonWithPolicy(req, data, len, doc, true);
     }
 
     void _sendGzip(AsyncWebServerRequest* req, const char* contentType, const uint8_t* data, size_t len,
@@ -2597,13 +2676,326 @@ private:
         req->send(resp);
     }
 
+    void _buildCalLivePayload(JsonObject root) const {
+        const float raw = _currentRaw();
+        const float amps = _ampsFromRaw(raw);
+
+        if (!isnan(raw)) root["raw"] = raw;
+        else             root["raw"] = nullptr;
+
+        if (!isnan(amps)) root["amps"] = amps;
+        else              root["amps"] = nullptr;
+    }
+
+    void _buildCalStatePayload(JsonObject root) const {
+        root["a"] = _currentCalA;
+        root["b"] = _currentCalB;
+        if (_currentCalZeroSet && !isnan(_currentCalX0)) root["x0"] = _currentCalX0;
+        else                                             root["x0"] = nullptr;
+        root["count"] = _calPointCount;
+
+        JsonArray points = root.createNestedArray("points");
+        for (uint8_t i = 0; i < _calPointCount; i++) {
+            if (!_calPoints[i].used) continue;
+            JsonObject point = points.createNestedObject();
+            point["raw"] = _calPoints[i].raw;
+            point["amps"] = _calPoints[i].amps;
+        }
+    }
+
+    void _buildCalStatusPayload(JsonObject root) const {
+        AnalogSensor* currentProbe = (_sm ? _sm->c : nullptr);
+
+        root["ok"] = true;
+        _buildCalLivePayload(root);
+        _buildCalStatePayload(root);
+
+        root["calibrated"] = _currentCalibrated;
+        root["calDate"] = _currentCalDate;
+        root["zeroDate"] = _currentZeroDate;
+        root["zeroSet"] = _currentCalZeroSet;
+        root["calPointCount"] = _calPointCount;
+
+        JsonArray calPoints = root.createNestedArray("calPoints");
+        for (uint8_t i = 0; i < _calPointCount; i++) {
+            if (!_calPoints[i].used) continue;
+            JsonObject point = calPoints.createNestedObject();
+            point["raw"] = _calPoints[i].raw;
+            point["amps"] = _calPoints[i].amps;
+        }
+
+        root["dbg_enabled"] = currentProbe ? currentProbe->enabled : false;
+        root["dbg_present"] = currentProbe ? currentProbe->present : false;
+        root["dbg_error"] = currentProbe ? currentProbe->error : true;
+        root["dbg_diagCode"] = currentProbe ? (int)currentProbe->diagCode : -1;
+        root["dbg_wifiMode"] = (int)WiFi.getMode();
+        if (!currentProbe) root["dbg_value"] = "no_sensor";
+        else if (isnan(currentProbe->value)) root["dbg_value"] = "nan";
+        else root["dbg_value"] = currentProbe->value;
+    }
+
+    void _sendCalStateNoCache(AsyncWebServerRequest* req) {
+        DynamicJsonDocument resp(1536);
+        _buildCalStatePayload(resp.to<JsonObject>());
+        _sendDocNoCache(req, 200, resp);
+    }
+
+    void _sendCalStatusNoCache(AsyncWebServerRequest* req) {
+        DynamicJsonDocument resp(2048);
+        _buildCalStatusPayload(resp.to<JsonObject>());
+        _sendDocNoCache(req, 200, resp);
+    }
+
+    void _applyLinearZeroRuntime(float raw) {
+        const bool hadZero = _currentCalZeroSet && !isnan(_currentCalX0);
+        const float oldX0 = _currentCalX0;
+        _currentCalX0 = raw;
+        _currentCalZeroSet = true;
+
+        if (hadZero && !isnan(oldX0)) {
+            const float deltaX0 = _currentCalX0 - oldX0;
+            if (deltaX0 != 0.0f) {
+                for (uint8_t i = 0; i < _calPointCount; i++) {
+                    if (!_calPoints[i].used) continue;
+                    _calPoints[i].raw += deltaX0;
+                }
+            }
+        }
+
+        _recomputeCalibration();
+        _recomputeMeanSlope();
+    }
+
+    void _loadCurrentCalState(const Storage::CurrentCalData& data) {
+        _currentCalA = data.a;
+        _currentCalB = data.b;
+        _currentCalDate = data.calDate;
+        _currentZeroDate = data.zeroDate;
+        _currentCalibrated = data.calibrated;
+        _currentCalX0 = data.x0;
+        _currentCalZeroSet = data.zeroSet && !isnan(data.x0);
+        if (_currentZeroDate == 0U && _currentCalZeroSet) _currentZeroDate = _currentCalDate;
+
+        _clearCalPointsRuntime();
+        const uint8_t copyCount = (data.pointCount > Storage::CURRENT_CAL_MAX_POINTS)
+            ? Storage::CURRENT_CAL_MAX_POINTS
+            : data.pointCount;
+        for (uint8_t i = 0; i < copyCount; i++) {
+            _calPoints[i].raw = data.points[i].raw;
+            _calPoints[i].amps = data.points[i].amps;
+            _calPoints[i].used = data.points[i].used;
+        }
+        _calPointCount = copyCount;
+        _recomputeCalibration();
+    }
+
+    Storage::CurrentCalData _buildCurrentCalData() const {
+        Storage::CurrentCalData data{};
+        data.a = _currentCalA;
+        data.b = _currentCalB;
+        data.calDate = _currentCalDate;
+        data.zeroDate = _currentZeroDate;
+        data.calibrated = _currentCalibrated;
+        data.x0 = _currentCalX0;
+        data.zeroSet = _currentCalZeroSet;
+        data.pointCount = _calPointCount;
+        for (uint8_t i = 0; i < _calPointCount; i++) {
+            data.points[i].raw = _calPoints[i].raw;
+            data.points[i].amps = _calPoints[i].amps;
+            data.points[i].used = _calPoints[i].used;
+        }
+        return data;
+    }
+
+    bool _saveCurrentCalState() {
+        if (!_stor) return false;
+        return _stor->saveCurrentCal(_buildCurrentCalData());
+    }
+
+    bool _addCalPointRuntime(float raw, float amps) {
+        if (isnan(raw) || isnan(amps)) return false;
+
+        _normalizeCalPoints();
+        if (_calPointCount >= Storage::CURRENT_CAL_MAX_POINTS) return false;
+        if (_findCalPointByRaw(raw) >= 0) return false;
+
+        _calPoints[_calPointCount].raw = raw;
+        _calPoints[_calPointCount].amps = amps;
+        _calPoints[_calPointCount].used = true;
+        _calPointCount++;
+        _recomputeCalibration();
+        _recomputeMeanSlope();
+        return true;
+    }
+
+    bool _removeCalPointRuntime(uint8_t index) {
+        _normalizeCalPoints();
+        if (index >= _calPointCount) return false;
+
+        for (uint8_t i = index; (i + 1U) < _calPointCount; i++) {
+            _calPoints[i] = _calPoints[i + 1U];
+        }
+
+        if (_calPointCount > 0) {
+            _calPointCount--;
+            _calPoints[_calPointCount].raw = 0.0f;
+            _calPoints[_calPointCount].amps = 0.0f;
+            _calPoints[_calPointCount].used = false;
+        }
+
+        _recomputeCalibration();
+        _recomputeMeanSlope();
+        return true;
+    }
+
+    void _clearCalPointsRuntime() {
+        for (uint8_t i = 0; i < Storage::CURRENT_CAL_MAX_POINTS; i++) {
+            _calPoints[i].raw = 0.0f;
+            _calPoints[i].amps = 0.0f;
+            _calPoints[i].used = false;
+        }
+        _calPointCount = 0;
+    }
+
+    void _normalizeCalPoints() {
+        CalPoint normalized[Storage::CURRENT_CAL_MAX_POINTS] = {};
+        uint8_t count = 0;
+
+        for (uint8_t i = 0; i < Storage::CURRENT_CAL_MAX_POINTS; i++) {
+            if (!_calPoints[i].used) continue;
+            if (isnan(_calPoints[i].raw) || isnan(_calPoints[i].amps)) continue;
+            normalized[count++] = _calPoints[i];
+            if (count >= Storage::CURRENT_CAL_MAX_POINTS) break;
+        }
+
+        for (uint8_t i = 1; i < count; i++) {
+            CalPoint current = normalized[i];
+            int8_t j = (int8_t)i - 1;
+            while (j >= 0 && normalized[j].raw > current.raw) {
+                normalized[j + 1] = normalized[j];
+                j--;
+            }
+            normalized[j + 1] = current;
+        }
+
+        uint8_t uniqueCount = 0;
+        for (uint8_t i = 0; i < count; i++) {
+            if (uniqueCount > 0 && normalized[i].raw == normalized[uniqueCount - 1].raw) continue;
+            normalized[uniqueCount] = normalized[i];
+            normalized[uniqueCount].used = true;
+            uniqueCount++;
+        }
+
+        _clearCalPointsRuntime();
+        for (uint8_t i = 0; i < uniqueCount; i++) {
+            _calPoints[i] = normalized[i];
+            _calPoints[i].used = true;
+        }
+        _calPointCount = uniqueCount;
+    }
+
+    int8_t _findCalPointByRaw(float raw) const {
+        for (uint8_t i = 0; i < _calPointCount; i++) {
+            if (!_calPoints[i].used) continue;
+            if (_calPoints[i].raw == raw) return (int8_t)i;
+        }
+        return -1;
+    }
+
+    bool _canAddCalPointMonotonic(float raw, float amps) const {
+        if (!isfinite(raw) || !isfinite(amps)) return false;
+
+        CalPoint points[Storage::CURRENT_CAL_MAX_POINTS] = {};
+        uint8_t count = 0;
+        for (uint8_t i = 0; i < _calPointCount; i++) {
+            if (!_calPoints[i].used) continue;
+            if (!isfinite(_calPoints[i].raw) || !isfinite(_calPoints[i].amps)) continue;
+            points[count++] = _calPoints[i];
+        }
+        if (count >= Storage::CURRENT_CAL_MAX_POINTS) return false;
+
+        points[count].raw = raw;
+        points[count].amps = amps;
+        points[count].used = true;
+        count++;
+        if (count < 2) return true;
+
+        for (uint8_t i = 1; i < count; i++) {
+            CalPoint current = points[i];
+            int8_t j = (int8_t)i - 1;
+            while (j >= 0 && points[j].amps > current.amps) {
+                points[j + 1] = points[j];
+                j--;
+            }
+            points[j + 1] = current;
+        }
+
+        int8_t rawDirection = 0;
+        for (uint8_t i = 1; i < count; i++) {
+            const float deltaAmps = points[i].amps - points[i - 1].amps;
+            if (deltaAmps == 0.0f) return false;
+
+            const float deltaRaw = points[i].raw - points[i - 1].raw;
+            if (deltaRaw == 0.0f) return false;
+
+            const int8_t currentDirection = (deltaRaw > 0.0f) ? 1 : -1;
+            if (rawDirection == 0) {
+                rawDirection = currentDirection;
+                continue;
+            }
+            if (currentDirection != rawDirection) return false;
+        }
+
+        return true;
+    }
+
+    float _ampsFromLinear(float raw) const {
+        if (isnan(raw)) return NAN;
+        return (_currentCalA * raw) + _currentCalB;
+    }
+
+    void _recomputeMeanSlope() {
+        _normalizeCalPoints();
+        if (!_currentCalZeroSet || isnan(_currentCalX0)) return;
+
+        double num = 0.0;
+        double den = 0.0;
+        uint8_t n = 0;
+        for (uint8_t i = 0; i < _calPointCount; i++) {
+            if (!_calPoints[i].used) continue;
+            if (isnan(_calPoints[i].raw) || isnan(_calPoints[i].amps)) continue;
+
+            const float d = _calPoints[i].raw - _currentCalX0;
+            const float dAbs = (d >= 0.0f) ? d : -d;
+            if (dAbs < CURCAL_MIN_RAW_DELTA) continue;
+
+            num += (double)_calPoints[i].amps * (double)d;
+            den += (double)d * (double)d;
+            n++;
+        }
+
+        if (n == 0 || den <= 0.0) return;
+
+        _currentCalA = (float)(num / den);
+        _currentCalB = -_currentCalA * _currentCalX0;
+        _currentCalibrated = true;
+    }
+
+    void _recomputeCalibration() {
+        _normalizeCalPoints();
+        if (!_currentCalZeroSet || isnan(_currentCalX0)) return;
+        if (!isnan(_currentCalA)) {
+            _currentCalB = -_currentCalA * _currentCalX0;
+        }
+    }
+
     float _currentRaw() const {
         return _sm ? _sm->getC() : NAN;
     }
 
     float _ampsFromRaw(float raw) const {
         if (isnan(raw)) return NAN;
-        return (_currentCalA * raw) + _currentCalB;
+        return _ampsFromLinear(raw);
     }
 
     uint32_t _currentUnixSec() const {
@@ -2621,7 +3013,22 @@ private:
         _sendDoc(req, status, doc);
     }
 
-    void _sendDoc(AsyncWebServerRequest* req, int status, DynamicJsonDocument& doc) {
+    void _sendErrorNoCache(AsyncWebServerRequest* req, int status, const String& code, const String& message) {
+        DynamicJsonDocument doc(256);
+        doc["ok"]    = false;
+        doc["code"]  = status;
+        doc["error"] = message;
+        doc["err"]   = message;
+        doc["type"]  = code;
+        _sendDocNoCache(req, status, doc);
+    }
+
+    void _sendDocBuffered(
+        AsyncWebServerRequest* req,
+        int status,
+        DynamicJsonDocument& doc,
+        bool addNoCacheHeaders
+    ) {
         if (!req) {
             return;
         }
@@ -2738,19 +3145,33 @@ private:
             return;
         }
 
-        /*
-          Do NOT add per-response headers here.
+        if (addNoCacheHeaders) {
+            resp->addHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+            resp->addHeader("Pragma", "no-cache");
+            resp->addHeader("Expires", "0");
+        } else {
+            /*
+              Do NOT add per-response headers here.
 
-          The decoded crash happened in:
-            AsyncWebServerResponse::addHeader(...)
-            std::_List_node<AsyncWebHeader>::allocate
-            operator new
+              The decoded crash happened in:
+                AsyncWebServerResponse::addHeader(...)
+                std::_List_node<AsyncWebHeader>::allocate
+                operator new
 
-          For hot API path /api/v1/state, avoiding extra heap allocations is more
-          important than no-cache headers.
-        */
+              For hot API path /api/v1/state, avoiding extra heap allocations is more
+              important than no-cache headers.
+            */
+        }
 
         req->send(resp);
+    }
+
+    void _sendDoc(AsyncWebServerRequest* req, int status, DynamicJsonDocument& doc) {
+        _sendDocBuffered(req, status, doc, false);
+    }
+
+    void _sendDocNoCache(AsyncWebServerRequest* req, int status, DynamicJsonDocument& doc) {
+        _sendDocBuffered(req, status, doc, true);
     }
 
     static const char* _outputName(int idx) {
