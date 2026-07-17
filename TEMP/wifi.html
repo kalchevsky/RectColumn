@@ -27,7 +27,8 @@
     .msg{padding:14px;border-radius:14px;background:#1c2230;color:#e5e7eb;font-size:18px;line-height:1.45}
     .err{background:#3b1418;color:#fca5a5}
     .ok{background:#14331f;color:#86efac}
-    .busy{background:#0a0c14;color:#fff}.busy-overlay{position:fixed;inset:0;background:rgba(17,24,39,.42);display:flex;align-items:center;justify-content:center;padding:24px;z-index:40}.busy-overlay.hidden{display:none}.busy-box{max-width:320px;width:100%;background:#111827;color:#fff;border-radius:18px;padding:18px;text-align:center;box-shadow:0 12px 40px rgba(0,0,0,.28)}.wifi-bars{font-family:monospace;font-size:18px;letter-spacing:1px}
+    .busy{background:#0a0c14;color:#fff}
+    .info{background:#0f2436;color:#93c5fd}.busy-overlay{position:fixed;inset:0;background:rgba(17,24,39,.42);display:flex;align-items:center;justify-content:center;padding:24px;z-index:40}.busy-overlay.hidden{display:none}.busy-box{max-width:320px;width:100%;background:#111827;color:#fff;border-radius:18px;padding:18px;text-align:center;box-shadow:0 12px 40px rgba(0,0,0,.28)}.wifi-bars{font-family:monospace;font-size:18px;letter-spacing:1px}
     .small{font-size:15px;color:#94a3b8}
     ul.networks{list-style:none;padding:0;margin:12px 0 0}
     ul.networks li{padding:14px;border:1px solid #2a2f3a;border-radius:14px;margin:10px 0;font-size:18px;background:#1c2230;color:#e5e7eb}
@@ -76,9 +77,9 @@
 
       <div id="apPasswordForm" class="hidden stack">
         <label for="apPass1">Новый пароль</label>
-        <input id="apPass1" type="text" minlength="8" maxlength="63" placeholder="8-63 символа">
+        <input id="apPass1" type="text" maxlength="63" placeholder="8-63 символа">
         <label for="apPass2">Повторите пароль</label>
-        <input id="apPass2" type="text" minlength="8" maxlength="63" placeholder="Повтор пароля">
+        <input id="apPass2" type="text" maxlength="63" placeholder="Повтор пароля">
         <div class="msg err">Подключение без пароля будет невозможно. Не потеряйте пароль. После изменения пароля может потребоваться переподключение к точке доступа.</div>
         <button type="button" onclick="saveApPassword()">Сохранить</button>
         <button type="button" class="light" onclick="showApPasswordForm(false)">Отменить</button>
@@ -579,22 +580,33 @@
       var p1 = byId('apPass1').value;
       var p2 = byId('apPass2').value;
       setActions('');
-      if (!p1 || p1.length < 8 || p1.length > 63) {
-        setInlineStatus('Пароль точки доступа должен содержать от 8 до 63 символов.', 'err');
+      if (p1.length !== 0 && (p1.length < 8 || p1.length > 63)) {
+        setInlineStatus('Пароль точки доступа должен быть пустым (открытая сеть) либо содержать от 8 до 63 символов.', 'err');
         return;
       }
       if (p1 !== p2) {
         setInlineStatus('Пароли не совпадают.', 'err');
         return;
       }
-      setInlineStatus('Сохраняем пароль точки доступа...', 'busy');
+      var removing = (p1.length === 0);
+      setInlineStatus(removing ? 'Снимаем пароль точки доступа...' : 'Сохраняем пароль точки доступа...', 'busy');
       callApi('/api/v1/wifi/ap', 'POST', JSON.stringify({ pass:p1 }), function(res){
         if (res && res.ok) {
-          setInlineStatus('Пароль сохранён. Если связь с точкой доступа пропадёт, подключитесь заново уже с новым паролем.', 'ok');
+          setInlineStatus(removing
+            ? 'Пароль снят. Точка доступа теперь открыта.'
+            : 'Пароль сохранён. Если связь с точкой доступа пропадёт, подключитесь заново уже с новым паролем.', 'ok');
           showApPasswordForm(false);
           setActions('<a class="btn" href="/app">Перейти на стартовую страницу</a><button type="button" class="light" onclick="openStep(\'ap\')">Остаться на странице WiFi</button>');
           loadInfo();
           setTimeout(function(){ goToApp(); }, 1500);
+          return;
+        }
+        if (res && res.__http === 0) {
+          setInlineStatus(removing
+            ? 'Точка доступа перезапускается как открытая. Переподключитесь к сети и обновите страницу.'
+            : 'Пароль применяется. Точка доступа перезапускается с новым паролем — переподключитесь к сети с новым паролем и обновите страницу.', 'info');
+          showApPasswordForm(false);
+          setActions('<a class="btn" href="/app">Перейти на стартовую страницу</a><button type="button" class="light" onclick="location.reload()">Обновить страницу</button>');
           return;
         }
         setInlineStatus((res && (res.error || res.err)) ? (res.error || res.err) : 'Не удалось сохранить пароль точки доступа.', 'err');
