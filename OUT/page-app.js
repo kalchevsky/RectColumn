@@ -1572,7 +1572,7 @@ function renderMenu(){
   html += renderMessages('');
   html += '<button class="btn" onclick="location.href=\'/wifi\'">Конфигурация WiFi</button>';
   html += '<button class="btn" onclick="go(\'#/sound\')">Конфигурация звука</button>';
-  html += '<button class="btn" onclick="go(\'#/outputConfig\')">Конфигурация выходов CH1–CH3</button>';
+  html += '<button class="btn" onclick="go(\'#/outputConfig\')">' + (outputVisible('CH2') ? 'Конфигурация выходов CH1–CH3' : 'Конфигурация выхода CH1') + '</button>';
   if (sensorVisible('C')) html += '<button class="btn" onclick="go(\'#/cal-basic\');render();">Датчик тока</button>';
   html += '<button class="btn" onclick="go(\'#/notifications\')">Уведомления</button>';
   html += '<button class="btn" onclick="go(\'#/log\')">Лог</button>';
@@ -1709,7 +1709,7 @@ function renderSound(){
   var s = state.lastState || {};
   var html = '<div class="app"><div class="panel"><h2>Конфигурация звука</h2>';
   html += renderMessages('');
-  html += '<div class="small">CH4 - внешний звонок. CH5 - встроенный зуммер.</div>';
+  if (outputVisible('CH4')) html += '<div class="small">CH4 - внешний звонок. CH5 - встроенный зуммер.</div>';
   if (outputVisible('CH4')) html += '<label style="display:flex;gap:8px;align-items:center;margin-top:12px"><input id="snd_ch4_en" type="checkbox"' + (s.ch4Enabled ? ' checked' : '') + '><span>CH4: звонок включён</span></label>';
   if (outputVisible('CH5')) html += '<label style="display:flex;gap:8px;align-items:center;margin-top:12px"><input id="snd_ch5_en" type="checkbox"' + (s.ch5Enabled ? ' checked' : '') + '><span>CH5: зуммер включён</span></label>';
   html += '<button class="btn light" onclick="testSound()">Проверить звук</button>';
@@ -1782,7 +1782,7 @@ function renderOutputConfigView(cfg){
     if (effective) return effective;
     return 'heat';
   }
-  var html = '<div class="app"><div class="panel"><h2>Конфигурация выходов CH1–CH3</h2>';
+  var html = '<div class="app"><div class="panel"><h2>' + (outputVisible('CH2') ? 'Конфигурация выходов CH1–CH3' : 'Конфигурация выхода CH1') + '</h2>';
   html += renderMessages('');
   html += '<div class="small">CH4 и CH5 вынесены в раздел «Конфигурация звука».</div>';
   ['CH1','CH2','CH3'].filter(outputVisible).forEach(function(id){
@@ -2144,7 +2144,7 @@ function setManual(id, on){
 
 function renderManual(){
   ensureManualRelayPendingStyles();
-  var ids = ['CH1','CH2','CH3'];
+  var ids = ['CH1','CH2','CH3'].filter(outputVisible);
   var html = '<div class="app"><div class="panel"><h2>Ручное управление реле</h2>';
   html += renderMessages('');
   for (var i = 0; i < ids.length; i++) {
