@@ -19,8 +19,8 @@
 ## Сборка и заливка
 
 ```bash
-arduino-cli compile --fqbn esp32:esp32:esp32 --build-path .build-esp32 .
-arduino-cli upload -p COM3 --fqbn esp32:esp32:esp32 --build-path .build-esp32 .
+arduino-cli compile --fqbn esp32:esp32:esp32:PartitionScheme=min_spiffs --build-path .build-esp32 .
+arduino-cli upload -p COM3 --fqbn esp32:esp32:esp32:PartitionScheme=min_spiffs --build-path .build-esp32 .
 ```
 
 Веб-интерфейс после заливки: `http://192.168.10.244`
