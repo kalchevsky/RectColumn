@@ -106,6 +106,23 @@ private:
     // Предупреждаем о слабом разлёте точек, но не блокируем калибровку.
     static constexpr float CURCAL_MIN_RAW_DELTA = 50.0f;
 
+    // LIGHT: какие датчики/каналы/WER видимы в текущем профиле.
+    // FULL: видно всё. LIGHT: только T1/T2/dT, CH1/CH5, WER_CH1.
+    static inline bool _profileSensorVisible(uint8_t i) {
+#if ACTIVE_PROFILE == PROFILE_ECONOMY_LIGHT
+        return (i == SEN_T1 || i == SEN_T2 || i == SEN_DT);
+#else
+        (void)i; return true;
+#endif
+    }
+    static inline bool _profileOutputVisible(uint8_t i) {
+#if ACTIVE_PROFILE == PROFILE_ECONOMY_LIGHT
+        return (i == OUT_CH1 || i == OUT_CH5);
+#else
+        (void)i; return true;
+#endif
+    }
+
     // ------------------------------------------------------------
     // Route registration
     // ------------------------------------------------------------
@@ -216,16 +233,18 @@ private:
             doc["uiVersion"] = 1;
 
             JsonArray sensors = doc.createNestedArray("sensorIds");
-            for (int i = 0; i < SEN_COUNT; i++) sensors.add(SensorManager::sensorName(i));
+            for (int i = 0; i < SEN_COUNT; i++)
+                if (_profileSensorVisible(i)) sensors.add(SensorManager::sensorName(i));
 
             JsonArray outputs = doc.createNestedArray("outputIds");
-            for (int i = 0; i < OUT_COUNT; i++) outputs.add(_outputName(i));
+            for (int i = 0; i < OUT_COUNT; i++)
+                if (_profileOutputVisible(i)) outputs.add(_outputName(i));
 
             JsonArray confirmations = doc.createNestedArray("confirmationIds");
-            confirmations.add("WER_CH1");
-            confirmations.add("WER_CH2");
-            confirmations.add("WER_CH3");
-            confirmations.add("WER_CH4");
+            if (_profileOutputVisible(OUT_CH1)) confirmations.add("WER_CH1");
+            if (_profileOutputVisible(OUT_CH2)) confirmations.add("WER_CH2");
+            if (_profileOutputVisible(OUT_CH3)) confirmations.add("WER_CH3");
+            if (_profileOutputVisible(OUT_CH4)) confirmations.add("WER_CH4");
 
             JsonObject timeSync = doc.createNestedObject("timeSync");
             timeSync["supportsMillisAtSend"] = true;
@@ -355,12 +374,20 @@ private:
             });
 
         _server.on("/api/v1/calibrate/live", HTTP_GET, [this](AsyncWebServerRequest* req) {
+            if (!_profileSensorVisible(SEN_C)) {
+                _sendErrorNoCache(req, 404, "not_found", "sensor not found");
+                return;
+            }
             DynamicJsonDocument resp(256);
             _buildCalLivePayload(resp.to<JsonObject>());
             _sendDocNoCache(req, 200, resp);
         });
 
         _server.on("/api/v1/calibrate/zero", HTTP_POST, [this](AsyncWebServerRequest* req) {
+            if (!_profileSensorVisible(SEN_C)) {
+                _sendErrorNoCache(req, 404, "not_found", "sensor not found");
+                return;
+            }
             const float raw = _currentRaw();
             if (isnan(raw)) {
                 _sendErrorNoCache(req, 409, "sensor_unavailable", "Нет актуального значения датчика тока");
@@ -380,6 +407,10 @@ private:
         });
 
         _server.on("/api/v1/calibrate/status", HTTP_GET, [this](AsyncWebServerRequest* req) {
+            if (!_profileSensorVisible(SEN_C)) {
+                _sendErrorNoCache(req, 404, "not_found", "sensor not found");
+                return;
+            }
             _sendCalStatusNoCache(req);
         });
 
@@ -390,6 +421,10 @@ private:
             [](AsyncWebServerRequest*) {},
             nullptr,
             [this](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t) {
+                if (!_profileSensorVisible(SEN_C)) {
+                    _sendErrorNoCache(req, 404, "not_found", "sensor not found");
+                    return;
+                }
                 DynamicJsonDocument doc(256);
                 if (!_parseJsonNoCache(req, data, len, doc)) return;
                 if (!doc.containsKey("index") || !doc["index"].is<uint8_t>()) {
@@ -416,6 +451,10 @@ private:
             [](AsyncWebServerRequest*) {},
             nullptr,
             [this](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t) {
+                if (!_profileSensorVisible(SEN_C)) {
+                    _sendErrorNoCache(req, 404, "not_found", "sensor not found");
+                    return;
+                }
                 DynamicJsonDocument doc(256);
                 if (!_parseJsonNoCache(req, data, len, doc)) return;
                 if (!doc.containsKey("value") || !doc["value"].is<float>()) {
@@ -468,6 +507,10 @@ private:
             });
 
         _server.on("/api/v1/calibrate/clear", HTTP_POST, [this](AsyncWebServerRequest* req) {
+            if (!_profileSensorVisible(SEN_C)) {
+                _sendErrorNoCache(req, 404, "not_found", "sensor not found");
+                return;
+            }
             _clearCalPointsRuntime();
             _currentCalDate = _currentUnixSec();
 
@@ -508,7 +551,7 @@ private:
             bool pulsedCh4 = false;
             bool pulsedCh5 = false;
 
-            if (_om->ch4Enabled && _om->out[OUT_CH4]) {
+            if (_profileOutputVisible(OUT_CH4) && _om->ch4Enabled && _om->out[OUT_CH4]) {
                 _om->out[OUT_CH4]->requestPulse(pulseMs);
                 pulsedCh4 = true;
             }
@@ -547,10 +590,12 @@ private:
             resp["acknowledgedCount"] = acknowledgedCount;
             resp["unackedAlarmCount"] = unackedAfter;
             resp["muted"] = _om->soundMuted;
-            resp["ch4Enabled"] = _om->ch4Enabled;
             resp["ch5Enabled"] = _om->ch5Enabled;
-            resp["ch4Actual"] = _om->out[OUT_CH4]->actualOn();
             resp["ch5Actual"] = _om->out[OUT_CH5]->actualOn();
+            if (_profileOutputVisible(OUT_CH4)) {
+                resp["ch4Enabled"] = _om->ch4Enabled;
+                resp["ch4Actual"] = _om->out[OUT_CH4]->actualOn();
+            }
             resp["compatFallback"] = compatGet;
             JsonArray activeAlarmReasons = resp.createNestedArray("activeAlarmReasons");
             _buildActiveAlarmReasons(activeAlarmReasons, true);
@@ -716,12 +761,13 @@ private:
 
             JsonArray outputs = doc.createNestedArray("outputs");
             for (int i = 0; i < 3; i++) {
+                if (!_profileOutputVisible(i)) continue;
                 JsonObject o = outputs.createNestedObject();
                 o["id"] = _outputName(i);
                 o["mode"] = (_om->chMode[i] == LOGIC_COOL) ? "cool" : "heat";
             }
 
-            doc["ch4Enabled"] = _om->ch4Enabled;
+            if (_profileOutputVisible(OUT_CH4)) doc["ch4Enabled"] = _om->ch4Enabled;
             doc["ch5Enabled"] = _om->ch5Enabled;
             doc["soundMuted"] = _om->soundMuted;
         };
@@ -770,9 +816,10 @@ private:
                 if (doc.containsKey("soundMuted")) nextSoundMuted = doc["soundMuted"].as<bool>();
 
                 for (uint8_t oi = OUT_CH1; oi <= OUT_CH3; oi++) {
+                    if (!_profileOutputVisible(oi)) continue;
                     if (nextMode[oi] != _om->chMode[oi]) _applyOutputLogicMode(oi, nextMode[oi]);
                 }
-                _om->ch4Enabled = nextCh4Enabled;
+                if (_profileOutputVisible(OUT_CH4)) _om->ch4Enabled = nextCh4Enabled;
                 _om->ch5Enabled = nextCh5Enabled;
                 _om->mute(nextSoundMuted);
 
@@ -1240,6 +1287,10 @@ private:
             _sendError(req, 404, "not_found", "sensor not found");
             return;
         }
+        if (!_profileSensorVisible(si)) {
+            _sendError(req, 404, "not_found", "sensor not found");
+            return;
+        }
 
         DynamicJsonDocument doc(256);
         if (!_parseJson(req, data, len, doc)) return;
@@ -1348,6 +1399,10 @@ private:
             _sendError(req, 404, "not_found", "sensor not found");
             return;
         }
+        if (!_profileSensorVisible(si)) {
+            _sendError(req, 404, "not_found", "sensor not found");
+            return;
+        }
 
         DynamicJsonDocument doc(256);
         if (!_parseJson(req, data, len, doc)) return;
@@ -1377,6 +1432,10 @@ private:
             _sendError(req, 404, "not_found", "sensor not found");
             return;
         }
+        if (!_profileSensorVisible(si)) {
+            _sendError(req, 404, "not_found", "sensor not found");
+            return;
+        }
 
         DynamicJsonDocument doc(256);
         if (!_parseJson(req, data, len, doc)) return;
@@ -1384,6 +1443,10 @@ private:
         const int oi = doc["outIdx"] | -1;
         if (oi < 0 || oi >= N_CTRL_OUT) {
             _sendError(req, 400, "bad_params", "outIdx out of range");
+            return;
+        }
+        if (!_profileOutputVisible(oi)) {
+            _sendError(req, 404, "not_found", "output not found");
             return;
         }
 
@@ -1652,6 +1715,10 @@ private:
             _sendError(req, 404, "not_found", "output not found");
             return;
         }
+        if (!_profileOutputVisible(oi)) {
+            _sendError(req, 404, "not_found", "output not found");
+            return;
+        }
 
         RelayCommand cmd = CMD_NONE;
         bool targetOn = false;
@@ -1707,6 +1774,10 @@ private:
 
     void _handleRelayState(AsyncWebServerRequest* req, int oi) {
         if (oi < 0 || oi >= OUT_COUNT) {
+            _sendError(req, 404, "not_found", "output not found");
+            return;
+        }
+        if (!_profileOutputVisible(oi)) {
             _sendError(req, 404, "not_found", "output not found");
             return;
         }
@@ -2075,7 +2146,7 @@ private:
         root["lastScanCount"] = _wifi->lastScanCount();
         root["reconnectPauseMs"] = _wifi->reconnectPauseRemainingMs();
         root["muted"]      = _om->soundMuted;
-        root["ch4Enabled"] = _om->ch4Enabled;
+        if (_profileOutputVisible(OUT_CH4)) root["ch4Enabled"] = _om->ch4Enabled;
         root["ch5Enabled"] = _om->ch5Enabled;
         root["stopLatched"] = _om->mainStopLatched();
         root["wifiWizardPending"] = _wifiWizardPending();
@@ -2206,7 +2277,7 @@ private:
         root["activeAlarmCount"] = _om->activeAlarmCount(*_sm);
         root["unackedAlarmCount"] = _om->unackedAlarmCount(*_sm);
         root["safetyAlarmActive"] = _om->safetyAlarmActive();
-        root["ch4Enabled"] = _om->ch4Enabled;
+        if (_profileOutputVisible(OUT_CH4)) root["ch4Enabled"] = _om->ch4Enabled;
         root["ch5Enabled"] = _om->ch5Enabled;
         root["stopLatched"] = _om->mainStopLatched();
         root["wifiWizardPending"] = _wifiWizardPending();
@@ -2397,6 +2468,7 @@ private:
 
     void _buildSensorsConfig(JsonArray arr) {
         for (int i = 0; i < SEN_COUNT; i++) {
+            if (!_profileSensorVisible(i)) continue;
             SensorBase* sensor = _sm->s[i];
             JsonObject so = arr.createNestedObject();
             so["id"] = SensorManager::sensorName(i);
@@ -2412,6 +2484,7 @@ private:
 
     void _buildSensorsLive(JsonArray arr) {
         for (int i = 0; i < SEN_COUNT; i++) {
+            if (!_profileSensorVisible(i)) continue;
             SensorBase* sensor = _sm->s[i];
             JsonObject so = arr.createNestedObject();
             const uint8_t unackedMask = _om->unackedAlarmMaskFor(*_sm, i);
@@ -2430,6 +2503,7 @@ private:
 
     void _buildSensors(JsonArray arr) {
         for (int i = 0; i < SEN_COUNT; i++) {
+            if (!_profileSensorVisible(i)) continue;
             SensorBase* sensor = _sm->s[i];
             JsonObject so = arr.createNestedObject();
             const uint8_t unackedMask = _om->unackedAlarmMaskFor(*_sm, i);
@@ -2449,6 +2523,7 @@ private:
 
     void _buildOutputsConfig(JsonArray arr) {
         for (int i = 0; i < OUT_COUNT; i++) {
+            if (!_profileOutputVisible(i)) continue;
             Output* output = _om->out[i];
             JsonObject oo = arr.createNestedObject();
             oo["id"] = _outputName(i);
@@ -2458,6 +2533,7 @@ private:
 
     void _buildOutputsLive(JsonArray arr) {
         for (int i = 0; i < OUT_COUNT; i++) {
+            if (!_profileOutputVisible(i)) continue;
             Output* output = _om->out[i];
             JsonObject oo = arr.createNestedObject();
             oo["id"] = _outputName(i);
@@ -2467,6 +2543,7 @@ private:
 
     void _buildOutputs(JsonArray arr) {
         for (int i = 0; i < OUT_COUNT; i++) {
+            if (!_profileOutputVisible(i)) continue;
             Output* output = _om->out[i];
             JsonObject oo = arr.createNestedObject();
             oo["id"] = _outputName(i);

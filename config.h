@@ -20,6 +20,9 @@
 #define API_VERSION     "v1"
 #define AP_SSID_DEF     "Control_System"
 #define DEVICE_NAME     "RectColumn"
+#define PROFILE_FULL           0
+#define PROFILE_ECONOMY_LIGHT  1
+#define ACTIVE_PROFILE   PROFILE_FULL
 // ─── Режим общей функции GPIO35 ──────────────────────────────────
 // GPIO35 не может одновременно работать как аналоговый вход V
 // и как вход подтверждения WER_CH2.
@@ -85,6 +88,9 @@
 #define PIN_CH3   33   // CH3: клапан 1
 #define PIN_CH4   32   // CH4: внешний звонок
 #define PIN_CH5   13   // CH5: встроенный буззер
+// LIGHT п.8: LED CH1. TODO GPIO по схеме. output:18/19/23. НЕ 35/39.
+#define PIN_CH1_LED          18
+#define CH1_LED_DEFAULT_ON   true
 #define PIN_WIFI_LED 4 // LED индикации WiFi
 // GPIO14 — strapping pin. Если удерживать кнопку нажатой во время
 // power-on/reset, ESP32 может войти в специальный режим загрузки.
@@ -198,7 +204,11 @@ static_assert(PIN_V != PIN_WER_CH4, "PIN_V conflicts with WER_CH4");
 #define OUT_COUNT 5
 
 static inline constexpr bool requiresWerConfirmation(uint8_t outIdx) {
+#if ACTIVE_PROFILE == PROFILE_ECONOMY_LIGHT
+    return outIdx == OUT_CH1;
+#else
     return outIdx == OUT_CH1 || outIdx == OUT_CH2 || outIdx == OUT_CH3;
+#endif
 }
 
 // Дополнительные биты правил,
@@ -229,4 +239,3 @@ enum SensorDiagCode : uint8_t {
     SENSOR_DIAG_GPIO35_RESERVED_FOR_WER_CH2,
     SENSOR_DIAG_TEMP_RECOVERY_HOLD,
 };
-

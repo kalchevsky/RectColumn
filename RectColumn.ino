@@ -299,6 +299,8 @@ void setup() {
         FactoryDefaults::applyFactoryDefaults(storage, sensorMgr, outputMgr, &eventLog);
     }
     syncCtrlLogicFromOutputModes();
+    FactoryDefaults::applyLightSensorOverride(sensorMgr, &eventLog);
+    FactoryDefaults::applyLightOutputOverride(outputMgr, &eventLog);
 
     if (!storage.ready()) {
         eventLog.add(String("Хранилище: недоступно - ") + storage.statusText());

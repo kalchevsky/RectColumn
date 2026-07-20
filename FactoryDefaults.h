@@ -136,6 +136,11 @@ inline bool applyFactoryDefaults(Storage& storage,
 
     _resetOutputsToOff(om);
 
+#if ACTIVE_PROFILE == PROFILE_ECONOMY_LIGHT
+    // TODO ЭТАП 1: датчики off
+    // TODO ЭТАП 2: каналы off
+#endif
+
     _applyTempFamilyProfile(sm.t1);
     _applyTempFamilyProfile(sm.t2);
     _applyTempFamilyProfile(sm.t3);
@@ -178,6 +183,38 @@ inline bool applyFactoryDefaults(Storage& storage,
         log->add(msg);
     }
     return ok;
+}
+
+// LIGHT п.1: принудительное выключение датчиков независимо от Storage.
+// Вызывается на старте ПОСЛЕ loadSensors(). T1/T2 не трогаем.
+inline void applyLightSensorOverride(SensorManager& sm, EventLog* log = nullptr) {
+#if ACTIVE_PROFILE == PROFILE_ECONOMY_LIGHT
+    SensorBase* offList[] = { sm.t3, sm.p, sm.l, sm.f, sm.c, sm.v };
+    for (uint8_t i = 0; i < 6; i++) {
+        if (offList[i]) offList[i]->enabled = false;
+    }
+    if (log) log->add("LIGHT: датчики T3/P/L/F/C/V принудительно выключены");
+#else
+    (void)sm; (void)log;
+#endif
+}
+
+// LIGHT п.2: принудительное выключение каналов CH2/CH3/CH4
+// независимо от Storage. Вызывается на старте ПОСЛЕ loadOutputs().
+// CH1 и CH5 не трогаем. WER здесь НЕ трогаем (см. часть 2B).
+inline void applyLightOutputOverride(OutputManager& om, EventLog* log = nullptr) {
+#if ACTIVE_PROFILE == PROFILE_ECONOMY_LIGHT
+    const uint8_t offCh[] = { OUT_CH2, OUT_CH3, OUT_CH4 };
+    for (uint8_t i = 0; i < 3; i++) {
+        if (om.out[offCh[i]]) om.out[offCh[i]]->enabled = false;
+    }
+    // синхронизируем управляющий флаг CH4, чтобы applyConfig()
+    // при повторном вызове не включил канал обратно
+    om.ch4Enabled = false;
+    if (log) log->add("LIGHT: каналы CH2/CH3/CH4 принудительно выключены");
+#else
+    (void)om; (void)log;
+#endif
 }
 
 } // namespace FactoryDefaults
