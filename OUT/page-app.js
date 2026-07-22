@@ -1103,7 +1103,9 @@ function sensorCtrlRules(s){
   for (var i = 0; i < arr.length; i++) {
     var rule = arr[i];
     if (!rule || !rule.enabled) continue;
-    if (Number(rule.outIdx) > 2) continue;
+    var outIdx = Number(rule.outIdx);
+    if (!isFinite(outIdx)) continue;
+    if (!outputVisible('CH' + (outIdx + 1))) continue;
     out.push(rule);
   }
   return out;
@@ -3964,6 +3966,7 @@ function renderSensorCtrl(id){
   html.push('<div class="cell head">MAX</div>');
   html.push('</section>');
   for (var outIdx = 0; outIdx < 3; outIdx++) {
+    if (!outputVisible('CH' + (outIdx + 1))) continue;
     var rule = getCtrlRuleUi(s, outIdx);
     html.push('<section class="ctrl-row">');
     if (isCtrlDisabledSensor(id) || isToggleOnlySensor(id)) html.push('<div class="cell empty">—</div>');
