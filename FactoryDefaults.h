@@ -193,7 +193,6 @@ inline void applyLightSensorOverride(SensorManager& sm, EventLog* log = nullptr)
     for (uint8_t i = 0; i < 6; i++) {
         if (offList[i]) offList[i]->enabled = false;
     }
-    if (log) log->add("LIGHT: датчики T3/P/L/F/C/V принудительно выключены");
 #else
     (void)sm; (void)log;
 #endif
