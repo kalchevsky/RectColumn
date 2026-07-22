@@ -630,6 +630,11 @@
           loadInfo();
           return;
         }
+        if (res && res.__http === 0) {
+          setInlineStatus('Имя точки доступа применяется. Устройство перезагружается — подключитесь к сети «' + ssid + '» и обновите страницу.', 'info');
+          setActions('<a class="btn" href="/app">Перейти на стартовую страницу</a><button type="button" class="light" onclick="location.reload()">Обновить страницу</button>');
+          return;
+        }
         setInlineStatus((res && (res.error || res.err)) ? (res.error || res.err) : 'Не удалось сохранить имя точки доступа.', 'err');
         loadInfo();
       });
