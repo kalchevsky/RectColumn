@@ -15,6 +15,8 @@ arduino-cache-*/
 .arduino15/
 .build-esp32/
 .build-esp32*/
+.build-*/
+.tmp_*/
 arduino-cli.yaml
 
 # PlatformIO, if ever used
