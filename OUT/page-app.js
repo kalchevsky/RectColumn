@@ -601,14 +601,24 @@ function updateUnifiedAlertOverlay(){
 
 function loadSchema(cb){
   if (state.schema) { cb(state.schema); return; }
-  api('/api/v1/schema', null, function(res){
-    if (res && (res.ok || res.sensorIds)) {
-      state.schema = res;
-    } else {
-      state.schema = { sensorIds: defaultSensorOrder, outputIds:['CH1','CH2','CH3','CH4','CH5'] };
-    }
-    cb(state.schema);
-  });
+  function attempt(n){
+    api('/api/v1/schema', null, function(res){
+      if (res && (res.ok || res.sensorIds)) {
+        state.schema = res;
+        cb(state.schema);
+        return;
+      }
+      if (n < 1) {
+        setTimeout(function(){ attempt(n + 1); }, 400);
+        return;
+      }
+      var po = (window.PROFILE && window.PROFILE.outputIds) || [];
+      var ps = (window.PROFILE && window.PROFILE.sensorIds) || [];
+      state.schema = { sensorIds: ps, outputIds: po };
+      cb(state.schema);
+    });
+  }
+  attempt(0);
 }
 
 function copyOwn(dst, src){

@@ -12,6 +12,7 @@ static const char PAGE_APP_HTML[] PROGMEM = R"RCWEB(
 </head>
 <body>
   <div id="app"></div>
+  <script src="/profile.js?v=)RCWEB" FW_VERSION R"RCWEB("></script>
   <script src="/app.js?v=)RCWEB" FW_VERSION R"RCWEB("></script>
 </body>
 </html>

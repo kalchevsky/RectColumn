@@ -122,6 +122,53 @@ private:
         (void)i; return true;
 #endif
     }
+    static void _writeJsQuoted(Print& out, const char* value) {
+        static const char hexDigits[] = "0123456789ABCDEF";
+        out.write('"');
+        if (value) {
+            for (const char* p = value; *p; ++p) {
+                const uint8_t ch = (uint8_t)(*p);
+                switch (ch) {
+                    case '\\': out.print("\\\\"); break;
+                    case '"':  out.print("\\\""); break;
+                    case '\b': out.print("\\b"); break;
+                    case '\f': out.print("\\f"); break;
+                    case '\n': out.print("\\n"); break;
+                    case '\r': out.print("\\r"); break;
+                    case '\t': out.print("\\t"); break;
+                    default:
+                        if (ch < 0x20) {
+                            out.print("\\u00");
+                            out.write(hexDigits[(ch >> 4) & 0x0F]);
+                            out.write(hexDigits[ch & 0x0F]);
+                        } else {
+                            out.write(ch);
+                        }
+                        break;
+                }
+            }
+        }
+        out.write('"');
+    }
+    void _writeProfileJs(Print& out) const {
+        out.print("window.PROFILE={outputIds:[");
+        bool first = true;
+        for (int i = 0; i < OUT_COUNT; ++i) {
+            if (!_profileOutputVisible(i)) continue;
+            if (!first) out.write(',');
+            _writeJsQuoted(out, _outputName(i));
+            first = false;
+        }
+        out.print("],sensorIds:[");
+        first = true;
+        for (int i = 0; i < SEN_COUNT; ++i) {
+            if (!_profileSensorVisible(i)) continue;
+            if (!first) out.write(',');
+            _writeJsQuoted(out, SensorManager::sensorName(i));
+            first = false;
+        }
+        out.print("]};");
+    }
 
     // ------------------------------------------------------------
     // Route registration
@@ -175,6 +222,15 @@ private:
 
         _server.on("/app.js", HTTP_GET, [this](AsyncWebServerRequest* req) {
             _sendGzip(req, "application/javascript; charset=utf-8", PAGE_APP_JS_GZ, PAGE_APP_JS_GZ_LEN, "no-cache, no-store, must-revalidate");
+        });
+
+        _server.on("/profile.js", HTTP_GET, [this](AsyncWebServerRequest* req) {
+            AsyncResponseStream* resp = req->beginResponseStream("application/javascript; charset=utf-8");
+            resp->addHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+            resp->addHeader("Pragma", "no-cache");
+            resp->addHeader("Expires", "0");
+            _writeProfileJs(*resp);
+            req->send(resp);
         });
 
         _server.on("/uplot.css", HTTP_GET, [this](AsyncWebServerRequest* req) {
@@ -2203,6 +2259,7 @@ private:
         JsonArray endpoints = root.createNestedArray("endpoints");
         endpoints.add("/app.css");
         endpoints.add("/app.js");
+        endpoints.add("/profile.js");
         endpoints.add("/uplot.css");
         endpoints.add("/uplot.js");
         endpoints.add("/api/v1/info");
@@ -2250,6 +2307,7 @@ private:
         endpoints.add("/app");
         endpoints.add("/app.css");
         endpoints.add("/app.js");
+        endpoints.add("/profile.js");
 
         JsonObject diag = root.createNestedObject("diag");
         _buildDiag(diag);
