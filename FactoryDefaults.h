@@ -210,7 +210,6 @@ inline void applyLightOutputOverride(OutputManager& om, EventLog* log = nullptr)
     // синхронизируем управляющий флаг CH4, чтобы applyConfig()
     // при повторном вызове не включил канал обратно
     om.ch4Enabled = false;
-    if (log) log->add("LIGHT: каналы CH2/CH3/CH4 принудительно выключены");
 #else
     (void)om; (void)log;
 #endif
