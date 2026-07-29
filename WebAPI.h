@@ -179,11 +179,11 @@ private:
                 req->redirect("/wifi");
                 return;
             }
-            _sendGzip(req, "text/html; charset=utf-8", PAGE_ROOT_V2_GZ, PAGE_ROOT_V2_GZ_LEN);
+            _sendPlain(req, "text/html; charset=utf-8", PAGE_ROOT_V2, PAGE_ROOT_V2_LEN);
         });
 
         _server.on("/wifi", HTTP_GET, [this](AsyncWebServerRequest* req) {
-            _sendGzip(req, "text/html; charset=utf-8", PAGE_WIFI_V2_GZ, PAGE_WIFI_V2_GZ_LEN);
+            _sendPlain(req, "text/html; charset=utf-8", PAGE_WIFI_V2, PAGE_WIFI_V2_LEN);
         });
 
         _server.on("/generate_204", HTTP_GET, [this](AsyncWebServerRequest* req) {
@@ -217,11 +217,11 @@ private:
         });
 
         _server.on("/app.css", HTTP_GET, [this](AsyncWebServerRequest* req) {
-            _sendGzip(req, "text/css; charset=utf-8", PAGE_APP_CSS_GZ, PAGE_APP_CSS_GZ_LEN, "no-cache, no-store, must-revalidate");
+            _sendPlain(req, "text/css; charset=utf-8", PAGE_APP_CSS, PAGE_APP_CSS_LEN, "no-cache, no-store, must-revalidate");
         });
 
         _server.on("/app.js", HTTP_GET, [this](AsyncWebServerRequest* req) {
-            _sendGzip(req, "application/javascript; charset=utf-8", PAGE_APP_JS_GZ, PAGE_APP_JS_GZ_LEN, "no-cache, no-store, must-revalidate");
+            _sendPlain(req, "application/javascript; charset=utf-8", PAGE_APP_JS, PAGE_APP_JS_LEN, "no-cache, no-store, must-revalidate");
         });
 
         _server.on("/profile.js", HTTP_GET, [this](AsyncWebServerRequest* req) {
@@ -2789,6 +2789,22 @@ private:
 
     bool _parseJsonNoCache(AsyncWebServerRequest* req, uint8_t* data, size_t len, DynamicJsonDocument& doc) {
         return _parseJsonWithPolicy(req, data, len, doc, true);
+    }
+
+    void _sendPlain(AsyncWebServerRequest* req, const char* contentType, const uint8_t* data, size_t len,
+                    const char* cacheControl = "no-cache, no-store, must-revalidate") {
+        AsyncWebServerResponse* resp = req->beginResponse_P(200, contentType, data, len);
+        resp->addHeader("Cache-Control", cacheControl);
+        if (strstr(cacheControl, "no-store") != nullptr) {
+            resp->addHeader("Pragma", "no-cache");
+            resp->addHeader("Expires", "0");
+        }
+        req->send(resp);
+    }
+
+    void _sendPlain(AsyncWebServerRequest* req, const char* contentType, const char* data, size_t len,
+                    const char* cacheControl = "no-cache, no-store, must-revalidate") {
+        _sendPlain(req, contentType, reinterpret_cast<const uint8_t*>(data), len, cacheControl);
     }
 
     void _sendGzip(AsyncWebServerRequest* req, const char* contentType, const uint8_t* data, size_t len,
