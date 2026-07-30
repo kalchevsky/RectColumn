@@ -25,6 +25,19 @@ arduino-cli upload -p COM3 --fqbn esp32:esp32:esp32 --build-path .build-esp32 .
 
 Веб-интерфейс после заливки: `http://192.168.10.244`
 
+## Генерация веб-ассетов
+
+| Header | Источник | Команда |
+|---|---|---|
+| `WebPageRoot.h` | `TEMP/root.html` | `python tools/gen_web_assets.py --raw-string --input TEMP/root.html --output WebPageRoot.h --symbol PAGE_ROOT_V2 --length-symbol PAGE_ROOT_V2_LEN` |
+| `WebPageWifi.h` | `TEMP/wifi.html` | `python tools/gen_web_assets.py --raw-string --input TEMP/wifi.html --output WebPageWifi.h --symbol PAGE_WIFI_V2 --length-symbol PAGE_WIFI_V2_LEN` |
+| `WebPageAppCss.h` | `OUT/app.css` | `python tools/gen_web_assets.py --raw-string --input OUT/app.css --output WebPageAppCss.h --symbol PAGE_APP_CSS --length-symbol PAGE_APP_CSS_LEN` |
+| `WebPageAppJs.h` | `OUT/page-app.js` | `python tools/gen_web_assets.py --raw-string --input OUT/page-app.js --output WebPageAppJs.h --symbol PAGE_APP_JS --length-symbol PAGE_APP_JS_LEN` |
+| `WebUplotCss.h` | `OUT/uplot.min.css` | `python tools/gen_web_assets.py --input OUT/uplot.min.css --output WebUplotCss.h --symbol UPLOT_CSS_GZ --length-symbol UPLOT_CSS_GZ_LEN` |
+| `WebUplotJs.h` | `OUT/uplot.min.js` | `python tools/gen_web_assets.py --input OUT/uplot.min.js --output WebUplotJs.h --symbol UPLOT_JS_GZ --length-symbol UPLOT_JS_GZ_LEN` |
+
+Флаг `--raw-string` пишет читаемый `const char[] PROGMEM` через C++ raw-string literal и подбирает уникальный разделитель так, чтобы закрывающая последовательность не встретилась внутри ассета. Флаг `--raw` пишет исходные байты без gzip в `uint8_t[]`. Без флагов генератор сохраняет текущее gzip-поведение.
+
 ## Стиль кода
 - camelCase для функций/переменных, `_private` для приватных членов
 - SNAKE_CASE для констант `#define`
