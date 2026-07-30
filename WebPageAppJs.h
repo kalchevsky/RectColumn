@@ -605,24 +605,14 @@ function updateUnifiedAlertOverlay(){
 
 function loadSchema(cb){
   if (state.schema) { cb(state.schema); return; }
-  function attempt(n){
-    api('/api/v1/schema', null, function(res){
-      if (res && (res.ok || res.sensorIds)) {
-        state.schema = res;
-        cb(state.schema);
-        return;
-      }
-      if (n < 1) {
-        setTimeout(function(){ attempt(n + 1); }, 400);
-        return;
-      }
-      var po = (window.PROFILE && window.PROFILE.outputIds) || [];
-      var ps = (window.PROFILE && window.PROFILE.sensorIds) || [];
-      state.schema = { sensorIds: ps, outputIds: po };
-      cb(state.schema);
-    });
-  }
-  attempt(0);
+  api('/api/v1/schema', null, function(res){
+    if (res && (res.ok || res.sensorIds)) {
+      state.schema = res;
+    } else {
+      state.schema = { sensorIds: defaultSensorOrder, outputIds:['CH1','CH2','CH3','CH4','CH5'] };
+    }
+    cb(state.schema);
+  });
 }
 
 function copyOwn(dst, src){
@@ -1061,31 +1051,6 @@ function findOutput(id){
   return null;
 }
 
-// Шлюз видимости по профилю. Источник истины — schema с бэкенда.
-// FULL/старый сервер: schema содержит все id → показываем всё.
-// LIGHT: schema сужена (3A) → скрываем отсутствующие id.
-// fail-open: если schema/массив отсутствует — НЕ скрываем ничего.
-function sensorVisible(id){
-  var s = state.schema;
-  if (!s || !s.sensorIds || !s.sensorIds.length) return true;
-  return s.sensorIds.indexOf(id) !== -1;
-}
-function outputVisible(id){
-  var s = state.schema;
-  if (!s || !s.outputIds || !s.outputIds.length) return true;
-  return s.outputIds.indexOf(id) !== -1;
-}
-function routeAllowed(route, param){
-  if (route === 'sensor' && param) return sensorVisible(param);
-  if (route === 'sensorAlarm' && param) return sensorVisible(param);
-  if (route === 'sensorCtrl' && param) return sensorVisible(param);
-  if (route === 'ctrlRule' && param) return sensorVisible(param);
-  if (route === 'alarmPref' && param) return sensorVisible(param);
-  if (route === 'cal-basic') return sensorVisible('C');
-  if (route === 'cal-expert') return sensorVisible('C');
-  return true;
-}
-
 function outputStateLabel(o){
   if (!o) return '—';
   return o.actual ? 'ВКЛ' : 'ВЫКЛ';
@@ -1117,9 +1082,7 @@ function sensorCtrlRules(s){
   for (var i = 0; i < arr.length; i++) {
     var rule = arr[i];
     if (!rule || !rule.enabled) continue;
-    var outIdx = Number(rule.outIdx);
-    if (!isFinite(outIdx)) continue;
-    if (!outputVisible('CH' + (outIdx + 1))) continue;
+    if (Number(rule.outIdx) > 2) continue;
     out.push(rule);
   }
   return out;
@@ -1588,8 +1551,8 @@ function renderMenu(){
   html += renderMessages('');
   html += '<button class="btn" onclick="location.href=\'/wifi\'">Конфигурация WiFi</button>';
   html += '<button class="btn" onclick="go(\'#/sound\')">Конфигурация звука</button>';
-  html += '<button class="btn" onclick="go(\'#/outputConfig\')">' + (outputVisible('CH2') ? 'Конфигурация выходов CH1–CH3' : 'Конфигурация выхода CH1') + '</button>';
-  if (sensorVisible('C')) html += '<button class="btn" onclick="go(\'#/cal-basic\');render();">Датчик тока</button>';
+  html += '<button class="btn" onclick="go(\'#/outputConfig\')">Конфигурация выходов CH1–CH3</button>';
+  html += '<button class="btn" onclick="go(\'#/cal-basic\');render();">Датчик тока</button>';
   html += '<button class="btn" onclick="go(\'#/notifications\')">Уведомления</button>';
   html += '<button class="btn" onclick="go(\'#/log\')">Лог</button>';
   html += '<button class="btn light" onclick="go(\'#/home\')">Назад</button>';
@@ -1725,9 +1688,9 @@ function renderSound(){
   var s = state.lastState || {};
   var html = '<div class="app"><div class="panel"><h2>Конфигурация звука</h2>';
   html += renderMessages('');
-  if (outputVisible('CH4')) html += '<div class="small">CH4 - внешний звонок. CH5 - встроенный зуммер.</div>';
-  if (outputVisible('CH4')) html += '<label style="display:flex;gap:8px;align-items:center;margin-top:12px"><input id="snd_ch4_en" type="checkbox"' + (s.ch4Enabled ? ' checked' : '') + '><span>CH4: звонок включён</span></label>';
-  if (outputVisible('CH5')) html += '<label style="display:flex;gap:8px;align-items:center;margin-top:12px"><input id="snd_ch5_en" type="checkbox"' + (s.ch5Enabled ? ' checked' : '') + '><span>CH5: зуммер включён</span></label>';
+  html += '<div class="small">CH4 - внешний звонок. CH5 - встроенный зуммер.</div>';
+  html += '<label style="display:flex;gap:8px;align-items:center;margin-top:12px"><input id="snd_ch4_en" type="checkbox"' + (s.ch4Enabled ? ' checked' : '') + '><span>CH4: звонок включён</span></label>';
+  html += '<label style="display:flex;gap:8px;align-items:center;margin-top:12px"><input id="snd_ch5_en" type="checkbox"' + (s.ch5Enabled ? ' checked' : '') + '><span>CH5: зуммер включён</span></label>';
   html += '<button class="btn light" onclick="testSound()">Проверить звук</button>';
   html += '<div class="small">Квитирование выполняется кнопкой на главной странице и отключает только текущий звук тревоги. Настройки звука ниже определяют, какие звуковые каналы доступны системе.</div>';
   html += '<button class="btn" onclick="saveSoundConfig()">Сохранить настройки звука</button>';
@@ -1738,9 +1701,10 @@ function renderSound(){
 
 function saveSoundConfig(){
   clearNotice();
-  var payload = {};
-  if (outputVisible('CH4')) payload.ch4Enabled = !!(byId('snd_ch4_en') && byId('snd_ch4_en').checked);
-  if (outputVisible('CH5')) payload.ch5Enabled = !!(byId('snd_ch5_en') && byId('snd_ch5_en').checked);
+  var payload = {
+    ch4Enabled: !!(byId('snd_ch4_en') && byId('snd_ch4_en').checked),
+    ch5Enabled: !!(byId('snd_ch5_en') && byId('snd_ch5_en').checked)
+  };
   api('/api/v1/output/config', {
     method:'POST',
     headers:{'Content-Type':'application/json'},
@@ -1798,10 +1762,10 @@ function renderOutputConfigView(cfg){
     if (effective) return effective;
     return 'heat';
   }
-  var html = '<div class="app"><div class="panel"><h2>' + (outputVisible('CH2') ? 'Конфигурация выходов CH1–CH3' : 'Конфигурация выхода CH1') + '</h2>';
+  var html = '<div class="app"><div class="panel"><h2>Конфигурация выходов CH1–CH3</h2>';
   html += renderMessages('');
   html += '<div class="small">CH4 и CH5 вынесены в раздел «Конфигурация звука».</div>';
-  ['CH1','CH2','CH3'].filter(outputVisible).forEach(function(id){
+  ['CH1','CH2','CH3'].forEach(function(id){
     html += '<div class="field rule-card">';
     html += '<div class="rule-title">' + esc(id) + '</div>';
     html += '<label>Логика</label>';
@@ -1814,7 +1778,7 @@ function renderOutputConfigView(cfg){
   html += '<button class="btn light" onclick="go(\'#/menu\')">Назад</button>';
   html += '</div></div>';
   app.innerHTML = html;
-  ['CH1','CH2','CH3'].filter(outputVisible).forEach(function(id){
+  ['CH1','CH2','CH3'].forEach(function(id){
     var el = byId('out_mode_' + id);
     if (el) el.value = modeOf(id);
   });
@@ -1841,11 +1805,12 @@ function renderOutputConfig(){
 
 function saveOutputConfig(){
   clearNotice();
-  var outs = ['CH1','CH2','CH3'].filter(outputVisible).map(function(id){
-    return { id:id, mode:outputConfigModeValue((byId('out_mode_' + id) && byId('out_mode_' + id).value) || 'heat') };
-  });
   var payload = {
-    outputs: outs
+    outputs: [
+      { id:'CH1', mode:outputConfigModeValue((byId('out_mode_CH1') && byId('out_mode_CH1').value) || 'heat') },
+      { id:'CH2', mode:outputConfigModeValue((byId('out_mode_CH2') && byId('out_mode_CH2').value) || 'heat') },
+      { id:'CH3', mode:outputConfigModeValue((byId('out_mode_CH3') && byId('out_mode_CH3').value) || 'heat') }
+    ]
   };
   api('/api/v1/output/config', {
     method:'POST',
@@ -2160,7 +2125,7 @@ function setManual(id, on){
 
 function renderManual(){
   ensureManualRelayPendingStyles();
-  var ids = ['CH1','CH2','CH3'].filter(outputVisible);
+  var ids = ['CH1','CH2','CH3'];
   var html = '<div class="app"><div class="panel"><h2>Ручное управление реле</h2>';
   html += renderMessages('');
   for (var i = 0; i < ids.length; i++) {
@@ -3873,7 +3838,6 @@ function renderHome(){
   html.push('<section class="sensor-list compact home-grid">');
   for (var i = 0; i < tplHomeOrder.length; i++) {
     var id = tplHomeOrder[i];
-    if (!sensorVisible(id)) continue;
     var sensor = findSensor(id) || { id:id, enabled:false, value:null };
     var ctrlDisabled = (id === 'C' || id === 'V');
     var sensorErrorText = tplHomeSensorErrorText(sensor);
@@ -3985,7 +3949,6 @@ function renderSensorCtrl(id){
   html.push('<div class="cell head">MAX</div>');
   html.push('</section>');
   for (var outIdx = 0; outIdx < 3; outIdx++) {
-    if (!outputVisible('CH' + (outIdx + 1))) continue;
     var rule = getCtrlRuleUi(s, outIdx);
     html.push('<section class="ctrl-row">');
     if (isCtrlDisabledSensor(id) || isToggleOnlySensor(id)) html.push('<div class="cell empty">—</div>');
@@ -4104,9 +4067,6 @@ function renderCurrentRoute(){
   var view = r[0];
   var arg = r[1] ? decodeURIComponent(r[1]) : '';
   var arg2 = r[2] ? decodeURIComponent(r[2]) : '';
-  if (!routeAllowed(view, arg)) {
-    if (location.hash !== '#/home') { go('#/home'); return; }
-  }
   prepareCurrentRoute(view);
   if (view === 'home') return renderHome();
   if (view === 'menu') return renderMenu();
