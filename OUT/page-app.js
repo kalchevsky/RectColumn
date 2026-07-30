@@ -3522,12 +3522,19 @@ function buzzerStatusPill(){
 function headerManualItem(label, active){
   return '<span class="home-header-item">' + esc(label) + (active ? '<span class="home-header-dot"></span>' : '') + '</span>';
 }
+function headerSoundItem(bellOn, buzzerOn){
+  var dots = '';
+  dots += '<span class="home-header-sound-dot bell' + (bellOn ? ' on' : '') + '"></span>';
+  dots += '<span class="home-header-sound-dot buzzer' + (buzzerOn ? ' on' : '') + '"></span>';
+  return '<span class="home-header-item home-header-item-sound">' + esc('Звук') + '<span class="home-header-sound-dots">' + dots + '</span></span>';
+}
 function headerManualButtonHtml(inline){
   var s = state.lastState || {};
   var ch1 = outputConfirmedOn(findOutput('CH1') || {});
   var ch2 = outputConfirmedOn(findOutput('CH2') || {});
   var ch3 = outputConfirmedOn(findOutput('CH3') || {});
-  var snd = !!(s.ch4Enabled || ((findOutput('CH4') || {}).actual));
+  var bellOn = !!(s.ch4Enabled || ((findOutput('CH4') || {}).actual));
+  var buzzerOn = !!(s.ch5Enabled || ((findOutput('CH5') || {}).actual));
   var wrapCls = 'home-header-manual-wrap' + (inline ? ' inline' : '');
   var btnCls = 'btn home-header-manual-btn' + (inline ? ' inline' : '');
   var gridCls = 'home-header-manual-grid' + (inline ? ' inline' : '');
@@ -3536,9 +3543,9 @@ function headerManualButtonHtml(inline){
   html += '<a class="' + btnCls + '" href="#/manual" onclick="go(\'#/manual\'); return false;">';
   html += '<div class="' + gridCls + '">';
   html += headerManualItem('CH1', ch1);
-  html += headerManualItem('CH2', ch2);
-  html += headerManualItem('CH3', ch3);
-  html += headerManualItem('Звук', snd);
+  if (outputVisible('CH2')) html += headerManualItem('CH2', ch2);
+  if (outputVisible('CH3')) html += headerManualItem('CH3', ch3);
+  html += headerSoundItem(bellOn, buzzerOn);
   html += '</div></a></div>';
   return html;
 }
@@ -3972,9 +3979,12 @@ function renderSensorAlarm(id){
   if (!s) { go('#/home'); return; }
   stopPoll();
   if (id === 'C') {
-    loadCurrentCalStatus(function(){
-      if ((routeParts()[0] || '') === 'sensorAlarm' && decodeURIComponent(routeParts()[1] || '') === 'C') render();
-    });
+    var cal = ensureCurrentCalState();
+    if (!cal.loaded && !cal.loading && !document.hidden) {
+      loadCurrentCalStatus(function(){
+        if ((routeParts()[0] || '') === 'sensorAlarm' && decodeURIComponent(routeParts()[1] || '') === 'C') render();
+      });
+    }
   }
   var ui = getAlarmUi(id);
   var html = [];

@@ -4020,9 +4020,12 @@ function renderSensorAlarm(id){
   if (!s) { go('#/home'); return; }
   stopPoll();
   if (id === 'C') {
-    loadCurrentCalStatus(function(){
-      if ((routeParts()[0] || '') === 'sensorAlarm' && decodeURIComponent(routeParts()[1] || '') === 'C') render();
-    });
+    var cal = ensureCurrentCalState();
+    if (!cal.loaded && !cal.loading && !document.hidden) {
+      loadCurrentCalStatus(function(){
+        if ((routeParts()[0] || '') === 'sensorAlarm' && decodeURIComponent(routeParts()[1] || '') === 'C') render();
+      });
+    }
   }
   var ui = getAlarmUi(id);
   var html = [];
