@@ -106,6 +106,26 @@ private:
     // Предупреждаем о слабом разлёте точек, но не блокируем калибровку.
     static constexpr float CURCAL_MIN_RAW_DELTA = 50.0f;
 
+    // LIGHT-профиль: в UI оставляем только T1/T2/dT, CH1/CH5 и WER_CH1.
+    // FULL-профиль и старые клиенты получают полный набор id.
+    static inline bool _profileSensorVisible(uint8_t i) {
+#if ACTIVE_PROFILE == PROFILE_ECONOMY_LIGHT
+        return (i == SEN_T1 || i == SEN_T2 || i == SEN_DT);
+#else
+        (void)i;
+        return true;
+#endif
+    }
+
+    static inline bool _profileOutputVisible(uint8_t i) {
+#if ACTIVE_PROFILE == PROFILE_ECONOMY_LIGHT
+        return (i == OUT_CH1 || i == OUT_CH5);
+#else
+        (void)i;
+        return true;
+#endif
+    }
+
     // ------------------------------------------------------------
     // Route registration
     // ------------------------------------------------------------
@@ -216,16 +236,20 @@ private:
             doc["uiVersion"] = 1;
 
             JsonArray sensors = doc.createNestedArray("sensorIds");
-            for (int i = 0; i < SEN_COUNT; i++) sensors.add(SensorManager::sensorName(i));
+            for (int i = 0; i < SEN_COUNT; i++) {
+                if (_profileSensorVisible(i)) sensors.add(SensorManager::sensorName(i));
+            }
 
             JsonArray outputs = doc.createNestedArray("outputIds");
-            for (int i = 0; i < OUT_COUNT; i++) outputs.add(_outputName(i));
+            for (int i = 0; i < OUT_COUNT; i++) {
+                if (_profileOutputVisible(i)) outputs.add(_outputName(i));
+            }
 
             JsonArray confirmations = doc.createNestedArray("confirmationIds");
-            confirmations.add("WER_CH1");
-            confirmations.add("WER_CH2");
-            confirmations.add("WER_CH3");
-            confirmations.add("WER_CH4");
+            if (_profileOutputVisible(OUT_CH1)) confirmations.add("WER_CH1");
+            if (_profileOutputVisible(OUT_CH2)) confirmations.add("WER_CH2");
+            if (_profileOutputVisible(OUT_CH3)) confirmations.add("WER_CH3");
+            if (_profileOutputVisible(OUT_CH4)) confirmations.add("WER_CH4");
 
             JsonObject timeSync = doc.createNestedObject("timeSync");
             timeSync["supportsMillisAtSend"] = true;
