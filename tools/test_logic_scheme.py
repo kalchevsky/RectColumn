@@ -734,6 +734,13 @@ def validate_ctrl_update(current: CtrlRule, patch: Dict[str, object]) -> CtrlRul
 
 
 def decode_gzip_header_array(header_text: str) -> str:
+    raw_match = re.search(
+        r'static const char .*?\[] PROGMEM = R"([A-Za-z0-9_]+)\((.*)\)\1";\s*static const size_t',
+        header_text,
+        re.S,
+    )
+    if raw_match:
+        return raw_match.group(2)
     match = re.search(r"static const uint8_t .*?\[] PROGMEM = \{(.*)\};\s*static const size_t",
                       header_text, re.S)
     if not match:
@@ -1559,6 +1566,14 @@ class SourceGuardTests(unittest.TestCase):
         self.assertIn("if (sensor.id === 'F') return flowAlarmVisible(sensor) ? 'Нет протока!' : 'OK';", tpl_value_src)
         self.assertNotIn("sensorToggleAlarmTriggered(", tpl_value_src)
         self.assertNotIn("flowControlEnabled", tpl_value_src)
+
+    def test_home_control_stack_for_flow_sensor_uses_visible_alarm_state(self):
+        discrete_src = self.app_js[
+            self.app_js.find("function sensorDiscreteOk(sensor){"):
+            self.app_js.find("function homeCtrlStack(sensor){")
+        ]
+        self.assertIn("if (sensor.id === 'F') return !flowAlarmVisible(sensor);", discrete_src)
+        self.assertNotIn("if (sensor.id === 'F') return !flowRawAlarmCondition(sensor);", discrete_src)
 
     def test_webpage_app_js_header_matches_out_source_by_hash(self):
         out_app_js = (self.root / "OUT" / "page-app.js").read_text(encoding="utf-8", errors="ignore")

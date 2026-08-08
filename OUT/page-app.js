@@ -3485,7 +3485,7 @@ function sensorDiscreteOk(sensor){
   if (!sensor || !sensor.enabled || sensor.error || sensor.value == null || sensor.present === false) return false;
   var contactClosed = Number(sensor.value) > 0.5;
   if (sensor.id === 'L') return contactClosed;
-  if (sensor.id === 'F') return !flowRawAlarmCondition(sensor);
+  if (sensor.id === 'F') return !flowAlarmVisible(sensor);
   return true;
 }
 function homeCtrlStack(sensor){
