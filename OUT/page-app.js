@@ -1,6 +1,5 @@
 
 var app = document.getElementById('app');
-var defaultSensorOrder = ['T1','T2','T3','dT','P','L','F','C','V'];
 var sensorLabels = {
   T1:'T1', T2:'T2', T3:'T3', dT:'dT',
   P:'Давление', L:'Уровень', F:'Проток',
@@ -17,6 +16,9 @@ var MANUAL_PENDING_HARD_TIMEOUT_MS = 8000;
 var CONNECTION_STALE_MS = 5000;
 var HEADER_CLOCK_STALE_MS = 3000;
 var TIME_SYNC_RETRY_MS = 30000;
+var SCHEMA_RETRY_MS = 1000;
+var SCHEMA_RETRY_MAX = 3;
+var SCHEMA_UNAVAILABLE_TEXT = 'Конфигурация не загружена. Обновите страницу.';
 var NOTICE_AUTOHIDE_MS = 5000;
 var NTFY_HTTP_PREFIX = 'http://ntfy.sh/';
 var STATE_FETCH_ERROR_TEXT = 'Не удалось получить состояние устройства.';
@@ -599,16 +601,58 @@ function updateUnifiedAlertOverlay(){
   document.body.appendChild(shell);
 }
 
-function loadSchema(cb){
+function emptySchema(){
+  return { sensorIds: [], outputIds: [], confirmationIds: [] };
+}
+function schemaUnavailable(){
+  var s = state.schema;
+  return !!(s && Array.isArray(s.sensorIds) && Array.isArray(s.outputIds) && !s.sensorIds.length && !s.outputIds.length);
+}
+function loadSchema(cb, attempt){
   if (state.schema) { cb(state.schema); return; }
+  attempt = Number(attempt || 0);
   api('/api/v1/schema', null, function(res){
     if (res && (res.ok || res.sensorIds)) {
       state.schema = res;
-    } else {
-      state.schema = { sensorIds: defaultSensorOrder, outputIds:['CH1','CH2','CH3','CH4','CH5'] };
+      cb(state.schema);
+      if (attempt > 0 && state.currentView) renderCurrentRoute();
+      return;
     }
+    if ((attempt + 1) < SCHEMA_RETRY_MAX) {
+      setTimeout(function(){ loadSchema(cb, attempt + 1); }, SCHEMA_RETRY_MS);
+      return;
+    }
+    state.schema = emptySchema();
+    setNotice(SCHEMA_UNAVAILABLE_TEXT);
     cb(state.schema);
+    renderCurrentRoute();
   });
+}
+
+// Шлюз видимости по профилю. Источник истины — schema с бэкенда.
+// FULL/старый сервер: schema содержит все id → показываем всё.
+// LIGHT: schema сужена → скрываем отсутствующие id.
+// Если schema-массивы отсутствуют — не скрываем ничего.
+// Если schema-массивы пусты — это безопасный fallback, ничего не показываем.
+function sensorVisible(id){
+  var s = state.schema;
+  if (!s || !Array.isArray(s.sensorIds)) return true;
+  return s.sensorIds.indexOf(id) !== -1;
+}
+function outputVisible(id){
+  var s = state.schema;
+  if (!s || !Array.isArray(s.outputIds)) return true;
+  return s.outputIds.indexOf(id) !== -1;
+}
+function routeAllowed(route, param){
+  if (route === 'sensor' && param) return sensorVisible(param);
+  if (route === 'sensorAlarm' && param) return sensorVisible(param);
+  if (route === 'sensorCtrl' && param) return sensorVisible(param);
+  if (route === 'ctrlRule' && param) return sensorVisible(param);
+  if (route === 'alarmPref' && param) return sensorVisible(param);
+  if (route === 'cal-basic') return sensorVisible('C');
+  if (route === 'cal-expert') return sensorVisible('C');
+  return true;
 }
 
 function copyOwn(dst, src){
@@ -1545,10 +1589,11 @@ function renderMenu(){
   stopPoll();
   var html = '<div class="app"><div class="panel"><h2>Меню</h2>';
   html += renderMessages('');
+  if (schemaUnavailable()) html += '<div class="error-box">' + esc(SCHEMA_UNAVAILABLE_TEXT) + '</div>';
   html += '<button class="btn" onclick="location.href=\'/wifi\'">Конфигурация WiFi</button>';
   html += '<button class="btn" onclick="go(\'#/sound\')">Конфигурация звука</button>';
   html += '<button class="btn" onclick="go(\'#/outputConfig\')">Конфигурация выходов CH1–CH3</button>';
-  html += '<button class="btn" onclick="go(\'#/cal-basic\');render();">Датчик тока</button>';
+  if (sensorVisible('C')) html += '<button class="btn" onclick="go(\'#/cal-basic\');render();">Датчик тока</button>';
   html += '<button class="btn" onclick="go(\'#/notifications\')">Уведомления</button>';
   html += '<button class="btn" onclick="go(\'#/log\')">Лог</button>';
   html += '<button class="btn light" onclick="go(\'#/home\')">Назад</button>';
@@ -1682,11 +1727,13 @@ function renderCalExpert(){
 function renderSound(){
   stopPoll();
   var s = state.lastState || {};
+  var soundVisible = outputVisible('CH4') || outputVisible('CH5');
   var html = '<div class="app"><div class="panel"><h2>Конфигурация звука</h2>';
   html += renderMessages('');
   html += '<div class="small">CH4 - внешний звонок. CH5 - встроенный зуммер.</div>';
-  html += '<label style="display:flex;gap:8px;align-items:center;margin-top:12px"><input id="snd_ch4_en" type="checkbox"' + (s.ch4Enabled ? ' checked' : '') + '><span>CH4: звонок включён</span></label>';
-  html += '<label style="display:flex;gap:8px;align-items:center;margin-top:12px"><input id="snd_ch5_en" type="checkbox"' + (s.ch5Enabled ? ' checked' : '') + '><span>CH5: зуммер включён</span></label>';
+  if (!soundVisible) html += '<div class="error-box">' + esc(SCHEMA_UNAVAILABLE_TEXT) + '</div>';
+  if (outputVisible('CH4')) html += '<label style="display:flex;gap:8px;align-items:center;margin-top:12px"><input id="snd_ch4_en" type="checkbox"' + (s.ch4Enabled ? ' checked' : '') + '><span>CH4: звонок включён</span></label>';
+  if (outputVisible('CH5')) html += '<label style="display:flex;gap:8px;align-items:center;margin-top:12px"><input id="snd_ch5_en" type="checkbox"' + (s.ch5Enabled ? ' checked' : '') + '><span>CH5: зуммер включён</span></label>';
   html += '<button class="btn light" onclick="testSound()">Проверить звук</button>';
   html += '<div class="small">Квитирование выполняется кнопкой на главной странице и отключает только текущий звук тревоги. Настройки звука ниже определяют, какие звуковые каналы доступны системе.</div>';
   html += '<button class="btn" onclick="saveSoundConfig()">Сохранить настройки звука</button>';
@@ -1697,10 +1744,9 @@ function renderSound(){
 
 function saveSoundConfig(){
   clearNotice();
-  var payload = {
-    ch4Enabled: !!(byId('snd_ch4_en') && byId('snd_ch4_en').checked),
-    ch5Enabled: !!(byId('snd_ch5_en') && byId('snd_ch5_en').checked)
-  };
+  var payload = {};
+  if (outputVisible('CH4')) payload.ch4Enabled = !!(byId('snd_ch4_en') && byId('snd_ch4_en').checked);
+  if (outputVisible('CH5')) payload.ch5Enabled = !!(byId('snd_ch5_en') && byId('snd_ch5_en').checked);
   api('/api/v1/output/config', {
     method:'POST',
     headers:{'Content-Type':'application/json'},
@@ -1750,6 +1796,7 @@ function renderOutputConfigView(cfg){
   stopPoll();
   cfg = cfg || {};
   var outputs = cfg.outputs || [];
+  var visibleOutputIds = ['CH1','CH2','CH3'].filter(outputVisible);
   function modeOf(id){
     for (var i = 0; i < outputs.length; i++) {
       if (outputs[i].id === id) return outputConfigModeValue(outputs[i].mode);
@@ -1761,7 +1808,8 @@ function renderOutputConfigView(cfg){
   var html = '<div class="app"><div class="panel"><h2>Конфигурация выходов CH1–CH3</h2>';
   html += renderMessages('');
   html += '<div class="small">CH4 и CH5 вынесены в раздел «Конфигурация звука».</div>';
-  ['CH1','CH2','CH3'].forEach(function(id){
+  if (!visibleOutputIds.length) html += '<div class="error-box">' + esc(SCHEMA_UNAVAILABLE_TEXT) + '</div>';
+  visibleOutputIds.forEach(function(id){
     html += '<div class="field rule-card">';
     html += '<div class="rule-title">' + esc(id) + '</div>';
     html += '<label>Логика</label>';
@@ -1774,7 +1822,7 @@ function renderOutputConfigView(cfg){
   html += '<button class="btn light" onclick="go(\'#/menu\')">Назад</button>';
   html += '</div></div>';
   app.innerHTML = html;
-  ['CH1','CH2','CH3'].forEach(function(id){
+  visibleOutputIds.forEach(function(id){
     var el = byId('out_mode_' + id);
     if (el) el.value = modeOf(id);
   });
@@ -1802,11 +1850,9 @@ function renderOutputConfig(){
 function saveOutputConfig(){
   clearNotice();
   var payload = {
-    outputs: [
-      { id:'CH1', mode:outputConfigModeValue((byId('out_mode_CH1') && byId('out_mode_CH1').value) || 'heat') },
-      { id:'CH2', mode:outputConfigModeValue((byId('out_mode_CH2') && byId('out_mode_CH2').value) || 'heat') },
-      { id:'CH3', mode:outputConfigModeValue((byId('out_mode_CH3') && byId('out_mode_CH3').value) || 'heat') }
-    ]
+    outputs: ['CH1','CH2','CH3'].filter(outputVisible).map(function(id){
+      return { id:id, mode:outputConfigModeValue((byId('out_mode_' + id) && byId('out_mode_' + id).value) || 'heat') };
+    })
   };
   api('/api/v1/output/config', {
     method:'POST',
@@ -2121,9 +2167,10 @@ function setManual(id, on){
 
 function renderManual(){
   ensureManualRelayPendingStyles();
-  var ids = ['CH1','CH2','CH3'];
+  var ids = ['CH1','CH2','CH3'].filter(outputVisible);
   var html = '<div class="app"><div class="panel"><h2>Ручное управление реле</h2>';
   html += renderMessages('');
+  if (!ids.length) html += '<div class="error-box">' + esc(SCHEMA_UNAVAILABLE_TEXT) + '</div>';
   for (var i = 0; i < ids.length; i++) {
     var id = ids[i];
     var o = findOutput(id) || { id:id };
@@ -2175,7 +2222,11 @@ function prepareCurrentRoute(view){
 function renderCurrentRoute(){
   var r = routeParts();
   var view = r[0];
-  var arg = r[1];
+  var arg = r[1] ? decodeURIComponent(r[1]) : '';
+  var arg2 = r[2] ? decodeURIComponent(r[2]) : '';
+  if (!routeAllowed(view, arg)) {
+    if (location.hash !== '#/home') { go('#/home'); return; }
+  }
   prepareCurrentRoute(view);
   if (view === 'home') return renderHome();
   if (view === 'menu') return renderMenu();
@@ -2192,6 +2243,9 @@ function renderCurrentRoute(){
   if (view === 'sensor' && arg) return renderSensor(arg);
   if (view === 'sensorAlarm' && arg) return renderSensorAlarm(arg);
   if (view === 'sensorCtrl' && arg) return renderSensorCtrl(arg);
+  if (view === 'ctrlRule' && arg) return renderCtrlRule(arg, Number(arg2 || 0));
+  if (view === 'alarmPref' && arg) return renderAlarmPref(arg, arg2 || 'al1');
+  if (view === 'num') return renderNumberInput();
   go('#/home');
 }
 
@@ -3441,6 +3495,8 @@ function homeCtrlStack(sensor){
     return '<div class="stack-placeholder">CH</div>';
   }
   for (var outIdx = 0; outIdx < 3; outIdx++) {
+    var outId = 'CH' + (outIdx + 1);
+    if (!outputVisible(outId)) continue;
     var rule = getCtrlRuleUi(sensor, outIdx);
     if (!rule.enabled) {
       html.push('<div class="stack-line empty">&nbsp;</div>');
@@ -3524,17 +3580,18 @@ function headerManualItem(label, active){
 }
 function headerSoundItem(bellOn, buzzerOn){
   var dots = '';
-  dots += '<span class="home-header-sound-dot bell' + (bellOn ? ' on' : '') + '"></span>';
-  dots += '<span class="home-header-sound-dot buzzer' + (buzzerOn ? ' on' : '') + '"></span>';
+  if (outputVisible('CH4')) dots += '<span class="home-header-sound-dot bell' + (bellOn ? ' on' : '') + '"></span>';
+  if (outputVisible('CH5')) dots += '<span class="home-header-sound-dot buzzer' + (buzzerOn ? ' on' : '') + '"></span>';
   return '<span class="home-header-item home-header-item-sound">' + esc('Звук') + '<span class="home-header-sound-dots">' + dots + '</span></span>';
 }
 function headerManualButtonHtml(inline){
+  if (schemaUnavailable()) return '';
   var s = state.lastState || {};
   var ch1 = outputConfirmedOn(findOutput('CH1') || {});
   var ch2 = outputConfirmedOn(findOutput('CH2') || {});
   var ch3 = outputConfirmedOn(findOutput('CH3') || {});
-  var bellOn = !!(s.ch4Enabled || ((findOutput('CH4') || {}).actual));
-  var buzzerOn = !!(s.ch5Enabled || ((findOutput('CH5') || {}).actual));
+  var bellOn = outputVisible('CH4') ? !!(s.ch4Enabled || ((findOutput('CH4') || {}).actual)) : false;
+  var buzzerOn = outputVisible('CH5') ? !!(s.ch5Enabled || ((findOutput('CH5') || {}).actual)) : false;
   var wrapCls = 'home-header-manual-wrap' + (inline ? ' inline' : '');
   var btnCls = 'btn home-header-manual-btn' + (inline ? ' inline' : '');
   var gridCls = 'home-header-manual-grid' + (inline ? ' inline' : '');
@@ -3542,10 +3599,10 @@ function headerManualButtonHtml(inline){
   html += '<div class="' + wrapCls + '">';
   html += '<a class="' + btnCls + '" href="#/manual" onclick="go(\'#/manual\'); return false;">';
   html += '<div class="' + gridCls + '">';
-  html += headerManualItem('CH1', ch1);
+  if (outputVisible('CH1')) html += headerManualItem('CH1', ch1);
   if (outputVisible('CH2')) html += headerManualItem('CH2', ch2);
   if (outputVisible('CH3')) html += headerManualItem('CH3', ch3);
-  html += headerSoundItem(bellOn, buzzerOn);
+  if (outputVisible('CH4') || outputVisible('CH5')) html += headerSoundItem(bellOn, buzzerOn);
   html += '</div></a></div>';
   return html;
 }
@@ -3823,6 +3880,7 @@ function renderHome(){
   var ackActive = isAudibleAlarmActive();
   var stopActive = !!(state.lastState && state.lastState.stopLatched);
   var homeTopBlockKey = stopActive ? 'stop' : '';
+  var visibleSensorCount = 0;
   if (state.homeTopBlockKey !== homeTopBlockKey) {
     state.homeTopBlockKey = homeTopBlockKey;
     state.homeScrollY = 0;
@@ -3834,6 +3892,8 @@ function renderHome(){
   html.push('<section class="sensor-list compact home-grid">');
   for (var i = 0; i < tplHomeOrder.length; i++) {
     var id = tplHomeOrder[i];
+    if (!sensorVisible(id)) continue;
+    visibleSensorCount++;
     var sensor = findSensor(id) || { id:id, enabled:false, value:null };
     var ctrlDisabled = (id === 'C' || id === 'V');
     var sensorErrorText = tplHomeSensorErrorText(sensor);
@@ -3846,6 +3906,7 @@ function renderHome(){
     html.push('<a class="btn home-stack home-grid-btn' + (ctrlDisabled ? ' disabled' : '') + '" href="' + (ctrlDisabled ? '#' : '#/sensorCtrl/' + encodeURIComponent(id)) + '">' + homeCtrlStack(sensor) + '</a>');
     html.push('<a class="btn home-stack home-grid-btn" href="#/sensorAlarm/' + encodeURIComponent(id) + '">' + homeAlarmStack(sensor) + '</a>');
   }
+  if (!visibleSensorCount) html.push('<div class="error-box" style="grid-column:1/-1;">' + esc(SCHEMA_UNAVAILABLE_TEXT) + '</div>');
   html.push('</section>');
   html.push('</main>');
   html.push('<nav class="home-bottom">');
@@ -3945,6 +4006,8 @@ function renderSensorCtrl(id){
   html.push('<div class="cell head">MAX</div>');
   html.push('</section>');
   for (var outIdx = 0; outIdx < 3; outIdx++) {
+    var outId = 'CH' + (outIdx + 1);
+    if (!outputVisible(outId)) continue;
     var rule = getCtrlRuleUi(s, outIdx);
     html.push('<section class="ctrl-row">');
     if (isCtrlDisabledSensor(id) || isToggleOnlySensor(id)) html.push('<div class="cell empty">—</div>');
@@ -4063,6 +4126,9 @@ function renderCurrentRoute(){
   var view = r[0];
   var arg = r[1] ? decodeURIComponent(r[1]) : '';
   var arg2 = r[2] ? decodeURIComponent(r[2]) : '';
+  if (!routeAllowed(view, arg)) {
+    if (location.hash !== '#/home') { go('#/home'); return; }
+  }
   prepareCurrentRoute(view);
   if (view === 'home') return renderHome();
   if (view === 'menu') return renderMenu();
