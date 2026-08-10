@@ -1,4 +1,4 @@
-// Auto-generated from OUT/app.css. Do not edit manually.
+// Auto-generated from WEB_SRC/app.css by WEB_SRC/generate_embedded_web.py. Do not edit manually.
 #pragma once
 #include <Arduino.h>
 

@@ -1,4 +1,4 @@
-// Auto-generated from OUT/page-app.js. Do not edit manually.
+// Auto-generated from WEB_SRC/page-app.js by WEB_SRC/generate_embedded_web.py. Do not edit manually.
 #pragma once
 #include <Arduino.h>
 
