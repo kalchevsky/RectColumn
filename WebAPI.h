@@ -762,6 +762,10 @@ private:
                 DynamicJsonDocument doc(512);
                 if (!_parseJson(req, data, len, doc)) return;
 
+                uint8_t prevMode[3] = { _om->chMode[0], _om->chMode[1], _om->chMode[2] };
+                const bool prevCh4Enabled = _om->ch4Enabled;
+                const bool prevCh5Enabled = _om->ch5Enabled;
+                const bool prevSoundMuted = _om->soundMuted;
                 uint8_t nextMode[3] = { _om->chMode[0], _om->chMode[1], _om->chMode[2] };
                 bool nextCh4Enabled = _om->ch4Enabled;
                 bool nextCh5Enabled = _om->ch5Enabled;
@@ -806,8 +810,24 @@ private:
                 _stor->saveSensors(*_sm);
                 _om->beepAcceptedCommand();
 
-                _log->add("Конфигурация выходов обновлена",
-                          _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
+                for (uint8_t oi = OUT_CH1; oi <= OUT_CH3; oi++) {
+                    if (prevMode[oi] != _om->chMode[oi]) {
+                        _log->add(_outputModeLogText(oi, _om->chMode[oi]),
+                                  _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
+                    }
+                }
+                if (prevCh4Enabled != _om->ch4Enabled) {
+                    _log->add(_soundChannelLogText(OUT_CH4, _om->ch4Enabled),
+                              _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
+                }
+                if (prevCh5Enabled != _om->ch5Enabled) {
+                    _log->add(_soundChannelLogText(OUT_CH5, _om->ch5Enabled),
+                              _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
+                }
+                if (prevSoundMuted != _om->soundMuted) {
+                    _log->add(_om->soundMuted ? "Звук приглушён" : "Звук включён",
+                              _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
+                }
 
                 DynamicJsonDocument resp(512);
                 fillOutputConfigDoc(resp);
@@ -1354,14 +1374,16 @@ private:
         _syncRuntimeStateNow();
         _stor->saveSensors(*_sm);
         _om->beepAcceptedCommand();
-        _log->add(s->name + String(s->enabled ? " включен пользователем" : " отключен пользователем"),
-                  _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
+        if (prevEnabled != s->enabled) {
+            _log->add(_sensorConfigToggleLogText((uint8_t)si, s->enabled),
+                      _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
+        }
         if (logOperatorRestore) {
-            _log->add(s->name + " ошибка снята",
+            _log->add(_sensorRestoredLogText((uint8_t)si),
                       _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
         }
         if (logOperatorRelatch) {
-            _log->add("Потеря датчика " + s->name,
+            _log->add(_sensorLostEventLogText((uint8_t)si),
                       _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
         }
         _sendOk(req);
@@ -1383,16 +1405,24 @@ private:
         }
 
         SensorBase* s = _sm->s[si];
+        const int8_t logGroupIdx = _alarmGroupIndexForLog((uint8_t)si, ai);
+        const bool prevEnabled = (logGroupIdx >= 0)
+            ? _alarmGroupEnabledForLog(s, logGroupIdx)
+            : s->alarm[ai].enabled;
         if (doc.containsKey("enabled"))   s->alarm[ai].enabled = doc["enabled"];
         if (doc.containsKey("threshold")) s->alarm[ai].threshold = doc["threshold"].as<float>();
         if (doc.containsKey("isMax"))     s->alarm[ai].isMax = doc["isMax"];
+        const bool nextEnabled = (logGroupIdx >= 0)
+            ? _alarmGroupEnabledForLog(s, logGroupIdx)
+            : s->alarm[ai].enabled;
 
         _syncRuntimeStateNow();
         _stor->saveSensors(*_sm);
         _om->beepAcceptedCommand();
-        _log->add(String(s->alarm[ai].enabled ? "Включена" : "Выключена")
-                      + " сигнализация " + s->name + " " + _fixedAlarmLabelLog(ai),
-                  _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
+        if (prevEnabled != nextEnabled) {
+            _log->add(_sensorAlarmConfigLogText((uint8_t)si, ai, nextEnabled),
+                      _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
+        }
         _sendOk(req);
     }
 
@@ -1414,6 +1444,7 @@ private:
         SensorBase* s = _sm->s[si];
         CtrlRule& r = s->ctrl[oi];
         CtrlRule next = r;
+        const bool prevEnabled = r.enabled;
         const bool fixedOffOnly = SensorManager::isDigitalOffOnlyRule((uint8_t)si, (uint8_t)oi);
 
         if (doc.containsKey("enabled")) next.enabled = doc["enabled"];
@@ -1431,6 +1462,10 @@ private:
             _syncRuntimeStateNow();
             _stor->saveSensors(*_sm);
             _om->beepAcceptedCommand();
+            if (prevEnabled != next.enabled) {
+                _log->add(_sensorCtrlConfigLogText((uint8_t)si, oi, next.enabled),
+                          _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
+            }
             _sendOk(req);
             return;
         }
@@ -1450,9 +1485,10 @@ private:
             _syncRuntimeStateNow();
             _stor->saveSensors(*_sm);
             _om->beepAcceptedCommand();
-            _log->add((next.enabled ? String("Включено управление: ") : String("Выключено управление: "))
-                          + s->name + " -> " + _outputName(oi),
-                      _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
+            if (prevEnabled != next.enabled) {
+                _log->add(_sensorCtrlConfigLogText((uint8_t)si, oi, next.enabled),
+                          _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
+            }
             _sendOk(req);
             return;
         }
@@ -1489,9 +1525,10 @@ private:
         _stor->saveSensors(*_sm);
         _om->beepAcceptedCommand();
 
-        _log->add((next.enabled ? String("Включено управление: ") : String("Выключено управление: "))
-                      + s->name + " -> " + _outputName(oi),
-                  _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
+        if (prevEnabled != next.enabled) {
+            _log->add(_sensorCtrlConfigLogText((uint8_t)si, oi, next.enabled),
+                      _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
+        }
         _sendOk(req);
     }
 
@@ -1885,22 +1922,96 @@ private:
         item["acked"] = acked;
     }
 
+    static String _sensorLostEventLogText(uint8_t sensorIdx) {
+        switch (sensorIdx) {
+            case SEN_T1: return "Потеря датчика температуры T1";
+            case SEN_T2: return "Потеря датчика температуры T2";
+            case SEN_T3: return "Потеря датчика температуры T3";
+            case SEN_DT: return "Потеря датчика разности температур dT";
+            case SEN_P:  return "Потеря датчика давления";
+            case SEN_L:  return "Потеря датчика уровня";
+            case SEN_F:  return "Потеря датчика протока";
+            case SEN_C:  return "Потеря датчика тока";
+            case SEN_V:  return "Потеря датчика напряжения V";
+            default:     return String("Потеря датчика ") + SensorManager::sensorName(sensorIdx);
+        }
+    }
+
+    static String _sensorRestoredLogText(uint8_t sensorIdx) {
+        return String(SensorManager::sensorLogName(sensorIdx)) + " восстановлен";
+    }
+
+    static String _sensorConfigToggleLogText(uint8_t sensorIdx, bool enabled) {
+        return String(SensorManager::sensorLogName(sensorIdx)) +
+               (enabled ? " включен пользователем" : " отключен пользователем");
+    }
+
+    static bool _usesGroupedAlarmLog(uint8_t sensorIdx) {
+        switch (sensorIdx) {
+            case SEN_T1:
+            case SEN_T2:
+            case SEN_T3:
+            case SEN_DT:
+            case SEN_P:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    static int8_t _alarmGroupIndexForLog(uint8_t sensorIdx, int alarmIdx) {
+        if (!_usesGroupedAlarmLog(sensorIdx)) return -1;
+        if (alarmIdx == 0 || alarmIdx == 2) return 0;
+        if (alarmIdx == 1 || alarmIdx == 3) return 1;
+        return -1;
+    }
+
+    static bool _alarmGroupEnabledForLog(const SensorBase* sensor, int8_t groupIdx) {
+        if (!sensor) return false;
+        switch (groupIdx) {
+            case 0: return sensor->alarm[0].enabled || sensor->alarm[2].enabled;
+            case 1: return sensor->alarm[1].enabled || sensor->alarm[3].enabled;
+            default: return false;
+        }
+    }
+
+    static const char* _alarmGroupLogLabel(int8_t groupIdx) {
+        return groupIdx == 0 ? "AL1" : "AL2";
+    }
+
+    static String _sensorAlarmConfigLogText(uint8_t sensorIdx, int alarmIdx, bool enabled) {
+        String text = String(SensorManager::sensorLogName(sensorIdx)) + ": сигнализация";
+        const int8_t groupIdx = _alarmGroupIndexForLog(sensorIdx, alarmIdx);
+        if (groupIdx >= 0) {
+            text += " ";
+            text += _alarmGroupLogLabel(groupIdx);
+        }
+        text += enabled ? " включена" : " отключена";
+        return text;
+    }
+
+    static String _sensorCtrlConfigLogText(uint8_t sensorIdx, int outIdx, bool enabled) {
+        return String(SensorManager::sensorLogName(sensorIdx)) +
+               ": управление " + _outputName(outIdx) +
+               (enabled ? " включено" : " отключено");
+    }
+
+    static String _outputModeLogText(uint8_t outIdx, uint8_t logic) {
+        return String("Канал управления ") + _outputName(outIdx) +
+               " переведён в режим " + ((logic == LOGIC_COOL) ? "охлаждения" : "нагрева");
+    }
+
+    static String _soundChannelLogText(uint8_t outIdx, bool enabled) {
+        return String("Звуковой канал ") + _outputName(outIdx) +
+               (enabled ? " включён" : " выключен");
+    }
+
     static String _fixedAlarmLabel(uint8_t idx) {
         switch (idx) {
             case 0: return "Мин 1";
             case 1: return "Мин 2";
             case 2: return "Макс 1";
             case 3: return "Макс 2";
-            default: return String("Уровень ") + String(idx + 1);
-        }
-    }
-
-    static String _fixedAlarmLabelLog(uint8_t idx) {
-        switch (idx) {
-            case 0: return "ALmin1";
-            case 1: return "ALmin2";
-            case 2: return "ALmax1";
-            case 3: return "ALmax2";
             default: return String("Уровень ") + String(idx + 1);
         }
     }

@@ -95,7 +95,7 @@ private:
         }
 
         if (_levelAlarmLatched) {
-            _alarm("Сигнализация уровня сброшена");
+            _alarm("Уровень OK");
         }
         ls->alarm[0].triggered = false;
         _levelRawLatched = false;

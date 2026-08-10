@@ -236,6 +236,21 @@ public:
         return (idx >= 0 && idx < SEN_COUNT) ? names[idx] : "";
     }
 
+    static const char* sensorLogName(int idx) {
+        switch (idx) {
+            case SEN_T1: return "Датчик температуры T1";
+            case SEN_T2: return "Датчик температуры T2";
+            case SEN_T3: return "Датчик температуры T3";
+            case SEN_DT: return "Датчик разности температур dT";
+            case SEN_P:  return "Датчик давления";
+            case SEN_L:  return "Датчик уровня";
+            case SEN_F:  return "Датчик протока";
+            case SEN_C:  return "Датчик тока";
+            case SEN_V:  return "Датчик напряжения V";
+            default:     return sensorName(idx);
+        }
+    }
+
     static const char* sensorUnit(int idx) {
         static const char* units[SEN_COUNT] = {"C","C","C","C","гПа","","","",""};
         return (idx >= 0 && idx < SEN_COUNT) ? units[idx] : "";

@@ -105,35 +105,27 @@ static void syncCtrlLogicFromOutputModes() {
     sensorMgr.normalizeSchemeControlRules();
 }
 
-static String formatFixedNumber(float value, uint8_t decimals = 1) {
-    if (!isfinite(value)) return String("—");
-    char buf[32];
-    dtostrf(value, 0, decimals, buf);
-    String out(buf);
-    out.trim();
-    return out;
-}
-
-static const char* pressureAlarmLabel(uint8_t bitIdx) {
-    switch (bitIdx) {
-        case 0: return "ALmin1";
-        case 1: return "ALmin2";
-        case 2: return "ALmax1";
-        case 3: return "ALmax2";
-        default: return bitIdx >= 2 ? "ALmax" : "ALmin";
+static String sensorLostLogText(uint8_t sensorIdx) {
+    switch (sensorIdx) {
+        case SEN_T1: return "Потеря датчика температуры T1";
+        case SEN_T2: return "Потеря датчика температуры T2";
+        case SEN_T3: return "Потеря датчика температуры T3";
+        case SEN_DT: return "Потеря датчика разности температур dT";
+        case SEN_P:  return "Потеря датчика давления";
+        case SEN_L:  return "Потеря датчика уровня";
+        case SEN_F:  return "Потеря датчика протока";
+        case SEN_C:  return "Потеря датчика тока";
+        case SEN_V:  return "Потеря датчика напряжения V";
+        default:     return String("Потеря датчика ") + SensorManager::sensorName(sensorIdx);
     }
 }
 
-static uint8_t selectPrimaryUserAlarmBit(uint8_t bits) {
-    if (bits & (1u << 3)) return 3;
-    if (bits & (1u << 2)) return 2;
-    if (bits & (1u << 1)) return 1;
-    return 0;
+static String sensorAlarmTriggeredLogText(uint8_t sensorIdx) {
+    return String(SensorManager::sensorLogName(sensorIdx)) + ": тревога сработала";
 }
 
-static String pressureAlarmLogText(const SensorBase* s, uint8_t alarmBit) {
-    const float thr = (s && alarmBit < N_ALARMS) ? s->alarm[alarmBit].threshold : NAN;
-    return String("P ") + pressureAlarmLabel(alarmBit) + " " + formatFixedNumber(thr, 1) + " гПа";
+static String sensorAlarmClearedLogText(uint8_t sensorIdx) {
+    return String(SensorManager::sensorLogName(sensorIdx)) + ": тревога снята";
 }
 
 static void initPrevState() {
@@ -160,38 +152,31 @@ static void logSensorTransitions() {
                 // здесь запрещена: она сбивает с толку при sensorErrorLatched=true.
                 prevSenLatched[i] = s->sensorErrorLatched;
                 if (s->sensorErrorLatched) {
-                    eventLog.add(s->sensorLostNotice(),
+                    eventLog.add(sensorLostLogText((uint8_t)i),
                                  sensorMgr.getT1(), sensorMgr.getT2(), sensorMgr.getT3(), sensorMgr.getDT());
                 }
             }
         } else {
             if (s->present != prevSenPresent[i]) {
                 prevSenPresent[i] = s->present;
-                eventLog.add(s->name + (s->present ? " подключён" : " отключён"),
+                eventLog.add(String(SensorManager::sensorLogName(i)) + (s->present ? " подключён" : " отключён"),
                              sensorMgr.getT1(), sensorMgr.getT2(), sensorMgr.getT3(), sensorMgr.getDT());
             }
 
             if (s->error != prevSenError[i]) {
                 prevSenError[i] = s->error;
-                eventLog.add(s->name + String(s->error ? " ошибка" : " ошибка снята"),
+                eventLog.add(String(SensorManager::sensorLogName(i)) + String(s->error ? " ошибка" : " ошибка снята"),
                              sensorMgr.getT1(), sensorMgr.getT2(), sensorMgr.getT3(), sensorMgr.getDT());
             }
         }
 
         const uint8_t curMask = s->userAlarmMask();
         if (curMask != prevAlarmMask[i]) {
-            if (i == SEN_P && curMask != 0) {
-                const uint8_t pressureBit = selectPrimaryUserAlarmBit(curMask);
-                eventLog.add(pressureAlarmLogText(s, pressureBit),
-                             sensorMgr.getT1(), sensorMgr.getT2(), sensorMgr.getT3(), sensorMgr.getDT());
-            } else if (prevAlarmMask[i] == 0 && curMask != 0) {
-                eventLog.add(s->name + " тревога сработала",
+            if (prevAlarmMask[i] == 0 && curMask != 0) {
+                eventLog.add(sensorAlarmTriggeredLogText((uint8_t)i),
                              sensorMgr.getT1(), sensorMgr.getT2(), sensorMgr.getT3(), sensorMgr.getDT());
             } else if (prevAlarmMask[i] != 0 && curMask == 0) {
-                eventLog.add(s->name + " тревога снята",
-                             sensorMgr.getT1(), sensorMgr.getT2(), sensorMgr.getT3(), sensorMgr.getDT());
-            } else {
-                eventLog.add(s->name + " состояние тревог изменилось",
+                eventLog.add(sensorAlarmClearedLogText((uint8_t)i),
                              sensorMgr.getT1(), sensorMgr.getT2(), sensorMgr.getT3(), sensorMgr.getDT());
             }
             prevAlarmMask[i] = curMask;
