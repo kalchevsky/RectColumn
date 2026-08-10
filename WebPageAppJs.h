@@ -528,7 +528,8 @@ function collectActiveSensorLossLines(){
   var lines = [];
   for (var i = 0; i < sensors.length; i++) {
     var sensor = sensors[i] || {};
-    if (!sensor.enabled || sensor.sensorErrorActive !== true) continue;
+    if (!sensor.enabled) continue;
+    if (sensor.sensorErrorActive !== true && sensor.sensorLostUnacked !== true) continue;
     var line = typeof sensor.sensorLostNotice === 'string' ? sensor.sensorLostNotice.trim() : '';
     if (!line) continue;
     if (seen[line]) continue;
@@ -950,6 +951,7 @@ function mergeAckStateFromResponse(res){
   var sensors = s.sensors || [];
   for (var si = 0; si < sensors.length; si++) {
     var sensor = sensors[si] || {};
+    sensor.sensorLostUnacked = false;
     var alarms = sensor.alarms || [];
     for (var ai = 0; ai < alarms.length; ai++) {
       if (alarms[ai]) alarms[ai].unacked = false;

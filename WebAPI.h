@@ -555,11 +555,11 @@ private:
             const bool compatGet = (req->method() == HTTP_GET);
 
             const uint16_t activeBefore = _om->activeAlarmCount(*_sm);
-            const uint16_t unackedBefore = _om->unackedAlarmCount(*_sm);
+            const uint16_t unackedBefore = _om->pendingAlarmCount(*_sm);
             _om->acknowledgeCurrentAlarms(*_sm);
             _om->loop(*_sm);
             const uint16_t activeAfter = _om->activeAlarmCount(*_sm);
-            const uint16_t unackedAfter = _om->unackedAlarmCount(*_sm);
+            const uint16_t unackedAfter = _om->pendingAlarmCount(*_sm);
             const uint16_t acknowledgedCount =
                 (unackedBefore >= unackedAfter) ? (unackedBefore - unackedAfter) : 0;
             if (acknowledgedCount > 0) {
@@ -1933,6 +1933,11 @@ private:
         return "Ошибка dT: невозможно вычислить значение";
     }
 
+    static String _sensorLostAlarmText(const SensorBase* sensor, uint8_t sensorIdx) {
+        if (sensor) return String("Потеря датчика ") + sensor->name;
+        return String("Потеря датчика ") + SensorManager::sensorName(sensorIdx);
+    }
+
     static String _alarmReasonSensorTitle(uint8_t sensorIdx) {
         switch (sensorIdx) {
             case SEN_P:  return "Давление";
@@ -1963,22 +1968,24 @@ private:
         if (!_sm || !_om) return;
         for (uint8_t si = 0; si < SEN_COUNT; si++) {
             SensorBase* sensor = _sm->s[si];
-            if (!sensor || !sensor->enabled) continue;
+            if (!sensor) continue;
 
-            const uint8_t activeMask = sensor->alarmMask();
+            const uint8_t activeMask = sensor->enabled ? sensor->alarmMask() : 0;
+            const uint8_t pendingMask = _om->pendingAlarmMaskFor(*_sm, si);
             const uint8_t relevantMask = unackedOnly
-                ? _om->unackedAlarmMaskFor(*_sm, si)
+                ? pendingMask
                 : activeMask;
+            const bool dtRelevant = (si == SEN_DT) &&
+                (unackedOnly ? _om->isDtErrorPending() : (sensor->enabled && sensor->error));
+
+            if (!sensor->enabled && relevantMask == 0 && !dtRelevant) continue;
 
             if (relevantMask & SENSOR_LOST_ALARM_MASK) {
-                _addUniqueReason(arr, sensor->sensorLostNotice());
+                _addUniqueReason(arr, _sensorLostAlarmText(sensor, si));
             }
 
-            if (si == SEN_DT && sensor->error) {
-                const bool dtAcked = _om->isDtErrorAcked();
-                if (!(unackedOnly && dtAcked)) {
-                    _addUniqueReason(arr, _dtAlarmErrorText());
-                }
+            if (dtRelevant) {
+                _addUniqueReason(arr, _dtAlarmErrorText());
             }
 
             for (uint8_t ai = 0; ai < N_ALARMS; ai++) {
@@ -1994,22 +2001,29 @@ private:
         static constexpr uint8_t USER_ALARM_MASK = (1u << N_ALARMS) - 1u;
         for (uint8_t si = 0; si < SEN_COUNT; si++) {
             SensorBase* sensor = _sm->s[si];
-            if (!sensor || !sensor->enabled) continue;
+            if (!sensor) continue;
 
-            // Active sensor-loss is exposed separately via sensorErrorActive /
-            // sensorLostNotice, so this list contains only the alarm subsystem.
-            const uint8_t activeAlarmMask = (uint8_t)(sensor->alarmMask() & USER_ALARM_MASK);
-            const uint8_t unackedAlarmMask =
-                (uint8_t)(_om->unackedAlarmMaskFor(*_sm, si) & USER_ALARM_MASK);
+            // Sensor-loss remains exposed via sensorErrorActive / sensorLostNotice;
+            // this list contains only user alarms plus the dedicated dT error.
+            const uint8_t activeAlarmMask = sensor->enabled
+                ? (uint8_t)(sensor->alarmMask() & USER_ALARM_MASK)
+                : 0;
+            const uint8_t pendingAlarmMask =
+                (uint8_t)(_om->pendingAlarmMaskFor(*_sm, si) & USER_ALARM_MASK);
+            const uint8_t visibleAlarmMask = (uint8_t)(activeAlarmMask | pendingAlarmMask);
+            const bool dtVisible = (si == SEN_DT) &&
+                ((sensor->enabled && sensor->error) || _om->isDtErrorPending());
 
-            if (si == SEN_DT && sensor->error) {
-                _addOrUpdateActiveAlarmEntry(arr, _dtAlarmErrorText(), _om->isDtErrorAcked());
+            if (!sensor->enabled && visibleAlarmMask == 0 && !dtVisible) continue;
+
+            if (dtVisible) {
+                _addOrUpdateActiveAlarmEntry(arr, _dtAlarmErrorText(), !_om->isDtErrorPending());
             }
 
             for (uint8_t ai = 0; ai < N_ALARMS; ai++) {
                 const uint8_t bit = (1u << ai);
-                if (!(activeAlarmMask & bit)) continue;
-                const bool acked = ((unackedAlarmMask & bit) == 0);
+                if (!(visibleAlarmMask & bit)) continue;
+                const bool acked = ((pendingAlarmMask & bit) == 0);
                 _addOrUpdateActiveAlarmEntry(arr, _activeAlarmReasonText(sensor, si, ai), acked);
             }
         }
@@ -2228,7 +2242,7 @@ private:
         root["apClientCount"] = _wifi->apClientCount();
         root["muted"] = _om->soundMuted;
         root["activeAlarmCount"] = _om->activeAlarmCount(*_sm);
-        root["unackedAlarmCount"] = _om->unackedAlarmCount(*_sm);
+        root["unackedAlarmCount"] = _om->pendingAlarmCount(*_sm);
         root["safetyAlarmActive"] = _om->safetyAlarmActive();
         root["ch4Enabled"] = _om->ch4Enabled;
         root["ch5Enabled"] = _om->ch5Enabled;
@@ -2246,7 +2260,7 @@ private:
         so["ctrlDelayMs"] = sensor->ctrlDelayMs;
     }
 
-    void _buildSensorLiveFields(JsonObject so, uint8_t sensorIdx, SensorBase* s) {
+    void _buildSensorLiveFields(JsonObject so, uint8_t sensorIdx, SensorBase* s, uint8_t pendingMask) {
         so["warmup"] = s->isInEnableWarmup();
         so["error"] = s->error;
         so["present"] = s->present;
@@ -2254,7 +2268,10 @@ private:
         so["sensorErrorSticky"] = s->isSensorErrorSticky();
         so["sensorErrorLatched"] = s->sensorErrorLatched;
         so["sensorErrorReason"] = s->sensorErrorReasonCode();
-        so["sensorLostNotice"] = s->sensorLostNotice();
+        const bool sensorLostPending = ((pendingMask & SENSOR_LOST_ALARM_MASK) != 0);
+        so["sensorLostNotice"] = (sensorLostPending || s->isSensorErrorActive())
+            ? _sensorLostAlarmText(s, sensorIdx)
+            : String("");
         so["stale"] = s->isStale();
         if (s->diagCode != SENSOR_DIAG_NONE) so["note"] = s->diagText();
 
@@ -2269,9 +2286,7 @@ private:
             const bool ch2ActualOn = _om->out[OUT_CH2] && _om->out[OUT_CH2]->actualOn();
             so["flowNoFlow"] = ch2ActualOn && !_sm->flowActive();
         }
-
-        const uint8_t unackedMask = _om->unackedAlarmMaskFor(*_sm, sensorIdx);
-        so["sensorLostUnacked"] = ((unackedMask & SENSOR_LOST_ALARM_MASK) != 0);
+        so["sensorLostUnacked"] = sensorLostPending;
     }
 
     void _buildSensorAlarmsConfig(JsonArray alarms, SensorBase* sensor) {
@@ -2438,9 +2453,9 @@ private:
         for (int i = 0; i < SEN_COUNT; i++) {
             SensorBase* sensor = _sm->s[i];
             JsonObject so = arr.createNestedObject();
-            const uint8_t unackedMask = _om->unackedAlarmMaskFor(*_sm, i);
+            const uint8_t pendingMask = _om->pendingAlarmMaskFor(*_sm, i);
             so["id"] = SensorManager::sensorName(i);
-            _buildSensorLiveFields(so, (uint8_t)i, sensor);
+            _buildSensorLiveFields(so, (uint8_t)i, sensor, pendingMask);
             if (i == SEN_C) {
                 const float amps = _ampsFromRaw(sensor->value);
                 if (!isnan(amps) && !sensor->error) so["amps"] = roundf(amps * 100.0f) / 100.0f;
@@ -2448,7 +2463,7 @@ private:
             }
 
             JsonArray alarms = so.createNestedArray("alarms");
-            _buildSensorAlarmsLive(alarms, sensor, unackedMask);
+            _buildSensorAlarmsLive(alarms, sensor, pendingMask);
         }
     }
 
@@ -2456,15 +2471,15 @@ private:
         for (int i = 0; i < SEN_COUNT; i++) {
             SensorBase* sensor = _sm->s[i];
             JsonObject so = arr.createNestedObject();
-            const uint8_t unackedMask = _om->unackedAlarmMaskFor(*_sm, i);
+            const uint8_t pendingMask = _om->pendingAlarmMaskFor(*_sm, i);
             so["id"] = SensorManager::sensorName(i);
             _buildSensorConfigFields(so, (uint8_t)i, sensor);
-            _buildSensorLiveFields(so, (uint8_t)i, sensor);
+            _buildSensorLiveFields(so, (uint8_t)i, sensor, pendingMask);
             so["lastValidMs"] = sensor->lastValidMs;
 
             JsonArray alarms = so.createNestedArray("alarms");
             _buildSensorAlarmsConfig(alarms, sensor);
-            _buildSensorAlarmsLive(alarms, sensor, unackedMask);
+            _buildSensorAlarmsLive(alarms, sensor, pendingMask);
 
             JsonArray ctrl = so.createNestedArray("ctrl");
             _buildSensorCtrlConfig(ctrl, (uint8_t)i, sensor);

@@ -455,11 +455,14 @@ public:
     }
 
     void acknowledgeCurrentAlarms(const SensorManager& sm) {
+        _latchPendingAlarms(sm);
         for (int si = 0; si < SEN_COUNT; si++) {
             SensorBase* s = sm.s[si];
             const uint8_t active = _effectiveAlarmMask(s);
             _ackedAlarmMask[si] |= active;
+            _pendingAlarmMask[si] = 0;
         }
+        _dtErrorPending = false;
         SensorBase* dtSensor = sm.s[SEN_DT];
         if (dtSensor && dtSensor->error) {
             _dtErrorAcked = true;
@@ -467,6 +470,16 @@ public:
     }
 
     bool isDtErrorAcked() const { return _dtErrorAcked; }
+    bool isDtErrorPending() const { return _dtErrorPending; }
+
+    uint16_t pendingAlarmCount(const SensorManager& sm) {
+        _latchPendingAlarms(sm);
+        uint16_t count = 0;
+        for (int si = 0; si < SEN_COUNT; si++) {
+            count += _countAlarmBits(_pendingAlarmMask[si]);
+        }
+        return count;
+    }
 
     uint16_t activeAlarmCount(const SensorManager& sm) const {
         uint16_t count = 0;
@@ -507,6 +520,12 @@ public:
         SensorBase* s = sm.s[sensorIdx];
         if (!s) return 0;
         return (uint8_t)(_effectiveAlarmMask(s) & (uint8_t)(~_ackedAlarmMask[sensorIdx]));
+    }
+
+    uint8_t pendingAlarmMaskFor(const SensorManager& sm, uint8_t sensorIdx) {
+        _latchPendingAlarms(sm);
+        if (sensorIdx >= SEN_COUNT) return 0;
+        return _pendingAlarmMask[sensorIdx];
     }
 
     void clearSensorLostAcknowledgement(uint8_t sensorIdx) {
@@ -865,6 +884,7 @@ private:
             }
         }
 
+        _latchPendingAlarms(sm);
         const bool anyUnackedAlarm = hasUnackedAlarms(sm);
         const bool soundRequired = anyUnackedAlarm || _safetyAlarmActive;
 
@@ -1088,6 +1108,17 @@ private:
         return s->alarmMask();
     }
 
+    void _latchPendingAlarms(const SensorManager& sm) {
+        for (int si = 0; si < SEN_COUNT; si++) {
+            SensorBase* s = sm.s[si];
+            _pendingAlarmMask[si] |= _effectiveAlarmMask(s);
+        }
+        SensorBase* dtSensor = sm.s[SEN_DT];
+        if (dtSensor && dtSensor->error) {
+            _dtErrorPending = true;
+        }
+    }
+
     void _pruneAcknowledged(const SensorManager& sm) {
         for (int si = 0; si < SEN_COUNT; si++) {
             SensorBase* s = sm.s[si];
@@ -1104,7 +1135,9 @@ private:
     uint32_t _lastWant[OUT_COUNT];
     uint32_t _safetyForbid[OUT_COUNT] = {};
     uint8_t  _ackedAlarmMask[SEN_COUNT] = {};
+    uint8_t  _pendingAlarmMask[SEN_COUNT] = {};
     bool     _dtErrorAcked = false;
+    bool     _dtErrorPending = false;
     uint32_t _lastBeepMs = 0;
     bool     _manualStateDirty = false;
     bool     _begun = false;
