@@ -160,6 +160,12 @@ public:
         uint32_t alarmChanged = 0;
 
     #if EMU_MODE
+        const uint32_t now = millis();
+        for (int i = 0; i < SEN_COUNT; i++) {
+            if (s[i] && s[i]->serviceSensorErrorState(now)) {
+                alarmChanged |= (1u << i);
+            }
+        }
         if (dt) {
             dt->poll();
         }
@@ -173,6 +179,12 @@ public:
 
         const uint32_t now = millis();
         bool tempUpdated = false;
+
+        for (int i = 0; i < SEN_COUNT; i++) {
+            if (s[i] && s[i]->serviceSensorErrorState(now)) {
+                alarmChanged |= (1u << i);
+            }
+        }
 
         // У T1/T2/T3 отдельные шины OneWire, поэтому их можно обслуживать
         // независимо без искусственной очереди по 1 датчику в секунду.

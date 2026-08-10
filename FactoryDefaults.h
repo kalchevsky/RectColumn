@@ -86,6 +86,18 @@ inline void _applyPressureProfile(SensorBase* sensor) {
     }
 }
 
+inline void _applyPhysicalTempDelayDefaults(SensorBase* sensor) {
+    if (!sensor) return;
+    sensor->alarmDelayMs = TEMP_SENSOR_ALARM_DELAY_MS;
+    sensor->ctrlDelayMs = TEMP_SENSOR_CTRL_DELAY_MS;
+}
+
+inline void _applyPressureDelayDefaults(SensorBase* sensor) {
+    if (!sensor) return;
+    sensor->alarmDelayMs = PRESSURE_SENSOR_ALARM_DELAY_MS;
+    sensor->ctrlDelayMs = PRESSURE_SENSOR_CTRL_DELAY_MS;
+}
+
 inline void _resetOutputsToOff(OutputManager& om) {
     om.soundMuted = FactoryDefaultsTable::OUTPUT_SOUND_MUTED;
     om.chMode[0] = FactoryDefaultsTable::OUTPUT_CH_MODE[0];
@@ -141,6 +153,10 @@ inline bool applyFactoryDefaults(Storage& storage,
     _applyTempFamilyProfile(sm.t3);
     _applyTempFamilyProfile(sm.dt);
     _applyPressureProfile(sm.p);
+    _applyPhysicalTempDelayDefaults(sm.t1);
+    _applyPhysicalTempDelayDefaults(sm.t2);
+    _applyPhysicalTempDelayDefaults(sm.t3);
+    _applyPressureDelayDefaults(sm.p);
 
     _applyOffOnlySensor(sm.l);
     _applyOffOnlySensor(sm.f);

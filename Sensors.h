@@ -149,7 +149,7 @@ public:
             } else if (!a.enabled) {
                 a.triggered = false;
                 _alarmCandidateSinceMs[i] = 0;
-            } else if (_trackSensorLoss && isSensorErrorActive()) {
+            } else if (_trackSensorLoss && hasRawSensorError()) {
                 a.triggered = false;
                 _alarmCandidateSinceMs[i] = 0;
             } else if (isnan(value)) {
@@ -192,11 +192,13 @@ public:
     }
 
     bool tracksSensorLoss() const { return _trackSensorLoss; }
-    bool isSensorErrorActive() const { return error; }
+    bool hasRawSensorError() const { return error; }
+    bool isSensorErrorActive() const { return _trackSensorLoss ? _sensorLossPublished : error; }
     bool isSensorErrorSticky() const { return _trackSensorLoss && sensorErrorLatched; }
-    bool hasSensorLostAlarm() const { return _trackSensorLoss && isSensorErrorActive(); }
+    bool hasSensorLostAlarm() const { return _trackSensorLoss && _sensorLossPublished; }
     bool operatorResetArmed() const { return _operatorResetArmed; }
     const char* sensorErrorReasonCode() const { return _sensorErrorReasonCode(sensorErrorReason); }
+    bool serviceSensorErrorState(uint32_t now = millis()) { return _refreshSensorLossPublication(now); }
 
     String sensorLostNotice() const {
         return hasSensorLostAlarm() ? (String("Потеря датчика ") + name) : String("");
@@ -211,12 +213,12 @@ public:
         _operatorResetArmed = false;
         if (!isSensorErrorSticky()) return SensorOperatorResetResult::None;
         sensorErrorLatched = false;
-        if (!isSensorErrorActive()) sensorErrorReason = SENSOR_ERR_NONE;
+        if (!hasRawSensorError()) sensorErrorReason = SENSOR_ERR_NONE;
         return SensorOperatorResetResult::Restored;
     }
 
     bool hasUsableValue() const {
-        return enabled && present && !isSensorErrorActive() && !isnan(value) && !isStale();
+        return enabled && present && !hasRawSensorError() && !isnan(value) && !isStale();
     }
 
     bool controlRuleEnabled(uint8_t outIdx) const {
@@ -365,6 +367,7 @@ public:
     virtual void begin() = 0;
     virtual void poll()  = 0;
     virtual void onEnabledByOperator(uint32_t now) { (void)now; }
+    virtual uint32_t getSensorLossDelayMs() const { return 0UL; }
 
     virtual const char* diagText() const {
         switch (diagCode) {
@@ -377,13 +380,15 @@ public:
 
 protected:
     void markSensorFault(SensorErrorReason reason, uint32_t now, bool presentNow) {
-        (void)now;
         present = presentNow;
         error = true;
         diagCode = SENSOR_DIAG_NONE;
         if (_trackSensorLoss) {
             sensorErrorReason = reason;
-            sensorErrorLatched = true;
+            if (!_sensorLossPublished && _sensorLossCandidateSinceMs == 0) {
+                _sensorLossCandidateSinceMs = _normalizedTimestamp(now);
+            }
+            (void)_refreshSensorLossPublication(now);
         }
         _healthySinceMs = 0;
     }
@@ -391,6 +396,7 @@ protected:
     void markSensorHealthy(uint32_t now, bool presentNow = true) {
         present = presentNow;
         if (_trackSensorLoss && error) {
+            if (!_sensorLossPublished) _sensorLossCandidateSinceMs = 0;
             if (_healthySinceMs == 0) _healthySinceMs = now;
             if ((now - _healthySinceMs) < SENSOR_HEALTHY_HYSTERESIS_MS) {
                 error = true;
@@ -405,6 +411,13 @@ protected:
         error = false;
         diagCode = SENSOR_DIAG_NONE;
         sensorErrorReason = SENSOR_ERR_NONE;
+        _sensorLossCandidateSinceMs = 0;
+        _sensorLossPublished = false;
+    }
+
+    void resetPublishedSensorLossState() {
+        _sensorLossCandidateSinceMs = 0;
+        _sensorLossPublished = false;
     }
 
 protected:
@@ -418,6 +431,8 @@ protected:
 
 private:
     bool _hadPollSinceEnable = false;
+    bool _sensorLossPublished = false;
+    uint32_t _sensorLossCandidateSinceMs = 0;
 
     uint32_t _defaultMaxAgeMs() const {
         if (periodMs == 0) return 0;
@@ -428,6 +443,31 @@ private:
 
     bool _canClearLatchedErrorNow() const {
         return enabled && present && !error && !isnan(value) && !isStale();
+    }
+
+    static uint32_t _normalizedTimestamp(uint32_t now) {
+        return now ? now : 1;
+    }
+
+    bool _refreshSensorLossPublication(uint32_t now) {
+        if (!_trackSensorLoss) return false;
+        const bool prevPublished = _sensorLossPublished;
+        if (!error) {
+            _sensorLossCandidateSinceMs = 0;
+            _sensorLossPublished = false;
+            return _sensorLossPublished != prevPublished;
+        }
+        if (_sensorLossPublished || _sensorLossCandidateSinceMs == 0) {
+            return false;
+        }
+
+        const uint32_t delayMs = getSensorLossDelayMs();
+        if (delayMs == 0 || (uint32_t)(now - _sensorLossCandidateSinceMs) >= delayMs) {
+            _sensorLossCandidateSinceMs = 0;
+            _sensorLossPublished = true;
+            sensorErrorLatched = true;
+        }
+        return _sensorLossPublished != prevPublished;
     }
 
     static const char* _sensorErrorReasonCode(SensorErrorReason reason) {
@@ -451,7 +491,11 @@ public:
         : SensorBase(n, true), _ow(pin), _dt(&_ow)
     {
         periodMs = DEF_T_PERIOD_MS;
+        alarmDelayMs = TEMP_SENSOR_ALARM_DELAY_MS;
+        ctrlDelayMs = TEMP_SENSOR_CTRL_DELAY_MS;
     }
+
+    uint32_t getSensorLossDelayMs() const override { return TEMP_SENSOR_LOSS_DELAY_MS; }
 
     void begin() override {
         _dt.begin();
@@ -459,9 +503,10 @@ public:
         _dt.setWaitForConversion(false);
         _conversionWaitMs = 375UL; // 11-bit DS18B20 conversion time
         present = (_dt.getDeviceCount() > 0);
-        error   = !present;
-        sensorErrorReason = present ? SENSOR_ERR_NONE : SENSOR_ERR_NO_RESPONSE;
-        sensorErrorLatched = !present;
+        error   = false;
+        sensorErrorReason = SENSOR_ERR_NONE;
+        sensorErrorLatched = false;
+        resetPublishedSensorLossState();
         hwLimited = false;
         diagCode = SENSOR_DIAG_NONE;
         lastValidMs = 0;
@@ -473,6 +518,7 @@ public:
 
         // Поддерживаем active/sticky в едином состоянии уже на старте.
         if (!present) {
+            value = NAN;
             markSensorFault(SENSOR_ERR_NO_RESPONSE, millis(), false);
         }
     }
@@ -565,6 +611,7 @@ public:
         _dt.begin();
         _dt.setResolution(11);
         _dt.setWaitForConversion(false);
+        resetPublishedSensorLossState();
         _conversionPending = false;
         _conversionStartedMs = 0;
         _healthySinceMs = 0;
@@ -637,8 +684,7 @@ public:
         present = true;
 
         if (!isnan(_t1->value) && !isnan(_t2->value) &&
-            !_t1->error && !_t2->error &&
-            !_t1->isSensorErrorActive() && !_t2->isSensorErrorActive() &&
+            !_t1->hasRawSensorError() && !_t2->hasRawSensorError() &&
             _t1->present && _t2->present &&
             _t1->enabled && _t2->enabled) {
             value = _t2->value - _t1->value;
@@ -663,17 +709,21 @@ class PressureSensor : public SensorBase {
 public:
     PressureSensor() : SensorBase("P", true) {
         periodMs = DEF_P_PERIOD_MS;
+        alarmDelayMs = PRESSURE_SENSOR_ALARM_DELAY_MS;
+        ctrlDelayMs = PRESSURE_SENSOR_CTRL_DELAY_MS;
     }
 
     uint32_t getPollPeriodMs() const override { return 10000UL; }
+    uint32_t getSensorLossDelayMs() const override { return PRESSURE_SENSOR_LOSS_DELAY_MS; }
 
     void begin() override {
         Wire.begin(PIN_BMP_SDA, PIN_BMP_SCL);
         const uint8_t i2cCode = _probeI2c();
         present = (i2cCode == 0) && _bmp.begin(BMP085_ULTRALOWPOWER);
-        error   = !present;
-        sensorErrorReason = present ? SENSOR_ERR_NONE : SENSOR_ERR_COMM;
-        sensorErrorLatched = !present;
+        error   = false;
+        sensorErrorReason = SENSOR_ERR_NONE;
+        sensorErrorLatched = false;
+        resetPublishedSensorLossState();
         lastValidMs = 0;
         hwLimited = false;
         diagCode = SENSOR_DIAG_NONE;
@@ -696,6 +746,7 @@ public:
     }
 
     void onEnabledByOperator(uint32_t now) override {
+        resetPublishedSensorLossState();
         _healthySinceMs = 0;
         _lastPollMs = now;
 

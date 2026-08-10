@@ -16,7 +16,7 @@
 #define SERIAL_DEBUG_SENSOR_SNAPSHOT  0
 
 // ─── Версия прошивки / API ───────────────────────────────────────
-#define FW_VERSION      "1.7.9"
+#define FW_VERSION      "1.7.10"
 #define API_VERSION     "v1"
 #define AP_SSID_DEF     "Control_System"
 #define DEVICE_NAME     "RectColumn"
@@ -133,6 +133,12 @@ static_assert(PIN_V != PIN_WER_CH4, "PIN_V conflicts with WER_CH4");
 #define SENSOR_LOST_TIMEOUT_DS_MS    5000UL
 #define SENSOR_HEALTHY_HYSTERESIS_MS 5000UL
 #define SENSOR_RECONNECT_INTERVAL_MS 3000UL
+#define TEMP_SENSOR_LOSS_DELAY_MS       3000UL
+#define PRESSURE_SENSOR_LOSS_DELAY_MS   3000UL
+#define TEMP_SENSOR_ALARM_DELAY_MS      0UL
+#define TEMP_SENSOR_CTRL_DELAY_MS       0UL
+#define PRESSURE_SENSOR_ALARM_DELAY_MS  0UL
+#define PRESSURE_SENSOR_CTRL_DELAY_MS   0UL
 #define PRESSURE_SANITY_MIN_HPA      800.0f
 #define PRESSURE_SANITY_MAX_HPA      1300.0f
 

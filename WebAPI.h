@@ -1318,7 +1318,7 @@ private:
             const SensorOperatorResetResult resetResult = s->applyOperatorResetCycle();
             s->onEnabledByOperator(millis());
             logOperatorRestore =
-                (resetResult == SensorOperatorResetResult::Restored) && !s->isSensorErrorActive();
+                (resetResult == SensorOperatorResetResult::Restored) && !s->hasRawSensorError();
             logOperatorRelatch = (resetResult == SensorOperatorResetResult::Relatched);
         } else if (prevEnabled && !nextEnabled) {
             s->clearEnableWarmup();
