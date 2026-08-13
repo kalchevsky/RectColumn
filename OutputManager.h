@@ -1111,10 +1111,15 @@ private:
     void _latchPendingAlarms(const SensorManager& sm) {
         for (int si = 0; si < SEN_COUNT; si++) {
             SensorBase* s = sm.s[si];
-            _pendingAlarmMask[si] |= _effectiveAlarmMask(s);
+            const uint8_t active = _effectiveAlarmMask(s);
+            _ackedAlarmMask[si] &= active;
+            _pendingAlarmMask[si] |= (uint8_t)(active & (uint8_t)(~_ackedAlarmMask[si]));
         }
         SensorBase* dtSensor = sm.s[SEN_DT];
-        if (dtSensor && dtSensor->error) {
+        if (!dtSensor || !dtSensor->error) {
+            _dtErrorAcked = false;
+        }
+        if (dtSensor && dtSensor->error && !_dtErrorAcked) {
             _dtErrorPending = true;
         }
     }

@@ -3361,8 +3361,8 @@ function isToggleOnlySensor(id){ return id === 'L' || id === 'F'; }
 function isVirtualSensor(id){ return id === 'dT'; }
 function isCtrlDisabledSensor(id){ return id === 'C' || id === 'V'; }
 function isAlarmToggleOnlySensor(id){ return id === 'L' || id === 'F' || id === 'V'; }
-function sensorSupportsAlarmDelay(id){ return id === 'L' || id === 'F' || id === 'C' || id === 'dT'; }
-function sensorSupportsCtrlDelay(id){ return id === 'L' || id === 'F' || id === 'dT'; }
+function sensorSupportsAlarmDelay(id){ return id === 'T1' || id === 'T2' || id === 'T3' || id === 'P' || id === 'L' || id === 'F' || id === 'C' || id === 'dT'; }
+function sensorSupportsCtrlDelay(id){ return id === 'T1' || id === 'T2' || id === 'T3' || id === 'P' || id === 'L' || id === 'F' || id === 'dT'; }
 function sensorDelaySeconds(sensor, key){
   if (!sensor) return 0;
   var ms = Number(sensor[key] || 0);

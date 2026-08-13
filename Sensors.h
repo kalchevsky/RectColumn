@@ -368,6 +368,7 @@ public:
     virtual void poll()  = 0;
     virtual void onEnabledByOperator(uint32_t now) { (void)now; }
     virtual uint32_t getSensorLossDelayMs() const { return 0UL; }
+    virtual bool deferSensorLossPublication() const { return false; }
 
     virtual const char* diagText() const {
         switch (diagCode) {
@@ -462,6 +463,9 @@ private:
         }
 
         const uint32_t delayMs = getSensorLossDelayMs();
+        if (delayMs != 0 && deferSensorLossPublication()) {
+            return false;
+        }
         if (delayMs == 0 || (uint32_t)(now - _sensorLossCandidateSinceMs) >= delayMs) {
             _sensorLossCandidateSinceMs = 0;
             _sensorLossPublished = true;
@@ -496,6 +500,9 @@ public:
     }
 
     uint32_t getSensorLossDelayMs() const override { return TEMP_SENSOR_LOSS_DELAY_MS; }
+    bool deferSensorLossPublication() const override {
+        return error && present && _conversionPending;
+    }
 
     void begin() override {
         _dt.begin();

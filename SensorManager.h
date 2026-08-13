@@ -180,12 +180,6 @@ public:
         const uint32_t now = millis();
         bool tempUpdated = false;
 
-        for (int i = 0; i < SEN_COUNT; i++) {
-            if (s[i] && s[i]->serviceSensorErrorState(now)) {
-                alarmChanged |= (1u << i);
-            }
-        }
-
         // У T1/T2/T3 отдельные шины OneWire, поэтому их можно обслуживать
         // независимо без искусственной очереди по 1 датчику в секунду.
         for (int ti = 0; ti < 3; ti++) {
@@ -213,6 +207,14 @@ public:
         if (p && p->isDueToPoll(now)) {
             p->poll();
             if (p->checkAlarms()) alarmChanged |= (1u << SEN_P);
+        }
+
+        // Даём T1/T2/T3/P шанс подтвердить recovery до публикации
+        // sensor-loss, чтобы краткий fault не доходил до UI.
+        for (int i = 0; i < SEN_COUNT; i++) {
+            if (s[i] && s[i]->serviceSensorErrorState(now)) {
+                alarmChanged |= (1u << i);
+            }
         }
 
         for (int fi = 0; fi < 4; fi++) {

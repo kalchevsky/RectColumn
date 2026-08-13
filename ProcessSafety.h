@@ -82,7 +82,7 @@ private:
 
             if (!_levelAlarmLatched && (now - _levelStartedMs >= alarmDelayMs)) {
                 _levelAlarmLatched = true;
-                _alarm("Цепь L разомкнута");
+                _alarm("Уровень MAX");
             }
 
             if ((now - _levelStartedMs >= alarmDelayMs) && ls->alarm[0].enabled) {
