@@ -16,7 +16,7 @@
 #define SERIAL_DEBUG_SENSOR_SNAPSHOT  0
 
 // ─── Версия прошивки / API ───────────────────────────────────────
-#define FW_VERSION      "1.7.12"
+#define FW_VERSION      "1.7.13"
 #define API_VERSION     "v1"
 #define AP_SSID_DEF     "Control_System"
 #define DEVICE_NAME     "RectColumn"
@@ -181,7 +181,7 @@ static_assert(PIN_V != PIN_WER_CH4, "PIN_V conflicts with WER_CH4");
 #define WIFI_RSSI_WARN_DBM           -75
 
 // ─── Журнал событий ──────────────────────────────────────────────
-#define LOG_MAX_ENTRIES  50
+#define LOG_MAX_ENTRIES  100
 
 // ─── Отладка через Serial ────────────────────────────────────────
 #define SERIAL_DEBUG_SNAPSHOT_INTERVAL_MS  5000UL
