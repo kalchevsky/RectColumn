@@ -43,7 +43,10 @@ AckButton           ackButton;
 bool    prevOutState[OUT_COUNT]    = {};
 bool    prevSenError[SEN_COUNT]    = {};
 bool    prevSenPresent[SEN_COUNT]  = {};
-bool    prevSenLatched[SEN_COUNT]  = {};
+// Предыдущее опубликованное состояние sensor-loss для event-log.
+// Не используем sensorErrorLatched: это sticky-флаг до операторского ACK и
+// он намеренно может оставаться true после физического восстановления.
+bool    prevSenLossPublished[SEN_COUNT] = {};
 uint8_t prevAlarmMask[SEN_COUNT]   = {};
 uint32_t lastHeartbeatMs = 0;
 uint32_t lastWifiLedBlinkMs = 0;
@@ -135,7 +138,7 @@ static void initPrevState() {
         if (!sensorMgr.s[i]) continue;
         prevSenError[i]   = sensorMgr.s[i]->error;
         prevSenPresent[i] = sensorMgr.s[i]->present;
-        prevSenLatched[i] = sensorMgr.s[i]->sensorErrorLatched;
+        prevSenLossPublished[i] = sensorMgr.s[i]->hasSensorLostAlarm();
         prevAlarmMask[i]  = sensorMgr.s[i]->userAlarmMask();
     }
 }
@@ -149,13 +152,15 @@ static void logSensorTransitions() {
         if (s->tracksSensorLoss()) {
             prevSenPresent[i] = s->present;
             prevSenError[i] = s->error;
-            if (s->sensorErrorLatched != prevSenLatched[i]) {
-                // В веб-журнале пишем только взвод sticky-ошибки.
-                // Физическое восстановление может произойти раньше, чем оператор
-                // снимет alarm через выкл->вкл, поэтому запись "восстановлен"
-                // здесь запрещена: она сбивает с толку при sensorErrorLatched=true.
-                prevSenLatched[i] = s->sensorErrorLatched;
-                if (s->sensorErrorLatched) {
+            const bool sensorLossPublished = s->hasSensorLostAlarm();
+            if (sensorLossPublished != prevSenLossPublished[i]) {
+                // Логируем именно переход опубликованной потери сенсора.
+                // sensorErrorLatched — sticky-состояние до ACK и может не
+                // сбрасываться при физическом восстановлении. Использование
+                // опубликованного состояния позволяет записать новый эпизод
+                // T2 после recovery, не создавая повторов в каждом loop().
+                prevSenLossPublished[i] = sensorLossPublished;
+                if (sensorLossPublished) {
                     eventLog.add(sensorLostLogText((uint8_t)i),
                                  sensorMgr.getT1(), sensorMgr.getT2(), sensorMgr.getT3(), sensorMgr.getDT());
                 }
