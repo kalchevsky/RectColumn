@@ -249,7 +249,9 @@ public:
 
         Preferences p;
         if (!_openPrefs(p, "outputs", false)) return false;
-        const bool ok = _writeBlob(p, "blob", blob);
+        const bool ok = _writeBlob(p, "blob", blob)
+                     && _putAndVerifyBool(p, "relay_led", om.relayLedIndicatorEnabled)
+                     && _putAndVerifyBool(p, "alarm_led", om.alarmLedIndicatorEnabled);
         if (!ok) {
             _lastStatus = "Preferences write failed for namespace 'outputs'";
         }
@@ -272,6 +274,7 @@ public:
         if (hasBlob) {
             p.end();
             _applyOutputsBlob(om, blob);
+            _loadLedIndicatorKeys(om);
             _sanitizeOutputs(om);
             om.applyConfig();
             return;
@@ -282,6 +285,7 @@ public:
         if (hasBlobV2) {
             p.end();
             _applyOutputsBlob(om, blobV2);
+            _loadLedIndicatorKeys(om);
             _sanitizeOutputs(om);
             _migrateOutputsToBlob(om);
             om.applyConfig();
@@ -293,6 +297,7 @@ public:
         if (hasBlobV1) {
             p.end();
             _applyOutputsBlob(om, blobV1);
+            _loadLedIndicatorKeys(om);
             _sanitizeOutputs(om);
             _migrateOutputsToBlob(om);
             om.applyConfig();
@@ -301,6 +306,7 @@ public:
 
         const bool hasLegacy = _hasLegacyOutputConfig(p);
         if (hasLegacy) _loadLegacyOutputs(om, p);
+        _loadLedIndicatorKeys(om, p);
         p.end();
 
         if (hasLegacy) _migrateOutputsToBlob(om);
@@ -850,6 +856,18 @@ private:
         blob.operatorHoldOffMain[0] = om.operatorHoldOff(OUT_CH1) ? 1 : 0;
         blob.operatorHoldOffMain[1] = om.operatorHoldOff(OUT_CH2) ? 1 : 0;
         blob.operatorHoldOffMain[2] = om.operatorHoldOff(OUT_CH3) ? 1 : 0;
+    }
+
+    void _loadLedIndicatorKeys(OutputManager& om) {
+        Preferences p;
+        if (!_openPrefs(p, "outputs", true)) return;
+        _loadLedIndicatorKeys(om, p);
+        p.end();
+    }
+
+    void _loadLedIndicatorKeys(OutputManager& om, Preferences& p) {
+        om.relayLedIndicatorEnabled = p.getBool("relay_led", LIGHT_RELAY_LED_DEFAULT_ON);
+        om.alarmLedIndicatorEnabled = p.getBool("alarm_led", LIGHT_ALARM_LED_DEFAULT_ON);
     }
 
     void _sanitizeOutputs(OutputManager& om) {

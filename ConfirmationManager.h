@@ -110,7 +110,7 @@ public:
             if (!c.available) {
                 c.raw = false;
                 c.actual = false;
-                c.expected = om.out[c.outputIdx]->actualOn();
+                c.expected = om.out[c.outputIdx] ? om.out[c.outputIdx]->actualOn() : false;
                 c.confirmed = false;
                 c.pending = false;
                 c.mismatch = false;
@@ -149,7 +149,7 @@ public:
                 continue;
             }
 
-            const bool newExpected = om.out[c.outputIdx]->actualOn();
+            const bool newExpected = om.out[c.outputIdx] ? om.out[c.outputIdx]->actualOn() : false;
             if (newExpected != c.expected) {
                 c.expected = newExpected;
                 c.expectedChangedMs = now;

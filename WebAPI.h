@@ -573,8 +573,8 @@ private:
             resp["muted"] = _om->soundMuted;
             resp["ch4Enabled"] = _om->ch4Enabled;
             resp["ch5Enabled"] = _om->ch5Enabled;
-            resp["ch4Actual"] = _om->out[OUT_CH4]->actualOn();
-            resp["ch5Actual"] = _om->out[OUT_CH5]->actualOn();
+            resp["ch4Actual"] = _om->out[OUT_CH4] ? _om->out[OUT_CH4]->actualOn() : false;
+            resp["ch5Actual"] = _om->out[OUT_CH5] ? _om->out[OUT_CH5]->actualOn() : false;
             resp["compatFallback"] = compatGet;
             JsonArray activeAlarmReasons = resp.createNestedArray("activeAlarmReasons");
             _buildActiveAlarmReasons(activeAlarmReasons, true);
@@ -656,6 +656,7 @@ private:
 
     void _registerSensorRoutes() {
         for (int si = 0; si < SEN_COUNT; si++) {
+            if (!_profileSensorVisible(si)) continue;
             const String sid = SensorManager::sensorName(si);
             const String base = "/api/v1/sensor/" + sid;
 
@@ -681,6 +682,7 @@ private:
 
     void _registerOutputRoutes() {
         for (int oi = 0; oi < OUT_COUNT; oi++) {
+            if (!_profileOutputVisible(oi)) continue;
             const String route = String("/api/v1/output/") + _outputName(oi) + "/manual";
             _server.on(route.c_str(), HTTP_POST,
                 [](AsyncWebServerRequest*) {}, nullptr,
@@ -690,6 +692,7 @@ private:
         }
 
         for (int oi = OUT_CH1; oi <= OUT_CH3; oi++) {
+            if (!_profileOutputVisible(oi)) continue;
             const String id = _outputName(oi);
             const String cmdV1 = String("/api/v1/relay/") + id + "/command";
             const String cmdCompat = String("/api/relay/") + id + "/command";
@@ -748,6 +751,8 @@ private:
             doc["ch4Enabled"] = _om->ch4Enabled;
             doc["ch5Enabled"] = _om->ch5Enabled;
             doc["soundMuted"] = _om->soundMuted;
+            doc["relayLedIndicatorEnabled"] = _om->relayLedIndicatorEnabled;
+            doc["alarmLedIndicatorEnabled"] = _om->alarmLedIndicatorEnabled;
         };
 
         _server.on("/api/v1/output/config", HTTP_GET, [this, fillOutputConfigDoc](AsyncWebServerRequest* req) {
@@ -770,6 +775,8 @@ private:
                 bool nextCh4Enabled = _om->ch4Enabled;
                 bool nextCh5Enabled = _om->ch5Enabled;
                 bool nextSoundMuted = _om->soundMuted;
+                bool nextRelayLed = _om->relayLedIndicatorEnabled;
+                bool nextAlarmLed = _om->alarmLedIndicatorEnabled;
 
                 if (doc.containsKey("outputs") && doc["outputs"].is<JsonArray>()) {
                     JsonArray arr = doc["outputs"].as<JsonArray>();
@@ -796,6 +803,14 @@ private:
                 if (doc.containsKey("ch4Enabled")) nextCh4Enabled = doc["ch4Enabled"].as<bool>();
                 if (doc.containsKey("ch5Enabled")) nextCh5Enabled = doc["ch5Enabled"].as<bool>();
                 if (doc.containsKey("soundMuted")) nextSoundMuted = doc["soundMuted"].as<bool>();
+                if (doc.containsKey("relayLedIndicatorEnabled")) {
+                    if (!doc["relayLedIndicatorEnabled"].is<bool>()) { _sendError(req, 400, "bad_params", "relayLedIndicatorEnabled must be boolean"); return; }
+                    nextRelayLed = doc["relayLedIndicatorEnabled"].as<bool>();
+                }
+                if (doc.containsKey("alarmLedIndicatorEnabled")) {
+                    if (!doc["alarmLedIndicatorEnabled"].is<bool>()) { _sendError(req, 400, "bad_params", "alarmLedIndicatorEnabled must be boolean"); return; }
+                    nextAlarmLed = doc["alarmLedIndicatorEnabled"].as<bool>();
+                }
 
                 for (uint8_t oi = OUT_CH1; oi <= OUT_CH3; oi++) {
                     if (nextMode[oi] != _om->chMode[oi]) _applyOutputLogicMode(oi, nextMode[oi]);
@@ -803,6 +818,8 @@ private:
                 _om->ch4Enabled = nextCh4Enabled;
                 _om->ch5Enabled = nextCh5Enabled;
                 _om->mute(nextSoundMuted);
+                _om->setRelayLedIndicatorEnabled(nextRelayLed);
+                _om->setAlarmLedIndicatorEnabled(nextAlarmLed);
 
                 _om->applyConfig();
                 _syncRuntimeStateNow();
@@ -1575,10 +1592,10 @@ private:
         resp["ok"] = true;
         resp["stopLatched"] = _om->mainStopLatched();
         resp["ch1"] = _om->out[OUT_CH1]->actualOn();
-        resp["ch2"] = _om->out[OUT_CH2]->actualOn();
-        resp["ch3"] = _om->out[OUT_CH3]->actualOn();
-        resp["ch4"] = _om->out[OUT_CH4]->actualOn();
-        resp["ch5"] = _om->out[OUT_CH5]->actualOn();
+        resp["ch2"] = _om->out[OUT_CH2] ? _om->out[OUT_CH2]->actualOn() : false;
+        resp["ch3"] = _om->out[OUT_CH3] ? _om->out[OUT_CH3]->actualOn() : false;
+        resp["ch4"] = _om->out[OUT_CH4] ? _om->out[OUT_CH4]->actualOn() : false;
+        resp["ch5"] = _om->out[OUT_CH5] ? _om->out[OUT_CH5]->actualOn() : false;
         _sendDoc(req, 200, resp);
     }
 
@@ -1594,8 +1611,8 @@ private:
         resp["ok"] = true;
         resp["stopLatched"] = _om->mainStopLatched();
         resp["ch1"] = _om->out[OUT_CH1]->actualOn();
-        resp["ch2"] = _om->out[OUT_CH2]->actualOn();
-        resp["ch3"] = _om->out[OUT_CH3]->actualOn();
+        resp["ch2"] = _om->out[OUT_CH2] ? _om->out[OUT_CH2]->actualOn() : false;
+        resp["ch3"] = _om->out[OUT_CH3] ? _om->out[OUT_CH3]->actualOn() : false;
         _sendDoc(req, 200, resp);
     }
 
@@ -1779,6 +1796,7 @@ private:
 
     void _buildRelayStateObject(JsonObject root, int oi) {
         Output* o = _om->out[oi];
+        if (!o) { root["id"] = _outputName(oi); root["available"] = false; return; }
         const bool actualOn = o->actualOn();
         const uint32_t effectiveForbidMask = _om->effectiveForbidMask((uint8_t)oi);
         const bool stopOverridesConfirm = _om->mainStopLatched() && oi >= OUT_CH1 && oi <= OUT_CH3;
@@ -2226,6 +2244,8 @@ private:
         root["muted"]      = _om->soundMuted;
         root["ch4Enabled"] = _om->ch4Enabled;
         root["ch5Enabled"] = _om->ch5Enabled;
+        root["relayLedIndicatorEnabled"] = _om->relayLedIndicatorEnabled;
+        root["alarmLedIndicatorEnabled"] = _om->alarmLedIndicatorEnabled;
         root["stopLatched"] = _om->mainStopLatched();
         root["wifiWizardPending"] = _wifiWizardPending();
         root["notifyEnabled"] = (_notifier ? _notifier->enabled() : false);
@@ -2357,6 +2377,8 @@ private:
         root["safetyAlarmActive"] = _om->safetyAlarmActive();
         root["ch4Enabled"] = _om->ch4Enabled;
         root["ch5Enabled"] = _om->ch5Enabled;
+        root["relayLedIndicatorEnabled"] = _om->relayLedIndicatorEnabled;
+        root["alarmLedIndicatorEnabled"] = _om->alarmLedIndicatorEnabled;
         root["stopLatched"] = _om->mainStopLatched();
         root["wifiWizardPending"] = _wifiWizardPending();
         root["notifyEnabled"] = (_notifier ? _notifier->enabled() : false);
@@ -2547,7 +2569,9 @@ private:
 
     void _buildSensorsConfig(JsonArray arr) {
         for (int i = 0; i < SEN_COUNT; i++) {
+            if (!_profileSensorVisible(i)) continue;
             SensorBase* sensor = _sm->s[i];
+            if (!sensor) continue;
             JsonObject so = arr.createNestedObject();
             so["id"] = SensorManager::sensorName(i);
             _buildSensorConfigFields(so, (uint8_t)i, sensor);
@@ -2562,7 +2586,9 @@ private:
 
     void _buildSensorsLive(JsonArray arr) {
         for (int i = 0; i < SEN_COUNT; i++) {
+            if (!_profileSensorVisible(i)) continue;
             SensorBase* sensor = _sm->s[i];
+            if (!sensor) continue;
             JsonObject so = arr.createNestedObject();
             const uint8_t pendingMask = _om->pendingAlarmMaskFor(*_sm, i);
             so["id"] = SensorManager::sensorName(i);
@@ -2580,7 +2606,9 @@ private:
 
     void _buildSensors(JsonArray arr) {
         for (int i = 0; i < SEN_COUNT; i++) {
+            if (!_profileSensorVisible(i)) continue;
             SensorBase* sensor = _sm->s[i];
+            if (!sensor) continue;
             JsonObject so = arr.createNestedObject();
             const uint8_t pendingMask = _om->pendingAlarmMaskFor(*_sm, i);
             so["id"] = SensorManager::sensorName(i);
@@ -2599,7 +2627,9 @@ private:
 
     void _buildOutputsConfig(JsonArray arr) {
         for (int i = 0; i < OUT_COUNT; i++) {
+            if (!_profileOutputVisible(i)) continue;
             Output* output = _om->out[i];
+            if (!output) continue;
             JsonObject oo = arr.createNestedObject();
             oo["id"] = _outputName(i);
             _buildOutputConfigFields(oo, (uint8_t)i, output);
@@ -2608,7 +2638,9 @@ private:
 
     void _buildOutputsLive(JsonArray arr) {
         for (int i = 0; i < OUT_COUNT; i++) {
+            if (!_profileOutputVisible(i)) continue;
             Output* output = _om->out[i];
+            if (!output) continue;
             JsonObject oo = arr.createNestedObject();
             oo["id"] = _outputName(i);
             _buildOutputLiveFields(oo, (uint8_t)i, output);
@@ -2617,7 +2649,9 @@ private:
 
     void _buildOutputs(JsonArray arr) {
         for (int i = 0; i < OUT_COUNT; i++) {
+            if (!_profileOutputVisible(i)) continue;
             Output* output = _om->out[i];
+            if (!output) continue;
             JsonObject oo = arr.createNestedObject();
             oo["id"] = _outputName(i);
             _buildOutputConfigFields(oo, (uint8_t)i, output);

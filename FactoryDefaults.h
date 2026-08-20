@@ -105,6 +105,8 @@ inline void _resetOutputsToOff(OutputManager& om) {
     om.chMode[2] = FactoryDefaultsTable::OUTPUT_CH_MODE[2];
     om.ch4Enabled = FactoryDefaultsTable::OUTPUT_CH4_ENABLED;
     om.ch5Enabled = FactoryDefaultsTable::OUTPUT_CH5_ENABLED;
+    om.relayLedIndicatorEnabled = LIGHT_RELAY_LED_DEFAULT_ON;
+    om.alarmLedIndicatorEnabled = LIGHT_ALARM_LED_DEFAULT_ON;
 
     for (int i = 0; i < OUT_COUNT; i++) {
         if (!om.out[i]) continue;

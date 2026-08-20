@@ -25,15 +25,23 @@ class OutputManager {
 public:
     Output* out[OUT_COUNT];
     bool    soundMuted = false;
+    bool    relayLedIndicatorEnabled = LIGHT_PROFILE ? LIGHT_RELAY_LED_DEFAULT_ON : true;
+    bool    alarmLedIndicatorEnabled = LIGHT_PROFILE ? LIGHT_ALARM_LED_DEFAULT_ON : true;
     uint8_t chMode[3] = { LOGIC_HEAT, LOGIC_HEAT, LOGIC_HEAT };
     bool    ch4Enabled = true;
     bool    ch5Enabled = true;
 
     OutputManager() {
         out[OUT_CH1] = new Output("CH1", PIN_CH1);
+#if LIGHT_PROFILE
+        out[OUT_CH2] = nullptr;
+        out[OUT_CH3] = nullptr;
+        out[OUT_CH4] = nullptr;
+#else
         out[OUT_CH2] = new Output("CH2", PIN_CH2);
         out[OUT_CH3] = new Output("CH3", PIN_CH3);
         out[OUT_CH4] = new Output("CH4", PIN_CH4);
+#endif
         out[OUT_CH5] = new Output("CH5", PIN_CH5);
 
         for (int i = 0; i < OUT_COUNT; i++) {
@@ -50,9 +58,15 @@ public:
     }
 
     void begin() {
-        out[OUT_CH4]->enabled = ch4Enabled;
-        out[OUT_CH5]->enabled = ch5Enabled;
-        for (int i = 0; i < OUT_COUNT; i++) out[i]->begin();
+        if (out[OUT_CH4]) out[OUT_CH4]->enabled = ch4Enabled;
+        if (out[OUT_CH5]) out[OUT_CH5]->enabled = ch5Enabled;
+        for (int i = 0; i < OUT_COUNT; i++) if (out[i]) out[i]->begin();
+#if LIGHT_PROFILE
+        pinMode(PIN_LIGHT_RELAY_LED, OUTPUT);
+        digitalWrite(PIN_LIGHT_RELAY_LED, LOW);
+        pinMode(PIN_LIGHT_ALARM_LED, OUTPUT);
+        digitalWrite(PIN_LIGHT_ALARM_LED, LOW);
+#endif
         _begun = true;
 
         // Legacy persisted manual latches must not restart CH1..CH3 after
@@ -63,7 +77,7 @@ public:
                 _operatorHoldOff[oi] = false;
                 _manualStateDirty = true;
             }
-            if (out[oi]->manualWant()) {
+            if (out[oi] && out[oi]->manualWant()) {
                 out[oi]->restoreManualWant(false);
                 _manualStateDirty = true;
             }
@@ -75,27 +89,30 @@ public:
     uint32_t loop(SensorManager& sm, EventLog* log = nullptr) {
         uint32_t changed = 0;
         bool prevState[OUT_COUNT];
-        for (int i = 0; i < OUT_COUNT; i++) prevState[i] = out[i]->isOn();
+        for (int i = 0; i < OUT_COUNT; i++) prevState[i] = out[i] ? out[i]->isOn() : false;
         _syncRuntimeState(sm, prevState);
 
         for (int i = 0; i < OUT_COUNT; i++) {
-            if (out[i]->loop()) changed |= (1u << i);
+            if (out[i] && out[i]->loop()) changed |= (1u << i);
         }
 
         for (int i = 0; i < OUT_COUNT; i++) {
-            if (out[i]->isOn() != prevState[i]) changed |= (1u << i);
+            if (out[i] && out[i]->isOn() != prevState[i]) changed |= (1u << i);
 #if STABILITY_BOOT_DIAG
             if (log && prevState[i] && !out[i]->isOn()) {
                 _logRelayOff(log, sm, (uint8_t)i);
             }
 #endif
         }
+#if LIGHT_PROFILE
+        _updateLedIndicators(sm);
+#endif
         return changed;
     }
 
     void syncRuntimeState(SensorManager& sm) {
         bool prevState[OUT_COUNT];
-        for (int i = 0; i < OUT_COUNT; i++) prevState[i] = out[i]->isOn();
+        for (int i = 0; i < OUT_COUNT; i++) prevState[i] = out[i] ? out[i]->isOn() : false;
         _syncRuntimeState(sm, prevState);
     }
 
@@ -104,7 +121,7 @@ public:
         if (now - _lastBeepMs < CMD_BEEP_COOLDOWN_MS) return;
         if (!ch5Enabled || soundMuted) return;
         _lastBeepMs = now;
-        out[OUT_CH5]->requestPulse(durationMs);
+        if (out[OUT_CH5]) out[OUT_CH5]->requestPulse(durationMs);
     }
 
     // Low-level manual request. For CH1..CH3 it is routed through the same
@@ -316,18 +333,20 @@ public:
     void mute(bool m) {
         soundMuted = m;
         if (m) {
-            out[OUT_CH4]->setBellPatternActive(false);
-            uint32_t want = _lastWant[OUT_CH5] & ~(1u << RULEIDX_SOUND);
-            out[OUT_CH5]->applyResolved(_effectiveForbidMask(OUT_CH5), want);
+            if (out[OUT_CH4]) out[OUT_CH4]->setBellPatternActive(false);
+            if (out[OUT_CH5]) {
+                uint32_t want = _lastWant[OUT_CH5] & ~(1u << RULEIDX_SOUND);
+                out[OUT_CH5]->applyResolved(_effectiveForbidMask(OUT_CH5), want);
+            }
         }
     }
 
     void applyConfig() {
-        out[OUT_CH4]->enabled = ch4Enabled;
-        out[OUT_CH5]->enabled = ch5Enabled;
+        if (out[OUT_CH4]) out[OUT_CH4]->enabled = ch4Enabled;
+        if (out[OUT_CH5]) out[OUT_CH5]->enabled = ch5Enabled;
         if (!_begun) return;
-        if (!ch4Enabled) out[OUT_CH4]->setBellPatternActive(false);
-        if (!ch5Enabled) {
+        if (!ch4Enabled && out[OUT_CH4]) out[OUT_CH4]->setBellPatternActive(false);
+        if (!ch5Enabled && out[OUT_CH5]) {
             uint32_t want = _lastWant[OUT_CH5] & ~(1u << RULEIDX_SOUND);
             out[OUT_CH5]->applyResolved(_effectiveForbidMask(OUT_CH5), want);
         }
@@ -564,6 +583,22 @@ public:
     }
 
     bool safetyAlarmActive() const { return _safetyAlarmActive; }
+
+    void setRelayLedIndicatorEnabled(bool enabled) {
+        relayLedIndicatorEnabled = enabled;
+#if LIGHT_PROFILE
+        _writeRelayLed(out[OUT_CH1] && out[OUT_CH1]->actualOn());
+#endif
+    }
+
+    void setAlarmLedIndicatorEnabled(bool enabled) {
+        alarmLedIndicatorEnabled = enabled;
+#if LIGHT_PROFILE
+        _writeAlarmLed(enabled && _lastActiveAlarm);
+#endif
+    }
+
+    bool activeAlarmForLed() const { return _lastActiveAlarm; }
 
 private:
     static bool _isMainOutput(uint8_t outIdx) {
@@ -866,8 +901,8 @@ private:
 
         sm.normalizeDigitalOffOnlyRules();
 
-        out[OUT_CH4]->enabled = ch4Enabled;
-        out[OUT_CH5]->enabled = ch5Enabled;
+        if (out[OUT_CH4]) out[OUT_CH4]->enabled = ch4Enabled;
+        if (out[OUT_CH5]) out[OUT_CH5]->enabled = ch5Enabled;
 
         for (int si = 0; si < SEN_COUNT; si++) {
             SensorBase* sen = sm.s[si];
@@ -888,7 +923,7 @@ private:
         const bool anyUnackedAlarm = hasUnackedAlarms(sm);
         const bool soundRequired = anyUnackedAlarm || _safetyAlarmActive;
 
-        if (ch5Enabled && !soundMuted && soundRequired) {
+        if (ch5Enabled && !soundMuted && soundRequired && out[OUT_CH5]) {
             newWant[OUT_CH5] |= (1u << RULEIDX_SOUND);
         }
 
@@ -903,8 +938,28 @@ private:
             _applyCurrent((uint8_t)oi);
         }
 
-        out[OUT_CH4]->setBellPatternActive(ch4Enabled && !soundMuted && soundRequired);
+        if (out[OUT_CH4]) out[OUT_CH4]->setBellPatternActive(ch4Enabled && !soundMuted && soundRequired);
+#if LIGHT_PROFILE
+        _lastActiveAlarm = (activeAlarmCount(sm) > 0) || _safetyAlarmActive;
+#endif
     }
+
+    bool _lastActiveAlarm = false;
+#if LIGHT_PROFILE
+    void _writeRelayLed(bool on) {
+        digitalWrite(PIN_LIGHT_RELAY_LED,
+                     (on && relayLedIndicatorEnabled) == LIGHT_RELAY_LED_ACTIVE_HIGH ? HIGH : LOW);
+    }
+    void _writeAlarmLed(bool on) {
+        digitalWrite(PIN_LIGHT_ALARM_LED,
+                     (on && alarmLedIndicatorEnabled) == LIGHT_ALARM_LED_ACTIVE_HIGH ? HIGH : LOW);
+    }
+    void _updateLedIndicators(const SensorManager& sm) {
+        _lastActiveAlarm = (activeAlarmCount(sm) > 0) || _safetyAlarmActive;
+        _writeRelayLed(out[OUT_CH1] && out[OUT_CH1]->actualOn());
+        _writeAlarmLed(_lastActiveAlarm);
+    }
+#endif
 
     void _logRelayCommand(EventLog* log, SensorManager* sm, uint8_t outIdx,
                           RelayCommand cmd, bool accepted, const char* detail)

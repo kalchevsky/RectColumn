@@ -1729,13 +1729,14 @@ function renderCalExpert(){
 function renderSound(){
   stopPoll();
   var s = state.lastState || {};
-  var soundVisible = outputVisible('CH4') || outputVisible('CH5');
+  var soundVisible = outputVisible('CH4') || outputVisible('CH5') || !outputVisible('CH2');
   var html = '<div class="app"><div class="panel"><h2>Конфигурация звука</h2>';
   html += renderMessages('');
   html += '<div class="small">CH4 - внешний звонок. CH5 - встроенный зуммер.</div>';
   if (!soundVisible) html += '<div class="error-box">' + esc(SCHEMA_UNAVAILABLE_TEXT) + '</div>';
   if (outputVisible('CH4')) html += '<label style="display:flex;gap:8px;align-items:center;margin-top:12px"><input id="snd_ch4_en" type="checkbox"' + (s.ch4Enabled ? ' checked' : '') + '><span>CH4: звонок включён</span></label>';
   if (outputVisible('CH5')) html += '<label style="display:flex;gap:8px;align-items:center;margin-top:12px"><input id="snd_ch5_en" type="checkbox"' + (s.ch5Enabled ? ' checked' : '') + '><span>CH5: зуммер включён</span></label>';
+  if (!outputVisible('CH2')) html += '<label style="display:flex;gap:8px;align-items:center;margin-top:12px"><input id="snd_alarm_led" type="checkbox"' + (s.alarmLedIndicatorEnabled !== false ? ' checked' : '') + '><span>LED индикация</span></label>';
   html += '<button class="btn light" onclick="testSound()">Проверить звук</button>';
   html += '<div class="small">Квитирование выполняется кнопкой на главной странице и отключает только текущий звук тревоги. Настройки звука ниже определяют, какие звуковые каналы доступны системе.</div>';
   html += '<button class="btn" onclick="saveSoundConfig()">Сохранить настройки звука</button>';
@@ -1749,6 +1750,7 @@ function saveSoundConfig(){
   var payload = {};
   if (outputVisible('CH4')) payload.ch4Enabled = !!(byId('snd_ch4_en') && byId('snd_ch4_en').checked);
   if (outputVisible('CH5')) payload.ch5Enabled = !!(byId('snd_ch5_en') && byId('snd_ch5_en').checked);
+  if (!outputVisible('CH2')) payload.alarmLedIndicatorEnabled = !!(byId('snd_alarm_led') && byId('snd_alarm_led').checked);
   api('/api/v1/output/config', {
     method:'POST',
     headers:{'Content-Type':'application/json'},
@@ -1820,6 +1822,7 @@ function renderOutputConfigView(cfg){
     html += '<option value="cool">Охлаждение</option>';
     html += '</select></div>';
   });
+  if (!outputVisible('CH2')) html += '<label style="display:flex;gap:8px;align-items:center;margin-top:12px"><input id="relay_led_en" type="checkbox"' + (cfg.relayLedIndicatorEnabled !== false ? ' checked' : '') + '><span>Индикация реле: вкл/выкл</span></label>';
   html += '<button class="btn" onclick="saveOutputConfig()">Сохранить</button>';
   html += '<button class="btn light" onclick="go(\'#/menu\')">Назад</button>';
   html += '</div></div>';
@@ -1842,6 +1845,7 @@ function renderOutputConfig(){
     var cfg = ok ? { outputs: list } : {
       outputs: (state.lastState && state.lastState.outputs) ? state.lastState.outputs : []
     };
+    if (res && !Array.isArray(res)) cfg = res;
     if (!ok) {
       setNotice('Не удалось загрузить конфигурацию выходов. Показываю текущий режим по состоянию устройства.');
     }
@@ -1856,6 +1860,7 @@ function saveOutputConfig(){
       return { id:id, mode:outputConfigModeValue((byId('out_mode_' + id) && byId('out_mode_' + id).value) || 'heat') };
     })
   };
+  if (!outputVisible('CH2')) payload.relayLedIndicatorEnabled = !!(byId('relay_led_en') && byId('relay_led_en').checked);
   api('/api/v1/output/config', {
     method:'POST',
     headers:{'Content-Type':'application/json'},

@@ -16,13 +16,19 @@
 #define SERIAL_DEBUG_SENSOR_SNAPSHOT  0
 
 // ─── Версия прошивки / API ───────────────────────────────────────
-#define FW_VERSION      "1.7.13"
+#define FW_VERSION      "1.7.14"
 #define API_VERSION     "v1"
 #define AP_SSID_DEF     "Control_System"
 #define DEVICE_NAME     "RectColumn"
 #define PROFILE_FULL           0
 #define PROFILE_ECONOMY_LIGHT  1
 #define ACTIVE_PROFILE   PROFILE_FULL
+
+#if ACTIVE_PROFILE == PROFILE_ECONOMY_LIGHT
+  #define LIGHT_PROFILE 1
+#else
+  #define LIGHT_PROFILE 0
+#endif
 // ─── Режим общей функции GPIO35 ──────────────────────────────────
 // GPIO35 не может одновременно работать как аналоговый вход V
 // и как вход подтверждения WER_CH2.
@@ -98,6 +104,16 @@
 #define PIN_ACK_BUTTON 14
 #define ACK_BUTTON_ACTIVE_LOW 1
 #define ACK_BUTTON_DEBOUNCE_MS 50UL
+
+// Экспериментальная распайка платы LIGHT. GPIO требуют подтверждения схемой.
+#define LIGHT_RELAY_LED_DEFAULT_ON  true
+#define LIGHT_ALARM_LED_DEFAULT_ON  true
+#if LIGHT_PROFILE
+  #define PIN_LIGHT_RELAY_LED       18
+  #define PIN_LIGHT_ALARM_LED       32
+  #define LIGHT_RELAY_LED_ACTIVE_HIGH true
+  #define LIGHT_ALARM_LED_ACTIVE_HIGH true
+#endif
 
 static_assert(PIN_CH5 != PIN_WER_CH1, "PIN_CH5 conflicts with WER_CH1");
 static_assert(PIN_CH5 != PIN_WER_CH2, "PIN_CH5 conflicts with WER_CH2");
