@@ -24,16 +24,21 @@ public:
 
         t1 = new TempSensor("T1", PIN_T1);
         t2 = new TempSensor("T2", PIN_T2);
+#if !LIGHT_PROFILE
         t3 = new TempSensor("T3", PIN_T3);
+#endif
         dt = new VirtualSensor(t1, t2);
+#if !LIGHT_PROFILE
         p  = new PressureSensor();
         l  = new DigitalSensor("L", PIN_L, false);
         f  = new DigitalSensor("F", PIN_F, false);
         c  = new AnalogSensor("C", PIN_C, false, false);
         v  = new AnalogSensor("V", PIN_V, false, (GPIO35_MODE == GPIO35_MODE_WER_CH2));
         c->thresholdPercentInput = true;
+#endif
 
         // Базовые задержки по умолчанию для текущей логики проекта.
+#if !LIGHT_PROFILE
         l->alarmDelayMs = DIGITAL_ALARM_DEBOUNCE_MS;
         l->alarm[0].enabled = true;
         l->ctrlDelayMs  = SAFETY_LEVEL_SHUTDOWN_MS;
@@ -42,6 +47,7 @@ public:
         f->ctrlDelayMs  = 5000UL;
         c->alarmDelayMs = 1000UL;
         c->ctrlDelayMs  = 0;
+#endif
 
         // ── Умолчания правил управления для цифровых датчиков ─────────────
         // Датчики L и F двоичные (value = 0.0 или 1.0).
@@ -59,16 +65,20 @@ public:
         //   Т.е. датчик может только запрещать (OF=1), никогда не требует включения (ON=0).
         //
         // ctrl[oi].enabled остаётся false — оператор включает нужные каналы через UI.
+ #if !LIGHT_PROFILE
         for (uint8_t oi = OUT_CH1; oi <= OUT_CH3; oi++) {
             l->ctrl[oi].logic  = LOGIC_COOL;
             l->ctrl[oi].minVal = 0.5f;
             l->ctrl[oi].maxVal = 2.0f;
         }
+#endif
+ #if !LIGHT_PROFILE
         for (uint8_t oi = OUT_CH1; oi <= OUT_CH3; oi++) {
             f->ctrl[oi].logic  = LOGIC_COOL;
             f->ctrl[oi].minVal = 0.5f;
             f->ctrl[oi].maxVal = 2.0f;
         }
+#endif
         normalizeDigitalOffOnlyRules();
         normalizeSchemeControlRules();
 

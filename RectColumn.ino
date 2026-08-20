@@ -129,8 +129,9 @@ static String sensorAlarmClearedLogText(uint8_t sensorIdx) {
 }
 
 static void initPrevState() {
-    for (int i = 0; i < OUT_COUNT; i++) prevOutState[i] = outputMgr.out[i]->isOn();
+    for (int i = 0; i < OUT_COUNT; i++) prevOutState[i] = outputMgr.out[i] ? outputMgr.out[i]->isOn() : false;
     for (int i = 0; i < SEN_COUNT; i++) {
+        if (!sensorMgr.s[i]) continue;
         prevSenError[i]   = sensorMgr.s[i]->error;
         prevSenPresent[i] = sensorMgr.s[i]->present;
         prevSenLatched[i] = sensorMgr.s[i]->sensorErrorLatched;
@@ -141,6 +142,7 @@ static void initPrevState() {
 static void logSensorTransitions() {
     for (int i = 0; i < SEN_COUNT; i++) {
         SensorBase* s = sensorMgr.s[i];
+        if (!s) continue;
 
         if (s->tracksSensorLoss()) {
             prevSenPresent[i] = s->present;
@@ -186,6 +188,7 @@ static void logSensorTransitions() {
 
 static void logOutputTransitions() {
     for (int i = 0; i < OUT_COUNT; i++) {
+        if (!outputMgr.out[i]) continue;
         const bool cur = outputMgr.out[i]->isOn();
         if (cur != prevOutState[i]) {
             prevOutState[i] = cur;
