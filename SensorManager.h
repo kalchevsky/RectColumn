@@ -98,6 +98,15 @@ public:
         return outIdx == OUT_CH1 || outIdx == OUT_CH2 || outIdx == OUT_CH3;
     }
 
+    static constexpr bool isSensorActiveInProfile(uint8_t sensorIdx) {
+#if ACTIVE_PROFILE == PROFILE_ECONOMY_LIGHT
+        return sensorIdx == SEN_T1 || sensorIdx == SEN_T2 || sensorIdx == SEN_DT;
+#else
+        (void)sensorIdx;
+        return true;
+#endif
+    }
+
     static bool isDigitalOffOnlySensorIndex(uint8_t sensorIdx) {
         return sensorIdx == SEN_L || sensorIdx == SEN_F;
     }
@@ -162,6 +171,7 @@ public:
         normalizeDigitalOffOnlyRules();
         normalizeSchemeControlRules();
         for (int i = 0; i < SEN_COUNT; i++) {
+            if (!isSensorActiveInProfile((uint8_t)i)) continue;
             if (s[i]) s[i]->begin();
         }
     }
@@ -172,6 +182,7 @@ public:
     #if EMU_MODE
         const uint32_t now = millis();
         for (int i = 0; i < SEN_COUNT; i++) {
+            if (!isSensorActiveInProfile((uint8_t)i)) continue;
             if (s[i] && s[i]->serviceSensorErrorState(now)) {
                 alarmChanged |= (1u << i);
             }
@@ -180,6 +191,7 @@ public:
             dt->poll();
         }
         for (int i = 0; i < SEN_COUNT; i++) {
+            if (!isSensorActiveInProfile((uint8_t)i)) continue;
             if (s[i] && s[i]->checkAlarms()) {
                 alarmChanged |= (1u << i);
             }
@@ -194,6 +206,7 @@ public:
         // независимо без искусственной очереди по 1 датчику в секунду.
         for (int ti = 0; ti < 3; ti++) {
             const int idx = _tempIdx[ti];
+            if (!isSensorActiveInProfile((uint8_t)idx)) continue;
             TempSensor* ts = _asTemp(idx);
             if (!ts) continue;
             if (ts->isReadyToRead(now) && ts->readConversion(now)) {
@@ -208,13 +221,14 @@ public:
 
         for (int ti = 0; ti < 3; ti++) {
             const int idx = _tempIdx[ti];
+            if (!isSensorActiveInProfile((uint8_t)idx)) continue;
             TempSensor* ts = _asTemp(idx);
             if (ts && ts->isDueToStart(now)) {
                 ts->startConversion(now);
             }
         }
 
-        if (p && p->isDueToPoll(now)) {
+        if (isSensorActiveInProfile(SEN_P) && p && p->isDueToPoll(now)) {
             p->poll();
             if (p->checkAlarms()) alarmChanged |= (1u << SEN_P);
         }
@@ -222,6 +236,7 @@ public:
         // Даём T1/T2/T3/P шанс подтвердить recovery до публикации
         // sensor-loss, чтобы краткий fault не доходил до UI.
         for (int i = 0; i < SEN_COUNT; i++) {
+            if (!isSensorActiveInProfile((uint8_t)i)) continue;
             if (s[i] && s[i]->serviceSensorErrorState(now)) {
                 alarmChanged |= (1u << i);
             }
@@ -229,6 +244,7 @@ public:
 
         for (int fi = 0; fi < 4; fi++) {
             const int idx = _fastIdx[fi];
+            if (!isSensorActiveInProfile((uint8_t)idx)) continue;
             SensorBase* sen = s[idx];
             const bool due =
                 (idx == SEN_F && f)
