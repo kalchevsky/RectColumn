@@ -16,13 +16,27 @@
 #define SERIAL_DEBUG_SENSOR_SNAPSHOT  0
 
 // ─── Версия прошивки / API ───────────────────────────────────────
-#define FW_VERSION      "1.7.14"
+#define FW_VERSION      "1.7.15"
 #define API_VERSION     "v1"
 #define AP_SSID_DEF     "Control_System"
 #define DEVICE_NAME     "RectColumn"
 #define PROFILE_FULL           0
 #define PROFILE_ECONOMY_LIGHT  1
-#define ACTIVE_PROFILE   PROFILE_FULL
+#ifndef ACTIVE_PROFILE
+  #define ACTIVE_PROFILE   PROFILE_FULL
+#endif
+
+#if ACTIVE_PROFILE == PROFILE_FULL
+  #define ACTIVE_PROFILE_NAME "FULL"
+#elif ACTIVE_PROFILE == PROFILE_ECONOMY_LIGHT
+  #define ACTIVE_PROFILE_NAME "LIGHT"
+#else
+  #error "ACTIVE_PROFILE must be PROFILE_FULL or PROFILE_ECONOMY_LIGHT"
+#endif
+
+static_assert(ACTIVE_PROFILE == PROFILE_FULL ||
+              ACTIVE_PROFILE == PROFILE_ECONOMY_LIGHT,
+              "Unsupported ACTIVE_PROFILE");
 
 #if ACTIVE_PROFILE == PROFILE_ECONOMY_LIGHT
   #define LIGHT_PROFILE 1

@@ -109,12 +109,7 @@ private:
     // LIGHT-профиль: в UI оставляем только T1/T2/dT, CH1/CH5 и WER_CH1.
     // FULL-профиль и старые клиенты получают полный набор id.
     static inline bool _profileSensorVisible(uint8_t i) {
-#if ACTIVE_PROFILE == PROFILE_ECONOMY_LIGHT
-        return (i == SEN_T1 || i == SEN_T2 || i == SEN_DT);
-#else
-        (void)i;
-        return true;
-#endif
+        return SensorManager::isSensorActiveInProfile(i);
     }
 
     static inline bool _profileOutputVisible(uint8_t i) {
@@ -203,6 +198,7 @@ private:
             doc["name"]       = DEVICE_NAME;
             doc["fw"]         = FW_VERSION;
             doc["apiVersion"] = API_VERSION;
+            doc["profile"]    = ACTIVE_PROFILE_NAME;
             doc["emu"]        = EMU_MODE;
             _sendDoc(req, 200, doc);
         });
@@ -1297,7 +1293,7 @@ private:
     // Handlers
     // ------------------------------------------------------------
     void _handleSensorConfig(AsyncWebServerRequest* req, int si, uint8_t* data, size_t len) {
-        if (si < 0 || si >= SEN_COUNT) {
+        if (si < 0 || si >= SEN_COUNT || !_profileSensorVisible((uint8_t)si) || !_sm->s[si]) {
             _sendError(req, 404, "not_found", "sensor not found");
             return;
         }
@@ -1407,7 +1403,7 @@ private:
     }
 
     void _handleSensorAlarm(AsyncWebServerRequest* req, int si, uint8_t* data, size_t len) {
-        if (si < 0 || si >= SEN_COUNT) {
+        if (si < 0 || si >= SEN_COUNT || !_profileSensorVisible((uint8_t)si) || !_sm->s[si]) {
             _sendError(req, 404, "not_found", "sensor not found");
             return;
         }
@@ -1444,7 +1440,7 @@ private:
     }
 
     void _handleSensorCtrl(AsyncWebServerRequest* req, int si, uint8_t* data, size_t len) {
-        if (si < 0 || si >= SEN_COUNT) {
+        if (si < 0 || si >= SEN_COUNT || !_profileSensorVisible((uint8_t)si) || !_sm->s[si]) {
             _sendError(req, 404, "not_found", "sensor not found");
             return;
         }
@@ -2223,6 +2219,7 @@ private:
         root["name"]       = DEVICE_NAME;
         root["fw"]         = FW_VERSION;
         root["apiVersion"] = API_VERSION;
+        root["profile"]    = ACTIVE_PROFILE_NAME;
         root["emu"]        = EMU_MODE;
         root["synced"]     = _tb->isSynced();
         root["time"]       = _tb->nowStr();
@@ -2357,6 +2354,7 @@ private:
         root["emu"] = EMU_MODE;
         root["fw"] = FW_VERSION;
         root["apiVersion"] = API_VERSION;
+        root["profile"] = ACTIVE_PROFILE_NAME;
     }
 
     void _buildStateTopRuntime(JsonObject root) {

@@ -131,6 +131,7 @@ static String sensorAlarmClearedLogText(uint8_t sensorIdx) {
 static void initPrevState() {
     for (int i = 0; i < OUT_COUNT; i++) prevOutState[i] = outputMgr.out[i] ? outputMgr.out[i]->isOn() : false;
     for (int i = 0; i < SEN_COUNT; i++) {
+        if (!SensorManager::isSensorActiveInProfile((uint8_t)i)) continue;
         if (!sensorMgr.s[i]) continue;
         prevSenError[i]   = sensorMgr.s[i]->error;
         prevSenPresent[i] = sensorMgr.s[i]->present;
@@ -141,6 +142,7 @@ static void initPrevState() {
 
 static void logSensorTransitions() {
     for (int i = 0; i < SEN_COUNT; i++) {
+        if (!SensorManager::isSensorActiveInProfile((uint8_t)i)) continue;
         SensorBase* s = sensorMgr.s[i];
         if (!s) continue;
 
@@ -274,6 +276,7 @@ void setup() {
     printBootResetDiagnostics(resetReason);
     Serial.println();
     Serial.println("=== " DEVICE_NAME " " FW_VERSION " ===");
+    Serial.println(String("Профиль сборки: ") + ACTIVE_PROFILE_NAME);
     Serial.println(String("Причина сброса: ") + resetReasonText(resetReason));
 
     eventLog.begin(&timeBase);
