@@ -645,6 +645,11 @@ function outputVisible(id){
   if (!s || !Array.isArray(s.outputIds)) return true;
   return s.outputIds.indexOf(id) !== -1;
 }
+function outputConfigTitle(){
+  return outputVisible('CH2')
+    ? 'Конфигурация выходов CH1–CH3'
+    : 'Конфигурация выхода CH1';
+}
 function routeAllowed(route, param){
   if (route === 'sensor' && param) return sensorVisible(param);
   if (route === 'sensorAlarm' && param) return sensorVisible(param);
@@ -1594,7 +1599,7 @@ function renderMenu(){
   if (schemaUnavailable()) html += '<div class="error-box">' + esc(SCHEMA_UNAVAILABLE_TEXT) + '</div>';
   html += '<button class="btn" onclick="location.href=\'/wifi\'">Конфигурация WiFi</button>';
   html += '<button class="btn" onclick="go(\'#/sound\')">Конфигурация звука</button>';
-  html += '<button class="btn" onclick="go(\'#/outputConfig\')">Конфигурация выходов CH1–CH3</button>';
+  html += '<button class="btn" onclick="go(\'#/outputConfig\')">' + outputConfigTitle() + '</button>';
   if (sensorVisible('C')) html += '<button class="btn" onclick="go(\'#/cal-basic\');render();">Датчик тока</button>';
   html += '<button class="btn" onclick="go(\'#/notifications\')">Уведомления</button>';
   html += '<button class="btn" onclick="go(\'#/log\')">Лог</button>';
@@ -1809,7 +1814,7 @@ function renderOutputConfigView(cfg){
     if (effective) return effective;
     return 'heat';
   }
-  var html = '<div class="app"><div class="panel"><h2>Конфигурация выходов CH1–CH3</h2>';
+  var html = '<div class="app"><div class="panel"><h2>' + outputConfigTitle() + '</h2>';
   html += renderMessages('');
   html += '<div class="small">CH4 и CH5 вынесены в раздел «Конфигурация звука».</div>';
   if (!visibleOutputIds.length) html += '<div class="error-box">' + esc(SCHEMA_UNAVAILABLE_TEXT) + '</div>';
