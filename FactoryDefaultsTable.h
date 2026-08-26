@@ -13,6 +13,7 @@ inline constexpr const char* WIFI_STA_SSID = "";
 inline constexpr const char* WIFI_STA_PASS = "";
 inline constexpr bool WIFI_AP_ONLY = true;
 inline constexpr bool WIFI_WIZARD_DONE = false;
+inline constexpr bool WIFI_LED_OFF = false;
 inline constexpr bool SYSTEM_FACTORY_DONE = true;
 
 inline constexpr uint8_t OUTPUT_CH_MODE[3] = {

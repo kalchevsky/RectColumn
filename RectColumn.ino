@@ -372,6 +372,8 @@ void loop() {
         eventLog.add("factory reset start",
                      sensorMgr.getT1(), sensorMgr.getT2(), sensorMgr.getT3(), sensorMgr.getDT());
         FactoryDefaults::applyFactoryDefaults(storage, sensorMgr, outputMgr, &eventLog);
+        wifiLedOff = FactoryDefaultsTable::WIFI_LED_OFF;
+        updateWiFiLed();
         // Подтверждающий сигнал после factory reset: beepAcceptedCommand() здесь
         // уже заглушён дефолтами soundMuted/ch5Enabled, поэтому даём разовый pulse.
         Output* buzzer = (OUT_CH5 < OUT_COUNT) ? outputMgr.out[OUT_CH5] : nullptr;

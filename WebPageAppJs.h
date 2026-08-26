@@ -2030,6 +2030,16 @@ function logTimeText(e){
   return t;
 }
 
+function formatLogSnapshot(entry){
+  var fields = [
+    'T1=' + esc(entry.T1),
+    'T2=' + esc(entry.T2)
+  ];
+  if (sensorVisible('T3')) fields.push('T3=' + esc(entry.T3));
+  fields.push('dT=' + esc(entry.dT));
+  return fields.join(' · ');
+}
+
 function renderLogPage(){
   stopPoll();
   var html = '<div class="app log-app"><div class="panel log-panel"><h2>Лог</h2>';
@@ -2054,7 +2064,7 @@ function renderLogPage(){
       html += '<div style="font-size:18px;font-weight:700;margin-top:4px">' + esc(translateLogEventRu(ev)) + '</div>';
       if (typeof e.T1 !== 'undefined' || typeof e.T2 !== 'undefined' || typeof e.T3 !== 'undefined' || typeof e.dT !== 'undefined') {
         html += '<div class="small" style="margin-top:6px">';
-        html += 'T1=' + esc(e.T1) + ' · T2=' + esc(e.T2) + ' · T3=' + esc(e.T3) + ' · dT=' + esc(e.dT);
+        html += formatLogSnapshot(e);
         html += '</div>';
       }
       html += '</div>';

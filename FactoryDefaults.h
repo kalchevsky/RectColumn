@@ -185,6 +185,8 @@ inline bool applyFactoryDefaults(Storage& storage,
     );
     ok = ok && storage.saveWifiApOnlyChecked(FactoryDefaultsTable::WIFI_AP_ONLY);
     ok = ok && storage.saveWifiWizardDoneChecked(FactoryDefaultsTable::WIFI_WIZARD_DONE);
+    const bool wifiLedOk = storage.saveWifiLedOffChecked(FactoryDefaultsTable::WIFI_LED_OFF);
+    ok = wifiLedOk && ok;
     if (ok) {
         ok = storage.saveFactoryDone(FactoryDefaultsTable::SYSTEM_FACTORY_DONE);
     }
