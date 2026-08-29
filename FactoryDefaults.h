@@ -165,7 +165,7 @@ inline bool applyFactoryDefaults(Storage& storage,
     _applyOffOnlySensor(sm.v);
     _applyOffOnlySensor(sm.c);
     if (sm.c) {
-        sm.c->alarm[0].threshold = FactoryDefaultsTable::CURRENT_ALARM_THRESHOLD_PERCENT;
+        sm.c->alarm[0].threshold = FactoryDefaultsTable::CURRENT_ALARM_THRESHOLD_AMPS;
     }
 
     _syncCtrlLogicFromOutputModes(sm, om);

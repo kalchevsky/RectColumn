@@ -70,9 +70,8 @@ public:
     uint32_t alarmDelayMs = 0;
     uint32_t ctrlDelayMs  = 0;
 
-    // Для некоторых аналоговых датчиков пороги в UI задаются не в "сырых"
-    // единицах ADC, а в процентах. Тогда 0..100 автоматически
-    // переводятся во внутренний диапазон 0..4095.
+    // Для некоторых аналоговых датчиков control rules задаются в процентах.
+    // Тогда 0..100 автоматически переводятся во внутренний диапазон ADC.
     bool     thresholdPercentInput = false;
 
     // Для F (и при необходимости других датчиков) можно подменить
@@ -156,7 +155,7 @@ public:
                 a.triggered = false;
                 _alarmCandidateSinceMs[i] = 0;
             } else {
-                const float cmpThreshold = effectiveThreshold(a.threshold);
+                const float cmpThreshold = effectiveAlarmThreshold(a.threshold);
                 const bool rawTriggered = a.isMax ? (value > cmpThreshold)
                                                   : (value < cmpThreshold);
                 if (!rawTriggered) {
@@ -295,6 +294,10 @@ public:
             return (threshold * 4095.0f) / 100.0f;
         }
         return threshold;
+    }
+
+    virtual float effectiveAlarmThreshold(float threshold) const {
+        return effectiveThreshold(threshold);
     }
 
     int evalCtrl(uint8_t outIdx, bool invalidMeansOff = true, bool controlGate = true) {
@@ -928,6 +931,21 @@ public:
         periodMs = DEF_FAST_PERIOD_MS;
     }
 
+    void setCurrentCalibration(float a, float b) {
+        _currentCalA = a;
+        _currentCalB = b;
+        _thresholdsInAmps = true;
+    }
+
+    float effectiveAlarmThreshold(float threshold) const override {
+        if (!_thresholdsInAmps || !isfinite(threshold) ||
+            !isfinite(_currentCalA) || !isfinite(_currentCalB) ||
+            fabsf(_currentCalA) < 0.000001f) {
+            return SensorBase::effectiveAlarmThreshold(threshold);
+        }
+        return (threshold - _currentCalB) / _currentCalA;
+    }
+
     void begin() override {
         present = !_disabledByConfig;
         error   = _disabledByConfig;
@@ -973,4 +991,7 @@ private:
     uint8_t _pin;
     bool    _adc2WifiSensitive = false;
     bool    _disabledByConfig  = false;
+    bool    _thresholdsInAmps = false;
+    float   _currentCalA = 1.0f;
+    float   _currentCalB = 0.0f;
 };

@@ -2519,36 +2519,12 @@ function loadCurrentCalStateData(cb, forceReload){
   });
 }
 
-function currentRawFromPercent(percent){
-  var n = Number(percent);
-  if (!isFinite(n)) return NaN;
-  if (n < 0) n = 0;
-  if (n > 100) n = 100;
-  return (n * 4095) / 100;
-}
-function currentPercentFromRaw(raw){
-  var n = Number(raw);
-  if (!isFinite(n)) return NaN;
-  if (n < 0) n = 0;
-  if (n > 4095) n = 4095;
-  return (n * 100) / 4095;
-}
 function ampsFromRaw(raw){
   var n = Number(raw);
   if (!isFinite(n)) return NaN;
   if (n < 0) n = 0;
   if (n > 4095) n = 4095;
   return (currentCalA() * n) + currentCalB();
-}
-function ampsFromPercent(percent){
-  var raw = currentRawFromPercent(percent);
-  if (!isFinite(raw)) return NaN;
-  return ampsFromRaw(raw);
-}
-function percentFromAmps(amps){
-  var n = Number(amps);
-  if (!isFinite(n)) return NaN;
-  return (((n - currentCalB()) / currentCalA()) * 100) / 4095;
 }
 function tplCurrentValue(amps){
   if (amps === null || typeof amps === 'undefined') return '—';
@@ -2561,16 +2537,6 @@ function tplCurrentFromApi(amps){
   var value = Number(amps);
   if (!isFinite(value)) return '—';
   return tplCurrentValue(value);
-}
-function tplCurrentFromPercent(percent){
-  var amps = ampsFromPercent(percent);
-  if (!isFinite(amps)) return '—';
-  return tplCurrentValue(amps);
-}
-function tplCurrentPercentFromRaw(raw){
-  var percent = currentPercentFromRaw(raw);
-  if (!isFinite(percent)) return '—';
-  return tplComma2(percent) + ' %';
 }
 function tplCurrentRawValue(raw){
   if (raw === null || typeof raw === 'undefined') return '—';
@@ -3669,7 +3635,6 @@ function editAlarmThreshold(id, key, which){
   else value = (which === 'min') ? ui.al2.min : ui.al2.max;
   var title = 'Введите значение (формат XX,XX)';
   if (id === 'C') {
-    value = ampsFromPercent(value);
     title = 'Введите ток, А (формат XX,XX)';
   }
   openNumEditor({
@@ -3860,9 +3825,6 @@ function saveNumEditor(){
       idx = 1; enabled = ui.al2.enabled; isMax = false;
     } else if (ctx.mode === 'alarm-al2-max') {
       idx = 3; enabled = ui.al2.enabled; isMax = true;
-    }
-    if (ctx.sensorId === 'C') {
-      value = percentFromAmps(value);
     }
     postAlarm(ctx.sensorId, idx, enabled, value, isMax, function(res){
       state.numEdit = null;
@@ -4085,7 +4047,7 @@ function renderSensorAlarm(id){
 
   if (ui.cMinOnly) {
     html.push('<section class="alarm-row">');
-    html.push('<a class="cell value' + alarmValueClass(ui.al1.enabled, ui.al1.minTriggered) + '" href="#" onclick="event.preventDefault();editAlarmThreshold(\'' + esc(id) + '\',\'al1\',\'min\')">' + esc(tplCurrentFromPercent(ui.al1.min)) + '</a>');
+    html.push('<a class="cell value' + alarmValueClass(ui.al1.enabled, ui.al1.minTriggered) + '" href="#" onclick="event.preventDefault();editAlarmThreshold(\'' + esc(id) + '\',\'al1\',\'min\')">' + esc(tplCurrentValue(ui.al1.min)) + '</a>');
     html.push('<a class="cell center" href="#" onclick="event.preventDefault();toggleAlarmPref(\'' + esc(id) + '\',\'al1\')"><div class="al-name' + alarmNameClass(ui.al1.enabled, ui.al1.minTriggered) + '">ALmin</div></a>');
     html.push('<div class="cell empty">—</div>');
     html.push('</section>');

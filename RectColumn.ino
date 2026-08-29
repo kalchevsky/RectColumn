@@ -288,7 +288,10 @@ void setup() {
     eventLog.add("Версия прошивки " FW_VERSION);
     eventLog.add(String("Загрузка: причина сброса ") + resetReasonText(resetReason));
 
-    storage.loadSensors(sensorMgr);
+    Storage::CurrentCalData currentCal{};
+    (void)storage.loadCurrentCal(currentCal);
+    sensorMgr.setCurrentCalibration(currentCal.a, currentCal.b);
+    storage.loadSensors(sensorMgr, currentCal);
     storage.loadOutputs(outputMgr);
     FactoryDefaults::prepareFactoryDefaultsMigration(storage);
     if (FactoryDefaults::needsFactoryDefaults(storage)) {

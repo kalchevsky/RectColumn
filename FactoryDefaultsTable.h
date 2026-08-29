@@ -88,11 +88,7 @@ inline constexpr uint32_t OFF_ONLY_ALARM_DELAY_MS = 0UL;
 inline constexpr uint32_t OFF_ONLY_CTRL_DELAY_MS = 0UL;
 inline constexpr bool OFF_ONLY_CTRL_ENABLED = false;
 
-// Ток нагрузки: 0.5 A -> проценты по калибровке фронтенда:
-// percent = amps*SLOPE + ZERO = 0.5*1.67 + 31.27 = 32.105
-// Калибровка (31.27/1.67/0.05) сейчас живёт только в WEB_SRC/page-app.js.
-// TODO(backlog): вынести калибровку тока в единый C++-источник.
-inline constexpr float CURRENT_ALARM_THRESHOLD_PERCENT = 32.105f;
+inline constexpr float CURRENT_ALARM_THRESHOLD_AMPS = 0.5f;
 
 inline constexpr bool NOTIFY_ENABLED = false;
 inline constexpr const char* NOTIFY_URL = "";

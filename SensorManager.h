@@ -35,6 +35,7 @@ public:
         c  = new AnalogSensor("C", PIN_C, false, false);
         v  = new AnalogSensor("V", PIN_V, false, (GPIO35_MODE == GPIO35_MODE_WER_CH2));
         c->thresholdPercentInput = true;
+        c->setCurrentCalibration(1.0f, 0.0f);
 #endif
 
         // Базовые задержки по умолчанию для текущей логики проекта.
@@ -92,6 +93,15 @@ public:
         s[SEN_C]  = c;
         s[SEN_V]  = v;
         normalizeSchemeControlRules();
+    }
+
+    void setCurrentCalibration(float a, float b) {
+#if !LIGHT_PROFILE
+        if (c) c->setCurrentCalibration(a, b);
+#else
+        (void)a;
+        (void)b;
+#endif
     }
 
     static bool isMainOutputIndex(uint8_t outIdx) {

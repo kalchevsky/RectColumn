@@ -940,7 +940,7 @@ private:
 
         if (out[OUT_CH4]) out[OUT_CH4]->setBellPatternActive(ch4Enabled && !soundMuted && soundRequired);
 #if LIGHT_PROFILE
-        _lastActiveAlarm = (activeAlarmCount(sm) > 0) || _safetyAlarmActive;
+        _lastActiveAlarm = hasUnackedAlarms(sm) || _safetyAlarmActive;
 #endif
     }
 
@@ -955,7 +955,7 @@ private:
                      (on && alarmLedIndicatorEnabled) == LIGHT_ALARM_LED_ACTIVE_HIGH ? HIGH : LOW);
     }
     void _updateLedIndicators(const SensorManager& sm) {
-        _lastActiveAlarm = (activeAlarmCount(sm) > 0) || _safetyAlarmActive;
+        _lastActiveAlarm = hasUnackedAlarms(sm) || _safetyAlarmActive;
         _writeRelayLed(out[OUT_CH1] && out[OUT_CH1]->actualOn());
         _writeAlarmLed(_lastActiveAlarm);
     }

@@ -52,6 +52,7 @@ public:
         Storage::CurrentCalData calData{};
         (void)_stor->loadCurrentCal(calData);
         _loadCurrentCalState(calData);
+        _syncCurrentCalibration();
 
         _installCors();
         _registerServicePages();
@@ -2962,6 +2963,7 @@ private:
 
         _recomputeCalibration();
         _recomputeMeanSlope();
+        _syncCurrentCalibration();
     }
 
     void _loadCurrentCalState(const Storage::CurrentCalData& data) {
@@ -2985,6 +2987,7 @@ private:
         }
         _calPointCount = copyCount;
         _recomputeCalibration();
+        _syncCurrentCalibration();
     }
 
     Storage::CurrentCalData _buildCurrentCalData() const {
@@ -3023,6 +3026,7 @@ private:
         _calPointCount++;
         _recomputeCalibration();
         _recomputeMeanSlope();
+        _syncCurrentCalibration();
         return true;
     }
 
@@ -3043,6 +3047,7 @@ private:
 
         _recomputeCalibration();
         _recomputeMeanSlope();
+        _syncCurrentCalibration();
         return true;
     }
 
@@ -3189,6 +3194,10 @@ private:
 
     float _currentRaw() const {
         return _sm ? _sm->getC() : NAN;
+    }
+
+    void _syncCurrentCalibration() {
+        if (_sm) _sm->setCurrentCalibration(_currentCalA, _currentCalB);
     }
 
     float _ampsFromRaw(float raw) const {

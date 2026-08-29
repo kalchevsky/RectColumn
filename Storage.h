@@ -195,7 +195,7 @@ public:
         (void)saveSensorsChecked(sm);
     }
 
-    void loadSensors(SensorManager& sm) {
+    void loadSensors(SensorManager& sm, const CurrentCalData& currentCal) {
         Preferences p;
         if (!_openPrefs(p, "sensors", true)) {
             _sanitizeSensors(sm);
@@ -212,6 +212,17 @@ public:
             return;
         }
 
+        SensorsBlobV3 blobV3{};
+        const bool hasBlobV3 = _readBlob(p, "blob", blobV3, 3U)
+                            && (blobV3.sensorCount == SEN_COUNT);
+        if (hasBlobV3) {
+            p.end();
+            _applySensorsBlobGeneric(sm, blobV3);
+            _sanitizeSensors(sm);
+            _migrateCurrentThresholds(sm, currentCal);
+            return;
+        }
+
         SensorsBlobV2 blobV2{};
         const bool hasBlobV2 = _readBlob(p, "blob", blobV2, 2U)
                             && (blobV2.sensorCount == SEN_COUNT);
@@ -219,7 +230,7 @@ public:
             p.end();
             _applySensorsBlobGeneric(sm, blobV2);
             _sanitizeSensors(sm);
-            _migrateSensorsToBlob(sm);
+            _migrateCurrentThresholds(sm, currentCal);
             return;
         }
 
@@ -230,7 +241,7 @@ public:
             p.end();
             _applySensorsBlobGeneric(sm, blobV1);
             _sanitizeSensors(sm);
-            _migrateSensorsToBlob(sm);
+            _migrateCurrentThresholds(sm, currentCal);
             return;
         }
 
@@ -239,7 +250,13 @@ public:
         p.end();
 
         _sanitizeSensors(sm);
-        if (hasLegacy) _migrateSensorsToBlob(sm);
+        if (hasLegacy) _migrateCurrentThresholds(sm, currentCal);
+    }
+
+    void loadSensors(SensorManager& sm) {
+        CurrentCalData currentCal{};
+        (void)loadCurrentCal(currentCal);
+        loadSensors(sm, currentCal);
     }
 
     bool saveOutputConfigChecked(OutputManager& om) {
@@ -469,7 +486,7 @@ public:
 private:
     // Compact blobs avoid exhausting the default NVS partition
     // with hundreds of per-field sensor keys.
-    static constexpr uint16_t SENSOR_BLOB_VERSION = 3;
+    static constexpr uint16_t SENSOR_BLOB_VERSION = 4;
     static constexpr uint16_t OUTPUT_BLOB_VERSION = 3;
 
     struct AlarmBlob {
@@ -512,6 +529,12 @@ private:
 
     struct SensorsBlobV2 {
         uint16_t version = 2;
+        uint16_t sensorCount = SEN_COUNT;
+        SensorBlob sensors[SEN_COUNT];
+    };
+
+    struct SensorsBlobV3 {
+        uint16_t version = 3;
         uint16_t sensorCount = SEN_COUNT;
         SensorBlob sensors[SEN_COUNT];
     };
@@ -839,6 +862,25 @@ private:
             _lastStatus = "Preferences write failed for namespace 'sensors'";
         }
         p.end();
+    }
+
+    void _migrateCurrentThresholds(SensorManager& sm, const CurrentCalData& currentCal) {
+        SensorBase* current = sm.s[SEN_C];
+        const float a = currentCal.a;
+        const float b = currentCal.b;
+        if (!current || !isfinite(a) || !isfinite(b) || fabsf(a) < 0.000001f) {
+            _migrateSensorsToBlob(sm);
+            return;
+        }
+
+        for (uint8_t ai = 0; ai < N_ALARMS; ai++) {
+            const float percent = current->alarm[ai].threshold;
+            if (isfinite(percent)) {
+                const float raw = percent * 4095.0f / 100.0f;
+                current->alarm[ai].threshold = (a * raw) + b;
+            }
+        }
+        _migrateSensorsToBlob(sm);
     }
 
     void _fillOutputsBlob(OutputManager& om, OutputsBlob& blob) {

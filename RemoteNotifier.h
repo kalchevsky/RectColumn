@@ -230,20 +230,6 @@ private:
         }
     }
 
-    static constexpr float CURRENT_SENSOR_CAL_ZERO_PERCENT = 31.27f;
-    static constexpr float CURRENT_SENSOR_CAL_SLOPE_PERCENT_PER_AMP = 1.67f;
-    static constexpr float CURRENT_SENSOR_CAL_MIN_AMPS = 0.05f;
-
-    static float _ampsFromPercent(float percent) {
-        if (!isfinite(percent)) return NAN;
-        const float amps = (percent - CURRENT_SENSOR_CAL_ZERO_PERCENT) / CURRENT_SENSOR_CAL_SLOPE_PERCENT_PER_AMP;
-        return amps < CURRENT_SENSOR_CAL_MIN_AMPS ? 0.0f : amps;
-    }
-
-    static String _formatCurrentAmpsFromPercent(float percent) {
-        return _formatRuNumber(_ampsFromPercent(percent), 2);
-    }
-
     static String _alarmToken(uint8_t bitIdx) {
         switch (bitIdx) {
             case 0: return "min1";
@@ -267,7 +253,8 @@ private:
         switch (si) {
             case SEN_C: {
                 const float thr = (s && bitIdx < N_ALARMS) ? s->alarm[bitIdx].threshold : NAN;
-                return String("Ток нагрузки min (") + _formatCurrentAmpsFromPercent(thr) + " А)";
+                const char* direction = (s && bitIdx < N_ALARMS && s->alarm[bitIdx].isMax) ? "max" : "min";
+                return String("Ток нагрузки ") + direction + " (" + _formatRuNumber(thr, 2) + " А)";
             }
             case SEN_F:
                 return "Проток min";
