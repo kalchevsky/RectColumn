@@ -29,9 +29,14 @@ public:
         Serial.print(EMU_MODE ? "EMU" : "REAL");
         Serial.print("] ");
 
+        bool printedSensor = false;
         for (int si = 0; si < SEN_COUNT; si++) {
-            if (si) Serial.print(" ");
-            printSensorToken(si, sm.s[si]);
+            if (!SensorManager::isSensorActiveInProfile((uint8_t)si)) continue;
+            const SensorBase* sensor = sm.s[si];
+            if (!sensor) continue;
+            if (printedSensor) Serial.print(" ");
+            printSensorToken(si, sensor);
+            printedSensor = true;
         }
 
         for (int ci = 0; ci < 4; ci++) {
@@ -48,6 +53,7 @@ private:
     static void printSensorToken(int idx, const SensorBase* s) {
         Serial.print(SensorManager::sensorName(idx));
         Serial.print("=");
+        if (!s) { Serial.print("DISABLED"); return; }
 
         if (!s->enabled) { Serial.print("DISABLED"); return; }
         if (s->hwLimited && s->error) { Serial.print("ERR"); return; }

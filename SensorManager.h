@@ -32,7 +32,9 @@ public:
         p  = new PressureSensor();
         l  = new DigitalSensor("L", PIN_L, false);
         f  = new DigitalSensor("F", PIN_F, false);
-        c  = new AnalogSensor("C", PIN_C, false, false);
+        c  = new AnalogSensor("C", PIN_C, false, false, true,
+                              CURRENT_ADC_DEFAULT_OFFSET,
+                              CURRENT_ADC_QUAD_DELAY_US);
         v  = new AnalogSensor("V", PIN_V, false, (GPIO35_MODE == GPIO35_MODE_WER_CH2));
         c->thresholdPercentInput = true;
         c->setCurrentCalibration(1.0f, 0.0f);

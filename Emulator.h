@@ -62,48 +62,60 @@ public:
         }
         sm.t2->_lastPollMs = now;
 
-        sm.t3->value = val.T3err ? NAN : val.T3;
-        sm.t3->error = val.T3err;
-        sm.t3->present = !val.T3err;
-        if (val.T3err) {
-            sm.t3->sensorErrorLatched = true;
-            sm.t3->sensorErrorReason = SENSOR_ERR_NO_RESPONSE;
-        } else {
-            sm.t3->sensorErrorReason = SENSOR_ERR_NONE;
+        if (sm.t3) {
+            sm.t3->value = val.T3err ? NAN : val.T3;
+            sm.t3->error = val.T3err;
+            sm.t3->present = !val.T3err;
+            if (val.T3err) {
+                sm.t3->sensorErrorLatched = true;
+                sm.t3->sensorErrorReason = SENSOR_ERR_NO_RESPONSE;
+            } else {
+                sm.t3->sensorErrorReason = SENSOR_ERR_NONE;
+            }
+            sm.t3->_lastPollMs = now;
         }
-        sm.t3->_lastPollMs = now;
 
         sm.dt->poll();
 
-        sm.p->value = val.P;
-        sm.p->error = false;
-        sm.p->present = true;
-        sm.p->sensorErrorReason = SENSOR_ERR_NONE;
-        sm.p->_lastPollMs = now;
+        if (sm.p) {
+            sm.p->value = val.P;
+            sm.p->error = false;
+            sm.p->present = true;
+            sm.p->sensorErrorReason = SENSOR_ERR_NONE;
+            sm.p->_lastPollMs = now;
+        }
 
-        sm.l->value = val.L ? 1.0f : 0.0f;
-        sm.l->error = false;
-        sm.l->present = true;
-        sm.l->sensorErrorReason = SENSOR_ERR_NONE;
-        sm.l->_lastPollMs = now;
+        if (sm.l) {
+            sm.l->value = val.L ? 1.0f : 0.0f;
+            sm.l->error = false;
+            sm.l->present = true;
+            sm.l->sensorErrorReason = SENSOR_ERR_NONE;
+            sm.l->_lastPollMs = now;
+        }
 
-        sm.f->value = val.F ? 1.0f : 0.0f;
-        sm.f->error = false;
-        sm.f->present = true;
-        sm.f->sensorErrorReason = SENSOR_ERR_NONE;
-        sm.f->_lastPollMs = now;
+        if (sm.f) {
+            sm.f->value = val.F ? 1.0f : 0.0f;
+            sm.f->error = false;
+            sm.f->present = true;
+            sm.f->sensorErrorReason = SENSOR_ERR_NONE;
+            sm.f->_lastPollMs = now;
+        }
 
-        sm.c->value = val.C;
-        sm.c->error = false;
-        sm.c->present = true;
-        sm.c->sensorErrorReason = SENSOR_ERR_NONE;
-        sm.c->_lastPollMs = now;
+        if (sm.c) {
+            sm.c->value = val.C;
+            sm.c->error = false;
+            sm.c->present = true;
+            sm.c->sensorErrorReason = SENSOR_ERR_NONE;
+            sm.c->_lastPollMs = now;
+        }
 
-        sm.v->value = val.V;
-        sm.v->error = false;
-        sm.v->present = true;
-        sm.v->sensorErrorReason = SENSOR_ERR_NONE;
-        sm.v->_lastPollMs = now;
+        if (sm.v) {
+            sm.v->value = val.V;
+            sm.v->error = false;
+            sm.v->present = true;
+            sm.v->sensorErrorReason = SENSOR_ERR_NONE;
+            sm.v->_lastPollMs = now;
+        }
     }
 
     void setScenario(const String& name) {

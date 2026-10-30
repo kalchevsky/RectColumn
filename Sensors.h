@@ -922,11 +922,17 @@ private:
 
 class AnalogSensor : public SensorBase {
 public:
-    AnalogSensor(const String& n, uint8_t pin, bool adc2WifiSensitive, bool disabledByConfig)
+    AnalogSensor(const String& n, uint8_t pin, bool adc2WifiSensitive, bool disabledByConfig,
+                 bool acQuadratureMode = false,
+                 long acOffsetCounts = CURRENT_ADC_DEFAULT_OFFSET,
+                 uint32_t acQuadDelayUs = CURRENT_ADC_QUAD_DELAY_US)
         : SensorBase(n),
           _pin(pin),
           _adc2WifiSensitive(adc2WifiSensitive),
-          _disabledByConfig(disabledByConfig)
+          _disabledByConfig(disabledByConfig),
+          _acQuadratureMode(acQuadratureMode),
+          _acOffsetCounts(acOffsetCounts),
+          _acQuadDelayUs(acQuadDelayUs)
     {
         periodMs = DEF_FAST_PERIOD_MS;
     }
@@ -953,6 +959,9 @@ public:
         diagCode  = _disabledByConfig ? SENSOR_DIAG_GPIO35_RESERVED_FOR_WER_CH2 : SENSOR_DIAG_NONE;
         lastValidMs = 0;
         if (_disabledByConfig) value = NAN;
+        if (!_disabledByConfig && _acQuadratureMode) {
+            analogSetPinAttenuation(_pin, ADC_11db);
+        }
     }
 
     void poll() override {
@@ -976,9 +985,24 @@ public:
             return;
         }
 
-        int sum = 0;
-        for (int i = 0; i < 4; i++) sum += analogRead(_pin);
-        value = sum / 4.0f;
+        if (_acQuadratureMode) {
+            const int rawValue1 = _readAdcSample();
+            delayMicroseconds(_acQuadDelayUs);
+            const int rawValue2 = _readAdcSample();
+
+            const long sample1 = (long)rawValue1 - _acOffsetCounts;
+            const long squares1 = sample1 * sample1;
+
+            const long sample2 = (long)rawValue2 - _acOffsetCounts;
+            const long squares2 = sample2 * sample2;
+
+            const float vaCounts = sqrtf((float)(squares1 + squares2));
+            value = constrain(vaCounts, 0.0f, CURRENT_ADC_MAX_COUNTS);
+        } else {
+            int sum = 0;
+            for (int i = 0; i < 4; i++) sum += analogRead(_pin);
+            value = sum / 4.0f;
+        }
         lastValidMs = _lastPollMs;
         present = true;
         error = false;
@@ -988,9 +1012,24 @@ public:
     }
 
 private:
+    int _readAdcSample() const {
+#if CURRENT_ADC_OVERSAMPLE_COUNT <= 1
+        return analogRead(_pin);
+#else
+        long sum = 0;
+        for (int i = 0; i < CURRENT_ADC_OVERSAMPLE_COUNT; i++) {
+            sum += analogRead(_pin);
+        }
+        return (int)(sum / CURRENT_ADC_OVERSAMPLE_COUNT);
+#endif
+    }
+
     uint8_t _pin;
     bool    _adc2WifiSensitive = false;
     bool    _disabledByConfig  = false;
+    bool    _acQuadratureMode  = false;
+    long    _acOffsetCounts    = CURRENT_ADC_DEFAULT_OFFSET;
+    uint32_t _acQuadDelayUs    = CURRENT_ADC_QUAD_DELAY_US;
     bool    _thresholdsInAmps = false;
     float   _currentCalA = 1.0f;
     float   _currentCalB = 0.0f;

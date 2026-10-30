@@ -16,7 +16,7 @@
 #define SERIAL_DEBUG_SENSOR_SNAPSHOT  0
 
 // ─── Версия прошивки / API ───────────────────────────────────────
-#define FW_VERSION      "1.7.19"
+#define FW_VERSION      "1.7.21"
 #define API_VERSION     "v1"
 #define AP_SSID_DEF     "Control_System"
 #define DEVICE_NAME     "RectColumn"
@@ -78,6 +78,14 @@ static_assert(ACTIVE_PROFILE == PROFILE_FULL ||
 //    потому что GPIO35 отдан под подтверждение CH2.
 #define PIN_C   39
 #define PIN_V   35
+
+// ─── Параметры прямого AC-замера датчика тока (SEN_C, 50 Гц) ─────
+#define CURRENT_ADC_MAX_COUNTS          4095.0f
+#define CURRENT_ADC_REF_VOLTAGE         3.3f
+#define CURRENT_ADC_DEFAULT_OFFSET      1823L
+#define CURRENT_ADC_QUAD_DELAY_US       5000UL
+#define CURRENT_ADC_DEFAULT_SCALE       10.1f
+#define CURRENT_ADC_OVERSAMPLE_COUNT    1
 
 // ─── Входы подтверждения реле ────────────────────────────────────
 // Активное подтверждение должно поднимать вход в HIGH.

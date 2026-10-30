@@ -633,7 +633,9 @@ private:
                 json += "\"e\":\"" + _jsonEscape(e.event) + "\",";
                 json += "\"T1\":" + _fmtVal(e.T1) + ",";
                 json += "\"T2\":" + _fmtVal(e.T2) + ",";
+#if ACTIVE_PROFILE != PROFILE_ECONOMY_LIGHT
                 json += "\"T3\":" + _fmtVal(e.T3) + ",";
+#endif
                 json += "\"dT\":" + _fmtVal(e.dT) + "}";
             }
             json += "]";
@@ -2976,7 +2978,7 @@ private:
         _currentCalZeroSet = data.zeroSet && !isnan(data.x0);
         if (_currentZeroDate == 0U && _currentCalZeroSet) _currentZeroDate = _currentCalDate;
 
-        _clearCalPointsRuntime();
+        _clearCalPointStorage();
         const uint8_t copyCount = (data.pointCount > Storage::CURRENT_CAL_MAX_POINTS)
             ? Storage::CURRENT_CAL_MAX_POINTS
             : data.pointCount;
@@ -3052,6 +3054,18 @@ private:
     }
 
     void _clearCalPointsRuntime() {
+        _clearCalPointStorage();
+        if (_currentCalZeroSet && isfinite(_currentCalX0)) {
+            _currentCalA = Storage::CURRENT_CAL_A_DEFAULT;
+            _currentCalB = -_currentCalA * _currentCalX0;
+        } else {
+            _currentCalA = Storage::CURRENT_CAL_A_DEFAULT;
+            _currentCalB = Storage::CURRENT_CAL_B_DEFAULT;
+        }
+        _syncCurrentCalibration();
+    }
+
+    void _clearCalPointStorage() {
         for (uint8_t i = 0; i < Storage::CURRENT_CAL_MAX_POINTS; i++) {
             _calPoints[i].raw = 0.0f;
             _calPoints[i].amps = 0.0f;
@@ -3089,7 +3103,7 @@ private:
             uniqueCount++;
         }
 
-        _clearCalPointsRuntime();
+        _clearCalPointStorage();
         for (uint8_t i = 0; i < uniqueCount; i++) {
             _calPoints[i] = normalized[i];
             _calPoints[i].used = true;

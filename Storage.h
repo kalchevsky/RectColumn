@@ -19,13 +19,16 @@ class Storage {
 public:
     static constexpr uint8_t CURRENT_CAL_MAX_POINTS = 10;
 
-    // Текущая формула:
-    //   percent = raw * 100 / 4095
-    //   amps    = (percent - 31.27) / 1.67
-    // Разворачиваем:
-    //   amps = raw * ((100 / 4095) / 1.67) + (-31.27 / 1.67)
-    static constexpr float CURRENT_CAL_A_DEFAULT = (100.0f / 4095.0f) / 1.67f;
-    static constexpr float CURRENT_CAL_B_DEFAULT = -31.27f / 1.67f;
+    // Формула прямого AC-замера:
+    //   voltageRMS = (raw / CURRENT_ADC_MAX_COUNTS) * CURRENT_ADC_REF_VOLTAGE
+    //   currentRMS = voltageRMS * CURRENT_ADC_DEFAULT_SCALE
+    //   current    = currentRMS / sqrt(2)
+    static constexpr float CURRENT_CAL_SQRT2 = 1.41421356f;
+    static constexpr float CURRENT_CAL_A_DEFAULT =
+        (CURRENT_ADC_REF_VOLTAGE * CURRENT_ADC_DEFAULT_SCALE) /
+        (CURRENT_ADC_MAX_COUNTS * CURRENT_CAL_SQRT2);
+    static constexpr float CURRENT_CAL_B_DEFAULT = 0.0f;
+    static constexpr uint8_t CURRENT_CAL_MODEL_VERSION = 2U;
 
     struct CurrentCalData {
         float a = CURRENT_CAL_A_DEFAULT;
@@ -373,6 +376,8 @@ public:
         Preferences p;
         if (!_openPrefs(p, "curcal", true)) return false;
 
+        const uint8_t ver = p.getUChar("ver", 1U);
+
         if (p.isKey("a")) data.a = p.getFloat("a", CURRENT_CAL_A_DEFAULT);
         if (p.isKey("b")) data.b = p.getFloat("b", CURRENT_CAL_B_DEFAULT);
         if (p.isKey("date")) data.calDate = p.getUInt("date", 0U);
@@ -398,6 +403,14 @@ public:
                 }
                 data.pointCount = pointCount;
             }
+        }
+
+        const bool noUserCalibration = !data.calibrated && !data.zeroSet && data.pointCount == 0;
+        const bool oldDetectorOffset = fabsf(data.b - (-31.27f / 1.67f)) < 0.05f;
+        if (ver != CURRENT_CAL_MODEL_VERSION &&
+            (noUserCalibration || (oldDetectorOffset && !data.zeroSet && data.pointCount == 0))) {
+            data.a = CURRENT_CAL_A_DEFAULT;
+            data.b = CURRENT_CAL_B_DEFAULT;
         }
 
         p.end();
@@ -429,6 +442,7 @@ public:
 
         const bool ok = _putAndVerifyFloat(p, "a", data.a)
                      && _putAndVerifyFloat(p, "b", data.b)
+                     && _putAndVerifyUChar(p, "ver", CURRENT_CAL_MODEL_VERSION)
                      && _putAndVerifyUInt(p, "date", data.calDate)
                      && _putAndVerifyUInt(p, "zero_date", data.zeroDate)
                      && _putAndVerifyBool(p, "cal", data.calibrated)
