@@ -24,11 +24,8 @@ public:
 
         t1 = new TempSensor("T1", PIN_T1);
         t2 = new TempSensor("T2", PIN_T2);
-#if !LIGHT_PROFILE
         t3 = new TempSensor("T3", PIN_T3);
-#endif
         dt = new VirtualSensor(t1, t2);
-#if !LIGHT_PROFILE
         p  = new PressureSensor();
         l  = new DigitalSensor("L", PIN_L, false);
         f  = new DigitalSensor("F", PIN_F, false);
@@ -38,10 +35,14 @@ public:
         v  = new AnalogSensor("V", PIN_V, false, (GPIO35_MODE == GPIO35_MODE_WER_CH2));
         c->thresholdPercentInput = true;
         c->setCurrentCalibration(1.0f, 0.0f);
-#endif
+        c->alarm[0].enabled = false;
+        c->alarm[0].isMax = false;
+        c->alarm[0].threshold = 0.5f;
+        c->alarm[1].enabled = false;
+        c->alarm[1].isMax = true;
+        c->alarm[1].threshold = 15.0f;
 
         // Базовые задержки по умолчанию для текущей логики проекта.
-#if !LIGHT_PROFILE
         l->alarmDelayMs = DIGITAL_ALARM_DEBOUNCE_MS;
         l->alarm[0].enabled = true;
         l->ctrlDelayMs  = SAFETY_LEVEL_SHUTDOWN_MS;
@@ -50,7 +51,6 @@ public:
         f->ctrlDelayMs  = 5000UL;
         c->alarmDelayMs = 1000UL;
         c->ctrlDelayMs  = 0;
-#endif
 
         // ── Умолчания правил управления для цифровых датчиков ─────────────
         // Датчики L и F двоичные (value = 0.0 или 1.0).
@@ -68,20 +68,16 @@ public:
         //   Т.е. датчик может только запрещать (OF=1), никогда не требует включения (ON=0).
         //
         // ctrl[oi].enabled остаётся false — оператор включает нужные каналы через UI.
- #if !LIGHT_PROFILE
         for (uint8_t oi = OUT_CH1; oi <= OUT_CH3; oi++) {
             l->ctrl[oi].logic  = LOGIC_COOL;
             l->ctrl[oi].minVal = 0.5f;
             l->ctrl[oi].maxVal = 2.0f;
         }
-#endif
- #if !LIGHT_PROFILE
         for (uint8_t oi = OUT_CH1; oi <= OUT_CH3; oi++) {
             f->ctrl[oi].logic  = LOGIC_COOL;
             f->ctrl[oi].minVal = 0.5f;
             f->ctrl[oi].maxVal = 2.0f;
         }
-#endif
         normalizeDigitalOffOnlyRules();
         normalizeSchemeControlRules();
 
@@ -98,25 +94,20 @@ public:
     }
 
     void setCurrentCalibration(float a, float b) {
-#if !LIGHT_PROFILE
         if (c) c->setCurrentCalibration(a, b);
-#else
-        (void)a;
-        (void)b;
-#endif
     }
 
     static bool isMainOutputIndex(uint8_t outIdx) {
+#if LIGHT_PROFILE
+        return outIdx == OUT_CH1 || outIdx == OUT_CH2;
+#else
         return outIdx == OUT_CH1 || outIdx == OUT_CH2 || outIdx == OUT_CH3;
+#endif
     }
 
     static constexpr bool isSensorActiveInProfile(uint8_t sensorIdx) {
-#if ACTIVE_PROFILE == PROFILE_ECONOMY_LIGHT
-        return sensorIdx == SEN_T1 || sensorIdx == SEN_T2 || sensorIdx == SEN_DT;
-#else
         (void)sensorIdx;
         return true;
-#endif
     }
 
     static bool isDigitalOffOnlySensorIndex(uint8_t sensorIdx) {
@@ -130,9 +121,13 @@ public:
     // explicit per-sensor extensions and are not rewritten by output mode
     // changes.
     static bool isSchemeAnalogControlSensorIndex(uint8_t sensorIdx) {
+#if LIGHT_PROFILE
+        return sensorIdx == SEN_T1 || sensorIdx == SEN_T2 || sensorIdx == SEN_DT;
+#else
         return sensorIdx == SEN_T1 || sensorIdx == SEN_T2 ||
                sensorIdx == SEN_T3 || sensorIdx == SEN_DT ||
                sensorIdx == SEN_P;
+#endif
     }
 
     static bool isSchemeControlSensorIndex(uint8_t sensorIdx) {
@@ -141,6 +136,9 @@ public:
     }
 
     static bool isRuleAllowedForOutput(uint8_t sensorIdx, uint8_t outIdx) {
+#if LIGHT_PROFILE
+        if (outIdx == OUT_CH3) return false;
+#endif
         if (!isMainOutputIndex(outIdx)) return true;
         return isSchemeControlSensorIndex(sensorIdx);
     }
@@ -192,6 +190,7 @@ public:
         uint32_t alarmChanged = 0;
 
     #if EMU_MODE
+        {
         const uint32_t now = millis();
         for (int i = 0; i < SEN_COUNT; i++) {
             if (!isSensorActiveInProfile((uint8_t)i)) continue;
@@ -209,6 +208,7 @@ public:
             }
         }
         return alarmChanged;
+        }
     #endif
 
         const uint32_t now = millis();

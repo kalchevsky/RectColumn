@@ -262,7 +262,7 @@ private:
                 return "Уровень max";
             case SEN_P: {
                 const float thr = (s && bitIdx < N_ALARMS) ? s->alarm[bitIdx].threshold : NAN;
-                return String("Давление ") + _pressureAlarmToken(bitIdx) + " (" + _formatFixedNumber(thr, 1) + " гПа)";
+                return String("Давление ") + _pressureAlarmToken(bitIdx) + " (" + _formatFixedNumber(pressureHpaToDisplay(thr, s ? s->pressureUnitMode : 0), 2) + " " + pressureUnitName(s ? s->pressureUnitMode : 0) + ")";
             }
             case SEN_T1:
             case SEN_T2:

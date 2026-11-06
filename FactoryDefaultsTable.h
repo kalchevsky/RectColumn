@@ -89,6 +89,7 @@ inline constexpr uint32_t OFF_ONLY_CTRL_DELAY_MS = 0UL;
 inline constexpr bool OFF_ONLY_CTRL_ENABLED = false;
 
 inline constexpr float CURRENT_ALARM_THRESHOLD_AMPS = 0.5f;
+inline constexpr float CURRENT_MAX_ALARM_THRESHOLD_AMPS = 15.0f;
 
 inline constexpr bool NOTIFY_ENABLED = false;
 inline constexpr const char* NOTIFY_URL = "";

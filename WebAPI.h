@@ -58,9 +58,9 @@ public:
         _registerServicePages();
         _registerFrontendRoutes();
         _registerInfoRoutes();
+        _registerOutputRoutes();
         _registerCoreRoutes();
         _registerSensorRoutes();
-        _registerOutputRoutes();
         _registerWifiRoutes();
         _registerNotifyRoutes();
         _registerEmuRoutes();
@@ -115,7 +115,7 @@ private:
 
     static inline bool _profileOutputVisible(uint8_t i) {
 #if ACTIVE_PROFILE == PROFILE_ECONOMY_LIGHT
-        return (i == OUT_CH1 || i == OUT_CH5);
+        return (i == OUT_CH1 || i == OUT_CH2 || i == OUT_CH5);
 #else
         (void)i;
         return true;
@@ -332,7 +332,7 @@ private:
         });
 
         _server.on("/api/v1/sensor", HTTP_GET, [this](AsyncWebServerRequest* req) {
-            DynamicJsonDocument doc(8192);
+            DynamicJsonDocument doc(24576);
             JsonArray arr = doc.to<JsonArray>();
             _buildSensors(arr);
             _sendDoc(req, 200, doc);
@@ -633,9 +633,7 @@ private:
                 json += "\"e\":\"" + _jsonEscape(e.event) + "\",";
                 json += "\"T1\":" + _fmtVal(e.T1) + ",";
                 json += "\"T2\":" + _fmtVal(e.T2) + ",";
-#if ACTIVE_PROFILE != PROFILE_ECONOMY_LIGHT
                 json += "\"T3\":" + _fmtVal(e.T3) + ",";
-#endif
                 json += "\"dT\":" + _fmtVal(e.dT) + "}";
             }
             json += "]";
@@ -1310,6 +1308,28 @@ private:
         bool logOperatorRestore = false;
         bool logOperatorRelatch = false;
 
+        uint8_t nextUnitMode = s->pressureUnitMode;
+        bool nextInverted = s->inverted;
+        if (doc.containsKey("unitMode")) {
+            if (si != SEN_P) { _sendError(req, 400, "bad_params", "unitMode requires P"); return; }
+            JsonVariant v = doc["unitMode"];
+            if (v.is<const char*>()) {
+                String mode = v.as<String>();
+                if (mode == "hpa") nextUnitMode = 0;
+                else if (mode == "mmhg") nextUnitMode = 1;
+                else if (mode == "tboil") nextUnitMode = 2;
+                else { _sendError(req, 400, "bad_params", "invalid unitMode"); return; }
+            } else if (v.is<int>() && v.as<int>() >= 0 && v.as<int>() <= 2) nextUnitMode = v.as<int>();
+            else { _sendError(req, 400, "bad_params", "invalid unitMode"); return; }
+        }
+        if (doc.containsKey("inverted")) {
+            if ((si != SEN_L && si != SEN_F) || !doc["inverted"].is<bool>()) {
+                _sendError(req, 400, "bad_params", "invalid inverted"); return;
+            }
+            nextInverted = doc["inverted"].as<bool>();
+        }
+        const bool unitChanged = nextUnitMode != s->pressureUnitMode;
+        const bool inversionChanged = nextInverted != s->inverted;
         bool nextEnabled = s->enabled;
         uint32_t nextPeriodMs = s->periodMs;
         uint32_t nextAlarmDelayMs = s->alarmDelayMs;
@@ -1342,6 +1362,8 @@ private:
             s->armOperatorResetCycle();
         }
 
+        s->pressureUnitMode = nextUnitMode;
+        s->inverted = nextInverted;
         s->enabled = nextEnabled;
         // === PATCH WARMUP BEGIN ===
         if (!prevEnabled && nextEnabled) {
@@ -1358,6 +1380,7 @@ private:
             logOperatorRelatch = (resetResult == SensorOperatorResetResult::Relatched);
         } else if (prevEnabled && !nextEnabled) {
             s->clearEnableWarmup();
+            s->onDisabledByOperator();
         }
         // === PATCH WARMUP END ===
         s->periodMs = nextPeriodMs;
@@ -1378,7 +1401,8 @@ private:
 
         const bool controlRuntimeChanged =
             (prevEnabled != nextEnabled) ||
-            (prevCtrlDelayMs != nextCtrlDelayMs);
+            (prevCtrlDelayMs != nextCtrlDelayMs) || inversionChanged;
+        if (inversionChanged) s->resetAlarmRuntime();
         if (controlRuntimeChanged) {
             s->resetAllControlRuntime();
             _refreshSensorControlStateAfterConfigChange(s, true);
@@ -1393,6 +1417,11 @@ private:
         if (prevEnabled != s->enabled) {
             _log->add(_sensorConfigToggleLogText((uint8_t)si, s->enabled),
                       _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
+        }
+        if (unitChanged || inversionChanged) {
+            String text = String(SensorManager::sensorLogName(si)) + (unitChanged ? ": единицы " : ": инверсия ");
+            text += unitChanged ? pressureUnitName(s->pressureUnitMode) : (s->inverted ? "включена" : "выключена");
+            _log->add(text, _sm->getT1(), _sm->getT2(), _sm->getT3(), _sm->getDT());
         }
         if (logOperatorRestore) {
             _log->add(_sensorRestoredLogText((uint8_t)si),
@@ -1999,6 +2028,7 @@ private:
     static String _sensorAlarmConfigLogText(uint8_t sensorIdx, int alarmIdx, bool enabled) {
         String text = String(SensorManager::sensorLogName(sensorIdx)) + ": сигнализация";
         const int8_t groupIdx = _alarmGroupIndexForLog(sensorIdx, alarmIdx);
+        if (sensorIdx == SEN_C) text += alarmIdx == 0 ? " ALmin" : " ALmax";
         if (groupIdx >= 0) {
             text += " ";
             text += _alarmGroupLogLabel(groupIdx);
@@ -2052,9 +2082,9 @@ private:
         return out;
     }
 
-    static String _pressureAlarmText(float threshold, uint8_t alarmIdx) {
+    static String _pressureAlarmText(float threshold, uint8_t alarmIdx, uint8_t mode) {
         return String("Давление ") + _pressureAlarmLabel(alarmIdx) +
-               " (" + _formatFixedNumber(threshold, 1) + " гПа)";
+               " (" + _formatFixedNumber(pressureHpaToDisplay(threshold, mode), 2) + " " + pressureUnitName(mode) + ")";
     }
 
     static String _dtAlarmErrorText() {
@@ -2087,8 +2117,9 @@ private:
         if (!sensor) return "";
         if (sensorIdx == SEN_P) {
             const float thr = sensor->alarm[alarmIdx].threshold;
-            return _pressureAlarmText(thr, alarmIdx);
+            return _pressureAlarmText(thr, alarmIdx, sensor->pressureUnitMode);
         }
+        if (sensorIdx == SEN_C) return String("Ток нагрузки ") + (sensor->alarm[alarmIdx].isMax ? "max" : "min") + " (" + _formatFixedNumber(sensor->alarm[alarmIdx].threshold, 2) + " А)";
         return _alarmReasonText(sensorIdx, alarmIdx);
     }
 
@@ -2389,12 +2420,30 @@ private:
         so["enabled"] = sensor->enabled;
         so["periodMs"] = sensor->periodMs;
         so["unit"] = SensorManager::sensorUnit(sensorIdx);
+        if (sensorIdx == SEN_P) {
+            so["unitMode"] = pressureUnitCode(sensor->pressureUnitMode);
+            so["unit"] = pressureUnitName(sensor->pressureUnitMode);
+            so["displayUnit"] = pressureUnitName(sensor->pressureUnitMode);
+            const float display = pressureHpaToDisplay(sensor->value, sensor->pressureUnitMode);
+            if (isfinite(display) && !sensor->error) so["displayValue"] = roundf(display * 100.0f) / 100.0f;
+            else so["displayValue"] = nullptr;
+        }
+        if (sensorIdx == SEN_L || sensorIdx == SEN_F) so["inverted"] = sensor->inverted;
         so["hwLimited"] = sensor->hwLimited;
         so["alarmDelayMs"] = sensor->alarmDelayMs;
         so["ctrlDelayMs"] = sensor->ctrlDelayMs;
     }
 
     void _buildSensorLiveFields(JsonObject so, uint8_t sensorIdx, SensorBase* s, uint8_t pendingMask) {
+        if (sensorIdx == SEN_P) {
+            so["unitMode"] = pressureUnitCode(s->pressureUnitMode);
+            so["unit"] = pressureUnitName(s->pressureUnitMode);
+            so["displayUnit"] = pressureUnitName(s->pressureUnitMode);
+            float display = pressureHpaToDisplay(s->value, s->pressureUnitMode);
+            if (isfinite(display) && !s->error) so["displayValue"] = roundf(display * 100.0f) / 100.0f;
+            else so["displayValue"] = nullptr;
+        }
+        if (sensorIdx == SEN_L || sensorIdx == SEN_F) so["inverted"] = s->inverted;
         so["warmup"] = s->isInEnableWarmup();
         so["error"] = s->error;
         so["present"] = s->present;
@@ -2432,9 +2481,9 @@ private:
         }
     }
 
-    void _buildSensorAlarmsLive(JsonArray alarms, SensorBase* sensor, uint8_t unackedMask) {
+    void _buildSensorAlarmsLive(JsonArray alarms, SensorBase* sensor, uint8_t unackedMask, bool mergeConfig = false) {
         for (int alarmIdx = 0; alarmIdx < N_ALARMS; alarmIdx++) {
-            JsonObject ao = alarms.createNestedObject();
+            JsonObject ao = mergeConfig ? alarms[alarmIdx].as<JsonObject>() : alarms.createNestedObject();
             ao["triggered"] = sensor->alarm[alarmIdx].triggered;
             ao["unacked"] = ((unackedMask & (1u << alarmIdx)) != 0);
         }
@@ -2619,7 +2668,7 @@ private:
 
             JsonArray alarms = so.createNestedArray("alarms");
             _buildSensorAlarmsConfig(alarms, sensor);
-            _buildSensorAlarmsLive(alarms, sensor, pendingMask);
+            _buildSensorAlarmsLive(alarms, sensor, pendingMask, true);
 
             JsonArray ctrl = so.createNestedArray("ctrl");
             _buildSensorCtrlConfig(ctrl, (uint8_t)i, sensor);

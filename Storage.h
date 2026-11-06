@@ -407,8 +407,8 @@ public:
 
         const bool noUserCalibration = !data.calibrated && !data.zeroSet && data.pointCount == 0;
         const bool oldDetectorOffset = fabsf(data.b - (-31.27f / 1.67f)) < 0.05f;
-        if (ver != CURRENT_CAL_MODEL_VERSION &&
-            (noUserCalibration || (oldDetectorOffset && !data.zeroSet && data.pointCount == 0))) {
+        if ((noUserCalibration && oldDetectorOffset) || (ver != CURRENT_CAL_MODEL_VERSION &&
+            (noUserCalibration || (oldDetectorOffset && !data.zeroSet && data.pointCount == 0)))) {
             data.a = CURRENT_CAL_A_DEFAULT;
             data.b = CURRENT_CAL_B_DEFAULT;
         }
@@ -753,6 +753,8 @@ private:
             if (!s) continue;
 
             SensorBlob& dst = blob.sensors[si];
+            if (si == SEN_P) dst.reserved[0] = s->pressureUnitMode;
+            else if (si == SEN_L || si == SEN_F) dst.reserved[0] = s->inverted ? 1 : 0;
             dst.enabled = s->enabled ? 1 : 0;
             dst.periodMs = s->periodMs;
             dst.alarmDelayMs = s->alarmDelayMs;
@@ -779,6 +781,12 @@ private:
             SensorBase* s = sm.s[si];
             if (!s) continue;
 
+            if (s->pressureUnitMode > 2) s->pressureUnitMode = 0;
+            if (si == SEN_C) {
+                s->alarm[0].isMax = false;
+                s->alarm[1].isMax = true;
+                if (!isfinite(s->alarm[1].threshold) || s->alarm[1].threshold <= 0.0f) s->alarm[1].threshold = 15.0f;
+            }
             if (s->periodMs < SENSOR_PERIOD_MIN_MS) s->periodMs = SENSOR_PERIOD_MIN_MS;
             if (s->periodMs > SENSOR_PERIOD_MAX_MS) s->periodMs = SENSOR_PERIOD_MAX_MS;
             if (s->alarmDelayMs > SENSOR_ALARM_DELAY_MAX_MS) s->alarmDelayMs = SENSOR_ALARM_DELAY_MAX_MS;
@@ -809,6 +817,8 @@ private:
             if (!s) continue;
 
             const SensorBlob& src = blob.sensors[si];
+            if (si == SEN_P) s->pressureUnitMode = src.reserved[0] <= 2 ? src.reserved[0] : 0;
+            else if (si == SEN_L || si == SEN_F) s->inverted = (src.reserved[0] == 1);
             s->enabled = (src.enabled != 0);
             s->periodMs = src.periodMs;
             s->alarmDelayMs = src.alarmDelayMs;

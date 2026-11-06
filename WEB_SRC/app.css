@@ -226,6 +226,12 @@ pre{background:var(--card);color:var(--text)}
 .tpl-screen .cell.label{justify-content:flex-start;text-align:left;color:#eef1f4;font-size:15px;line-height:1.2}
 .tpl-screen .cell.btn.red{border-color:rgba(255,90,100,.35);color:#ffd9dc}
 .tpl-screen .cell.btn.green{border-color:rgba(82,216,106,.35);color:#dfffe4}
+.tpl-screen #sensor-note-slot:empty,.tpl-screen #sensor-messages-slot:empty{display:none}
+.tpl-screen .pressure-unit-picker{grid-column:1/-1;display:flex;flex-direction:column;align-items:stretch;gap:8px;padding:10px 12px}
+.tpl-screen .pressure-unit-title{margin:0;font-size:15px;line-height:1.2;color:#eef1f4;text-align:left}
+.tpl-screen .pressure-unit-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;width:100%}
+.tpl-screen .pressure-unit-row .cell.btn{width:100%;height:auto;min-height:54px;max-height:none;margin:0;padding:8px 4px;font-size:14px;line-height:1.15;white-space:normal}
+.tpl-screen .pressure-unit-row .cell.btn.green{background:#174c28;border-color:var(--green);color:#fff}
 .tpl-screen .note{color:var(--muted);font-size:11px;line-height:1.25;padding:2px 2px 0;text-align:center}
 .tpl-screen .head-row,.tpl-screen .ctrl-row,.tpl-screen .alarm-row{display:grid;grid-template-columns:1fr 1.2fr 1fr;gap:8px}
 .tpl-screen .head{min-height:38px;font-size:13px;color:var(--muted)}

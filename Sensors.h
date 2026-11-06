@@ -9,6 +9,29 @@
 
 #include "config.h"
 
+static inline float pressureHpaToDisplay(float hpa, uint8_t mode) {
+    if (mode == 1) return hpa / 1.333f;
+    if (mode == 2) {
+        if (isnan(hpa) || hpa <= 1.0f) return NAN;
+        return 1730.63f / (8.19622f - log10f(hpa)) - 233.426f;
+    }
+    return hpa;
+}
+static inline float pressureDisplayToHpa(float display, uint8_t mode) {
+    if (mode == 1) return display * 1.333f;
+    if (mode == 2) {
+        if (isnan(display) || display + 233.426f <= 1.0f) return NAN;
+        return powf(10.0f, 8.19622f - 1730.63f / (display + 233.426f));
+    }
+    return display;
+}
+static inline const char* pressureUnitName(uint8_t mode) {
+    return mode == 1 ? "мм рт.ст." : mode == 2 ? "°C" : "гПа";
+}
+static inline const char* pressureUnitCode(uint8_t mode) {
+    return mode == 1 ? "mmhg" : mode == 2 ? "tboil" : "hpa";
+}
+
 // ─── Alarm threshold ─────────────────────────────────────────────
 struct AlarmLevel {
     bool  enabled   = false;
@@ -50,6 +73,8 @@ class SensorBase {
 public:
     String   name;
     bool     enabled  = true;
+    uint8_t  pressureUnitMode = 0;
+    bool     inverted = false;
     uint32_t periodMs = DEF_T_PERIOD_MS;
     bool     error    = false;
     bool     present  = false;
@@ -370,6 +395,7 @@ public:
     virtual void begin() = 0;
     virtual void poll()  = 0;
     virtual void onEnabledByOperator(uint32_t now) { (void)now; }
+    virtual void onDisabledByOperator() {}
     virtual uint32_t getSensorLossDelayMs() const { return 0UL; }
     virtual bool deferSensorLossPublication() const { return false; }
 
@@ -864,8 +890,9 @@ public:
         pinMode(_pin, INPUT_PULLDOWN);
         _lastPollMs = millis();
         const bool high = (digitalRead(_pin) == HIGH);
-        value = high ? 1.0f : 0.0f;
-        if (_trackSensorLoss && !high) {
+        const bool normalOk = inverted ? !high : high;
+        value = normalOk ? 1.0f : 0.0f;
+        if (_trackSensorLoss && !normalOk) {
             present = false;
             error = true;
             sensorErrorReason = SENSOR_ERR_NO_RESPONSE;
@@ -896,7 +923,8 @@ public:
         const uint32_t now = millis();
         _lastPollMs = now;
         const bool high = (digitalRead(_pin) == HIGH);
-        if (_trackSensorLoss && !high) {
+        const bool normalOk = inverted ? !high : high;
+        if (_trackSensorLoss && !normalOk) {
             present = false;
             value = NAN;
             hwLimited = false;
@@ -905,7 +933,7 @@ public:
         }
 
         present = true;
-        value = high ? 1.0f : 0.0f;
+        value = normalOk ? 1.0f : 0.0f;
         lastValidMs = _lastPollMs;
         hwLimited = false;
         markSensorHealthy(now, true);
@@ -943,6 +971,13 @@ public:
         _thresholdsInAmps = true;
     }
 
+    void onEnabledByOperator(uint32_t now) override {
+        (void)now;
+        _emaInitialized = false;
+    }
+
+    void onDisabledByOperator() override { _emaInitialized = false; }
+
     float effectiveAlarmThreshold(float threshold) const override {
         if (!_thresholdsInAmps || !isfinite(threshold) ||
             !isfinite(_currentCalA) || !isfinite(_currentCalB) ||
@@ -953,6 +988,7 @@ public:
     }
 
     void begin() override {
+        _emaInitialized = false;
         present = !_disabledByConfig;
         error   = _disabledByConfig;
         hwLimited = _disabledByConfig;
@@ -986,9 +1022,9 @@ public:
         }
 
         if (_acQuadratureMode) {
-            const int rawValue1 = _readAdcSample();
+            const int rawValue1 = _readAdcFilteredSample();
             delayMicroseconds(_acQuadDelayUs);
-            const int rawValue2 = _readAdcSample();
+            const int rawValue2 = _readAdcFilteredSample();
 
             const long sample1 = (long)rawValue1 - _acOffsetCounts;
             const long squares1 = sample1 * sample1;
@@ -996,8 +1032,13 @@ public:
             const long sample2 = (long)rawValue2 - _acOffsetCounts;
             const long squares2 = sample2 * sample2;
 
-            const float vaCounts = sqrtf((float)(squares1 + squares2));
-            value = constrain(vaCounts, 0.0f, CURRENT_ADC_MAX_COUNTS);
+            const float vaCounts = constrain(sqrtf((float)(squares1 + squares2)), 0.0f, CURRENT_ADC_MAX_COUNTS);
+            if (!_emaInitialized || isnan(value)) {
+                value = vaCounts;
+                _emaInitialized = true;
+            } else {
+                value = (2.0f * value + vaCounts) / 3.0f;
+            }
         } else {
             int sum = 0;
             for (int i = 0; i < 4; i++) sum += analogRead(_pin);
@@ -1012,22 +1053,23 @@ public:
     }
 
 private:
-    int _readAdcSample() const {
-#if CURRENT_ADC_OVERSAMPLE_COUNT <= 1
-        return analogRead(_pin);
-#else
-        long sum = 0;
-        for (int i = 0; i < CURRENT_ADC_OVERSAMPLE_COUNT; i++) {
-            sum += analogRead(_pin);
+    int _readAdcFilteredSample() const {
+        int s[5];
+        for (int i = 0; i < 5; i++) s[i] = analogRead(_pin);
+        int minVal = s[0], maxVal = s[0], sum = s[0];
+        for (int i = 1; i < 5; i++) {
+            if (s[i] < minVal) minVal = s[i];
+            if (s[i] > maxVal) maxVal = s[i];
+            sum += s[i];
         }
-        return (int)(sum / CURRENT_ADC_OVERSAMPLE_COUNT);
-#endif
+        return (sum - minVal - maxVal) / 3;
     }
 
     uint8_t _pin;
     bool    _adc2WifiSensitive = false;
     bool    _disabledByConfig  = false;
     bool    _acQuadratureMode  = false;
+    bool    _emaInitialized = false;
     long    _acOffsetCounts    = CURRENT_ADC_DEFAULT_OFFSET;
     uint32_t _acQuadDelayUs    = CURRENT_ADC_QUAD_DELAY_US;
     bool    _thresholdsInAmps = false;

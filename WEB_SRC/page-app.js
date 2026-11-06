@@ -208,8 +208,8 @@ var state = {
   currentView: '',
   ackPending: false,
   currentCal: {
-    a: 0.014622769114,
-    b: -18.724550898204,
+    a: 0.005755279369,
+    b: 0.0,
     calibrated: false,
     calDate: 0,
     zeroDate: 0,
@@ -423,7 +423,10 @@ function startLiveStatePoll(view){
   var pollMs = (view === 'manual') ? MANUAL_RELAY_POLL_MS : LIVE_STATE_POLL_MS;
   startPoll(pollMs, function(done){
     loadLive(function(){
-      if (routeParts()[0] === view) render();
+      var route = routeParts();
+      if (route[0] === view) {
+        if (view !== 'sensor' || !updateSensorLiveDom(decodeURIComponent(route[1] || ''))) render();
+      }
       done();
     });
   });
@@ -1734,14 +1737,14 @@ function renderCalExpert(){
 function renderSound(){
   stopPoll();
   var s = state.lastState || {};
-  var soundVisible = outputVisible('CH4') || outputVisible('CH5') || !outputVisible('CH2');
+  var soundVisible = outputVisible('CH4') || outputVisible('CH5') || isLightProfile();
   var html = '<div class="app"><div class="panel"><h2>Конфигурация звука</h2>';
   html += renderMessages('');
   html += '<div class="small">CH4 - внешний звонок. CH5 - встроенный зуммер.</div>';
   if (!soundVisible) html += '<div class="error-box">' + esc(SCHEMA_UNAVAILABLE_TEXT) + '</div>';
   if (outputVisible('CH4')) html += '<label style="display:flex;gap:8px;align-items:center;margin-top:12px"><input id="snd_ch4_en" type="checkbox"' + (s.ch4Enabled ? ' checked' : '') + '><span>CH4: звонок включён</span></label>';
   if (outputVisible('CH5')) html += '<label style="display:flex;gap:8px;align-items:center;margin-top:12px"><input id="snd_ch5_en" type="checkbox"' + (s.ch5Enabled ? ' checked' : '') + '><span>CH5: зуммер включён</span></label>';
-  if (!outputVisible('CH2')) html += '<label style="display:flex;gap:8px;align-items:center;margin-top:12px"><input id="snd_alarm_led" type="checkbox"' + (s.alarmLedIndicatorEnabled !== false ? ' checked' : '') + '><span>LED индикация</span></label>';
+  if (isLightProfile()) html += '<label style="display:flex;gap:8px;align-items:center;margin-top:12px"><input id="snd_alarm_led" type="checkbox"' + (s.alarmLedIndicatorEnabled !== false ? ' checked' : '') + '><span>LED индикация</span></label>';
   html += '<button class="btn light" onclick="testSound()">Проверить звук</button>';
   html += '<div class="small">Квитирование выполняется кнопкой на главной странице и отключает только текущий звук тревоги. Настройки звука ниже определяют, какие звуковые каналы доступны системе.</div>';
   html += '<button class="btn" onclick="saveSoundConfig()">Сохранить настройки звука</button>';
@@ -1755,7 +1758,7 @@ function saveSoundConfig(){
   var payload = {};
   if (outputVisible('CH4')) payload.ch4Enabled = !!(byId('snd_ch4_en') && byId('snd_ch4_en').checked);
   if (outputVisible('CH5')) payload.ch5Enabled = !!(byId('snd_ch5_en') && byId('snd_ch5_en').checked);
-  if (!outputVisible('CH2')) payload.alarmLedIndicatorEnabled = !!(byId('snd_alarm_led') && byId('snd_alarm_led').checked);
+  if (isLightProfile()) payload.alarmLedIndicatorEnabled = !!(byId('snd_alarm_led') && byId('snd_alarm_led').checked);
   api('/api/v1/output/config', {
     method:'POST',
     headers:{'Content-Type':'application/json'},
@@ -1827,7 +1830,7 @@ function renderOutputConfigView(cfg){
     html += '<option value="cool">Охлаждение</option>';
     html += '</select></div>';
   });
-  if (!outputVisible('CH2')) html += '<label style="display:flex;gap:8px;align-items:center;margin-top:12px"><input id="relay_led_en" type="checkbox"' + (cfg.relayLedIndicatorEnabled !== false ? ' checked' : '') + '><span>Индикация реле: вкл/выкл</span></label>';
+  if (isLightProfile()) html += '<label style="display:flex;gap:8px;align-items:center;margin-top:12px"><input id="relay_led_en" type="checkbox"' + (cfg.relayLedIndicatorEnabled !== false ? ' checked' : '') + '><span>Индикация реле CH1: вкл/выкл</span></label>';
   html += '<button class="btn" onclick="saveOutputConfig()">Сохранить</button>';
   html += '<button class="btn light" onclick="go(\'#/menu\')">Назад</button>';
   html += '</div></div>';
@@ -1865,7 +1868,7 @@ function saveOutputConfig(){
       return { id:id, mode:outputConfigModeValue((byId('out_mode_' + id) && byId('out_mode_' + id).value) || 'heat') };
     })
   };
-  if (!outputVisible('CH2')) payload.relayLedIndicatorEnabled = !!(byId('relay_led_en') && byId('relay_led_en').checked);
+  if (isLightProfile()) payload.relayLedIndicatorEnabled = !!(byId('relay_led_en') && byId('relay_led_en').checked);
   api('/api/v1/output/config', {
     method:'POST',
     headers:{'Content-Type':'application/json'},
@@ -2325,8 +2328,8 @@ var tplLabels = {
   P:'давление', L:'уровень', F:'проток',
   C:'ток нагрузки', V:'напряжение нагрузки'
 };
-var CURRENT_SENSOR_CAL_A_DEFAULT = 0.014622769114;
-var CURRENT_SENSOR_CAL_B_DEFAULT = -18.724550898204;
+var CURRENT_SENSOR_CAL_A_DEFAULT = 0.005755279369;
+var CURRENT_SENSOR_CAL_B_DEFAULT = 0.0;
 
 function tplSensorLabel(id){
   return tplLabels[id] || sensorLabels[id] || id;
@@ -3061,6 +3064,21 @@ function scheduleCurrentCalExpertChartRefresh(){
     setTimeout(currentCalExpertRefreshChart, 16);
   }
 }
+function pHpaToUi(hpa, mode){
+  hpa = Number(hpa);
+  if (mode === 'mmhg') return hpa / 1.333;
+  if (mode === 'tboil') return hpa > 1 ? 1730.63 / (8.19622 - Math.log10(hpa)) - 233.426 : NaN;
+  return hpa;
+}
+function pUiToHpa(value, mode){
+  if (mode === 'mmhg') return value * 1.333;
+  if (mode === 'tboil') return value + 233.426 > 1 ? Math.pow(10, 8.19622 - 1730.63 / (value + 233.426)) : NaN;
+  return value;
+}
+function sensorDisplayThreshold(id, value){
+  var s = findSensor(id) || {};
+  return id === 'P' ? pHpaToUi(value, s.unitMode) : value;
+}
 function tplValueText(sensor, blankWhenDisabled){
   if (!sensor) return blankWhenDisabled ? '' : '—';
   if (!sensor.enabled) return blankWhenDisabled ? '' : '—';
@@ -3068,6 +3086,7 @@ function tplValueText(sensor, blankWhenDisabled){
   if (sensor.id === 'L') return (typeof sensor.circuitOpen === 'boolean' ? sensor.circuitOpen : (Number(sensor.value) <= 0.5)) ? 'MAX!' : 'OK';
   if (sensor.id === 'F') return flowAlarmVisible(sensor) ? 'Нет протока!' : 'OK';
   if (sensor.id === 'C') return tplCurrentFromApi(sensor.amps);
+  if (sensor.id === 'P') return tplComma2(pHpaToUi(sensor.value, sensor.unitMode)) + ' ' + (sensor.displayUnit || 'гПа');
   return tplComma2(sensor.value);
 }
 function tplHomeValueText(sensor){
@@ -3341,7 +3360,8 @@ function tplMessages(){
 }
 function isToggleOnlySensor(id){ return id === 'L' || id === 'F'; }
 function isVirtualSensor(id){ return id === 'dT'; }
-function isCtrlDisabledSensor(id){ return id === 'C' || id === 'V'; }
+function isLightProfile(){ return !!((state.lastState && state.lastState.profile === 'LIGHT') || (state.config && state.config.profile === 'LIGHT') || !outputVisible('CH3')); }
+function isCtrlDisabledSensor(id){ return id === 'C' || id === 'V' || (isLightProfile() && (id === 'T3' || id === 'P')); }
 function isAlarmToggleOnlySensor(id){ return id === 'L' || id === 'F' || id === 'V'; }
 function sensorSupportsAlarmDelay(id){ return id === 'T1' || id === 'T2' || id === 'T3' || id === 'P' || id === 'L' || id === 'F' || id === 'C' || id === 'dT'; }
 function sensorSupportsCtrlDelay(id){ return id === 'T1' || id === 'T2' || id === 'T3' || id === 'P' || id === 'L' || id === 'F' || id === 'dT'; }
@@ -3370,27 +3390,9 @@ function getAlarmUi(sensorId){
   var a3 = alarms[3] || { enabled:false, threshold:0, triggered:false };
   if (sensorId === 'C') {
     return {
-      cMinOnly: true,
-      toggleOnly: false,
-      toggle: {
-        enabled: !!a0.enabled,
-        threshold: isFinite(Number(a0.threshold)) ? Number(a0.threshold) : 0,
-        triggered: !!a0.triggered
-      },
-      al1: {
-        enabled: !!a0.enabled,
-        min: isFinite(Number(a0.threshold)) ? Number(a0.threshold) : 0,
-        max: null,
-        minTriggered: !!a0.triggered,
-        maxTriggered: false
-      },
-      al2: {
-        enabled: false,
-        min: null,
-        max: null,
-        minTriggered: false,
-        maxTriggered: false
-      }
+      cMinOnly: true, toggleOnly: false,
+      al1: { enabled: !!a0.enabled, min: Number(a0.threshold) || 0, minTriggered: !!a0.triggered },
+      al2: { enabled: !!a1.enabled, max: Number(a1.threshold) || 0, maxTriggered: !!a1.triggered }
     };
   }
   return {
@@ -3515,13 +3517,11 @@ function homeAlarmStack(sensor){
     return '<div class="stack-line ' + (triggered ? 'bad' : 'good') + '">AL</div>';
   }
   if (sensor.id === 'C') {
-    var a0 = alarms[0] || null;
-    if (!a0 || !a0.enabled) return '<div class="stack-placeholder">AL</div>';
-    html.push('<div class="stack-line ' + (a0.triggered ? 'bad' : 'good') + '">ALmin</div>');
-    html.push('<div class="stack-line empty">&nbsp;</div>');
-    html.push('<div class="stack-line empty">&nbsp;</div>');
-    html.push('<div class="stack-line empty">&nbsp;</div>');
-    return html.join('');
+    for (var ci = 0; ci < 2; ci++) {
+      var ca = alarms[ci];
+      if (ca && ca.enabled) html.push('<div class="stack-line ' + (ca.triggered ? 'bad' : 'good') + '">' + (ci ? 'ALmax' : 'ALmin') + '</div>');
+    }
+    return html.length ? html.join('') : '<div class="stack-placeholder">AL</div>';
   }
   var ui = getAlarmUi(sensor.id);
   var order = [
@@ -3622,14 +3622,14 @@ function editCtrlThreshold(id, outIdx, which){
     sensorId: id,
     outIdx: outIdx,
     title: 'Введите значение (формат XX,XX)',
-    value: tplComma2(which === 'min' ? rule.min : rule.max),
+    value: tplComma2(sensorDisplayThreshold(id, which === 'min' ? rule.min : rule.max)),
     returnHash: '#/sensorCtrl/' + encodeURIComponent(id)
   });
 }
 function editAlarmThreshold(id, key, which){
   var ui = getAlarmUi(id);
   var value = 0;
-  if (ui.cMinOnly) value = ui.al1.min;
+  if (ui.cMinOnly) value = key === 'al2' ? ui.al2.max : ui.al1.min;
   else if (ui.toggleOnly) value = ui.toggle.threshold;
   else if (key === 'al1') value = (which === 'min') ? ui.al1.min : ui.al1.max;
   else value = (which === 'min') ? ui.al2.min : ui.al2.max;
@@ -3641,7 +3641,7 @@ function editAlarmThreshold(id, key, which){
     mode: 'alarm-' + key + '-' + which,
     sensorId: id,
     title: title,
-    value: tplComma2(value),
+    value: tplComma2(sensorDisplayThreshold(id, value)),
     returnHash: '#/sensorAlarm/' + encodeURIComponent(id)
   });
 }
@@ -3684,9 +3684,11 @@ function toggleAlarmPref(id, key){
   clearError();
   clearNotice();
   if (ui.cMinOnly) {
-    var nextC = !ui.al1.enabled;
-    postAlarm(id, 0, nextC, ui.al1.min, false, function(res){
-      setResultNotice(res, 'ALmin ' + (nextC ? 'включена.' : 'выключена.'), 'Не удалось изменить ALmin.');
+    var isMaxC = key === 'al2';
+    var cAlarm = isMaxC ? ui.al2 : ui.al1;
+    var nextC = !cAlarm.enabled;
+    postAlarm(id, isMaxC ? 1 : 0, nextC, isMaxC ? cAlarm.max : cAlarm.min, isMaxC, function(res){
+      setResultNotice(res, (isMaxC ? 'ALmax ' : 'ALmin ') + (nextC ? 'включена.' : 'выключена.'), 'Не удалось изменить сигнализацию.');
       reloadConfigAndState(function(){ render(); });
     });
     return;
@@ -3785,6 +3787,8 @@ function saveNumEditor(){
   }
 
   if (ctx.mode === 'ctrl-min' || ctx.mode === 'ctrl-max') {
+    if (ctx.sensorId === 'P') value = pUiToHpa(value, (findSensor('P') || {}).unitMode);
+    if (!isFinite(value)) { setNotice('Некорректное значение.'); renderNumberInput(); return; }
     var rule = getCtrlRuleUi(findSensor(ctx.sensorId), ctx.outIdx);
     var min = rule.min;
     var max = rule.max;
@@ -3807,12 +3811,14 @@ function saveNumEditor(){
   }
 
   if (ctx.mode.indexOf('alarm-') === 0) {
+    if (ctx.sensorId === 'P') value = pUiToHpa(value, (findSensor('P') || {}).unitMode);
+    if (!isFinite(value)) { setNotice('Некорректное значение.'); renderNumberInput(); return; }
     var ui = getAlarmUi(ctx.sensorId);
     var idx = 0;
     var enabled = false;
     var isMax = false;
     if (ui.cMinOnly) {
-      idx = 0; enabled = ui.al1.enabled; isMax = false;
+      isMax = ctx.mode === 'alarm-al2-max'; idx = isMax ? 1 : 0; enabled = isMax ? ui.al2.enabled : ui.al1.enabled;
     } else if (ui.toggleOnly) {
       idx = 0;
       enabled = ui.toggle.enabled;
@@ -3879,7 +3885,7 @@ function renderHome(){
     if (!sensorVisible(id)) continue;
     visibleSensorCount++;
     var sensor = findSensor(id) || { id:id, enabled:false, value:null };
-    var ctrlDisabled = (id === 'C' || id === 'V');
+    var ctrlDisabled = isCtrlDisabledSensor(id);
     var sensorErrorText = tplHomeSensorErrorText(sensor);
     var homeValueText = tplHomeValueText(sensor);
     html.push('<a class="btn home-main home-grid-btn" href="#/sensor/' + encodeURIComponent(id) + '">');
@@ -3923,11 +3929,39 @@ function renderHome(){
   startLiveStatePoll('home');
 }
 
+function setSensorOption(id, key, value){
+  var s = findSensor(id);
+  if (state.sensorOptionSaving || (key === 'unitMode' && s && (s.unitMode || 'hpa') === value)) return;
+  state.sensorOptionSaving = true;
+  var body = {}; body[key] = value;
+  api('/api/v1/sensor/' + encodeURIComponent(id) + '/config', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) }, function(res){
+    setResultNotice(res, 'Настройка сохранена.', 'Не удалось сохранить настройку.');
+    reloadConfigAndState(function(){ state.sensorOptionSaving = false; render(); });
+  });
+}
+var pressureUnitLabels = { hpa:'гПа', mmhg:'мм рт.ст.', tboil:'°C кип.' };
+function sensorContactLabel(inverted){
+  return inverted ? 'Нормально разомкнутый (ОК — разомкнуто)' : 'Нормально замкнутый (ОК — замкнуто)';
+}
 function renderSensorConfigGrid(id, s){
   var html = [];
   html.push('<section class="grid">');
   html.push('<div class="cell"><div class="label">Статус: «' + esc(s.enabled ? 'Включено' : 'Выключено') + '»</div></div>');
   html.push('<a class="cell btn ' + (s.enabled ? 'red' : 'green') + '" href="#" onclick="event.preventDefault();toggleSensorEnabled(\'' + esc(id) + '\')">' + esc(s.enabled ? 'Отключить!' : 'Включить!') + '</a>');
+  if (id === 'P') {
+    var mode = s.unitMode || 'hpa';
+    html.push('<div class="cell pressure-unit-picker" id="sensor-p-unit-picker"><div class="pressure-unit-title">Единицы давления</div>');
+    html.push('<div class="pressure-unit-row" role="group" aria-label="Единицы давления">');
+    ['hpa', 'mmhg', 'tboil'].forEach(function(unit){
+      var selected = mode === unit;
+      html.push('<button type="button" class="cell btn' + (selected ? ' green' : '') + '" data-unit-mode="' + unit + '" aria-pressed="' + selected + '" onclick="setSensorOption(\'P\',\'unitMode\',\'' + unit + '\')">' + (selected ? '✓ ' : '') + pressureUnitLabels[unit] + '</button>');
+    });
+    html.push('</div></div>');
+  }
+  if (id === 'L' || id === 'F') {
+    html.push('<div class="cell"><div class="label" id="sensor-contact-label">' + sensorContactLabel(s.inverted) + '</div></div>');
+    html.push('<a class="cell btn" id="sensor-contact-btn" href="#" onclick="event.preventDefault();setSensorOption(\'' + esc(id) + '\',\'inverted\',' + (!s.inverted) + ')">Изменить режим контакта</a>');
+  }
   if (!isVirtualSensor(id)) {
     html.push('<div class="cell"><div class="label">Период опроса: ' + esc(tplComma2(Number(s.periodMs || 1000) / 1000)) + ' сек.</div></div>');
     html.push('<a class="cell btn" href="#" onclick="event.preventDefault();editSensorPeriod(\'' + esc(id) + '\')">Установить другой</a>');
@@ -3944,21 +3978,75 @@ function renderSensorConfigGrid(id, s){
   return html.join('');
 }
 
+function updateSensorSlot(node, html){
+  if (node._sensorHtml !== html) {
+    node.innerHTML = html;
+    node._sensorHtml = html;
+  }
+}
+function updateSensorLiveDom(id){
+  var screen = app.querySelector('[data-sensor-screen-id]');
+  var s = findSensor(id);
+  if (!screen || screen.getAttribute('data-sensor-screen-id') !== id || !s) return false;
+  var header = byId('sensor-tpl-header');
+  var note = byId('sensor-note-slot');
+  var messages = byId('sensor-messages-slot');
+  var value = byId('sensor-hero-value');
+  if (!header || !note || !messages || !value) return false;
+  var valueText = tplValueText(s, false);
+  if (value.textContent !== valueText) value.textContent = valueText;
+  updateSensorSlot(header, tplHeader());
+  updateSensorSlot(note, s.note && id !== 'C' ? '<div class="error-box">' + esc(s.note) + '</div>' : '');
+  updateSensorSlot(messages, renderMessages(''));
+  if (id === 'P') {
+    var picker = byId('sensor-p-unit-picker');
+    if (!picker) return false;
+    var mode = s.unitMode || 'hpa';
+    var buttons = picker.querySelectorAll('[data-unit-mode]');
+    for (var i = 0; i < buttons.length; i++) {
+      var unit = buttons[i].getAttribute('data-unit-mode');
+      var selected = unit === mode;
+      buttons[i].classList.toggle('green', selected);
+      buttons[i].setAttribute('aria-pressed', String(selected));
+      var label = (selected ? '✓ ' : '') + pressureUnitLabels[unit];
+      if (buttons[i].textContent !== label) buttons[i].textContent = label;
+    }
+  }
+  if (id === 'L' || id === 'F') {
+    var contactLabel = byId('sensor-contact-label');
+    var contactButton = byId('sensor-contact-btn');
+    if (!contactLabel || !contactButton) return false;
+    var contactText = sensorContactLabel(s.inverted);
+    if (contactLabel.textContent !== contactText) contactLabel.textContent = contactText;
+    var contactAction = "event.preventDefault();setSensorOption('" + id + "','inverted'," + (!s.inverted) + ')';
+    if (contactButton.getAttribute('onclick') !== contactAction) contactButton.setAttribute('onclick', contactAction);
+  }
+  updateHeaderClock();
+  updateUnifiedAlertOverlay();
+  updateConnectionOverlay();
+  return true;
+}
 function renderSensor(id){
   var s = findSensor(id);
   if (!s) { go('#/home'); return; }
   stopPoll();
   var html = [];
-  html.push('<div class="tpl-screen"><div class="phone tpl-page">');
-  html.push(tplHeader());
+  var headerHtml = tplHeader();
+  var noteHtml = s.note && id !== 'C' ? '<div class="error-box">' + esc(s.note) + '</div>' : '';
+  var messagesHtml = renderMessages('');
+  html.push('<div class="tpl-screen" data-sensor-screen-id="' + esc(id) + '"><div class="phone tpl-page">');
+  html.push('<div id="sensor-tpl-header">' + headerHtml + '</div>');
   html.push('<main class="content">');
-  if (s.note && id !== 'C') html.push('<div class="error-box">' + esc(s.note) + '</div>');
-  html.push(renderMessages(''));
-  html.push('<section class="hero"><div class="name">' + esc(tplSensorLabel(id)) + '</div><div class="value">' + esc(tplValueText(s, false)) + '</div></section>');
+  html.push('<div id="sensor-note-slot">' + noteHtml + '</div>');
+  html.push('<div id="sensor-messages-slot">' + messagesHtml + '</div>');
+  html.push('<section class="hero"><div class="name">' + esc(tplSensorLabel(id)) + '</div><div class="value" id="sensor-hero-value">' + esc(tplValueText(s, false)) + '</div></section>');
   html.push(renderSensorConfigGrid(id, s));
   html.push('<a class="cell btn green" href="#/home">Вернуться на стартовую страницу</a>');
   html.push('</main></div></div>');
   app.innerHTML = html.join('');
+  byId('sensor-tpl-header')._sensorHtml = headerHtml;
+  byId('sensor-note-slot')._sensorHtml = noteHtml;
+  byId('sensor-messages-slot')._sensorHtml = messagesHtml;
   startLiveStatePoll('sensor');
 }
 
@@ -3995,11 +4083,11 @@ function renderSensorCtrl(id){
     var rule = getCtrlRuleUi(s, outIdx);
     html.push('<section class="ctrl-row">');
     if (isCtrlDisabledSensor(id) || isToggleOnlySensor(id)) html.push('<div class="cell empty">—</div>');
-    else html.push('<a class="cell minmax" href="#" onclick="event.preventDefault();editCtrlThreshold(\'' + esc(id) + '\',' + outIdx + ',\'min\')">' + esc(tplComma2(rule.min)) + '</a>');
+    else html.push('<a class="cell minmax" href="#" onclick="event.preventDefault();editCtrlThreshold(\'' + esc(id) + '\',' + outIdx + ',\'min\')">' + esc(tplComma2(sensorDisplayThreshold(id, rule.min))) + '</a>');
     if (isCtrlDisabledSensor(id)) html.push('<div class="cell empty">—</div>');
     else html.push('<a class="cell" href="#" onclick="event.preventDefault();toggleCtrlRule(\'' + esc(id) + '\',' + outIdx + ')"><div class="center"><div class="ch">CH' + (outIdx + 1) + '</div><div class="state ' + (rule.enabled ? 'mode' : 'off') + '">' + esc(rule.enabled ? ctrlLogicLabel(rule.logic, id) : 'отключено') + '</div></div></a>');
     if (isCtrlDisabledSensor(id) || isToggleOnlySensor(id)) html.push('<div class="cell empty">—</div>');
-    else html.push('<a class="cell minmax" href="#" onclick="event.preventDefault();editCtrlThreshold(\'' + esc(id) + '\',' + outIdx + ',\'max\')">' + esc(tplComma2(rule.max)) + '</a>');
+    else html.push('<a class="cell minmax" href="#" onclick="event.preventDefault();editCtrlThreshold(\'' + esc(id) + '\',' + outIdx + ',\'max\')">' + esc(tplComma2(sensorDisplayThreshold(id, rule.max))) + '</a>');
     html.push('</section>');
   }
   html.push('<a class="back" href="#/home">Вернуться на стартовую страницу</a>');
@@ -4054,8 +4142,8 @@ function renderSensorAlarm(id){
 
     html.push('<section class="alarm-row">');
     html.push('<div class="cell empty">—</div>');
-    html.push('<div class="cell empty">—</div>');
-    html.push('<div class="cell empty">—</div>');
+    html.push('<a class="cell center" href="#" onclick="event.preventDefault();toggleAlarmPref(\'' + esc(id) + '\',\'al2\')"><div class="al-name' + alarmNameClass(ui.al2.enabled, ui.al2.maxTriggered) + '">ALmax</div></a>');
+    html.push('<a class="cell value' + alarmValueClass(ui.al2.enabled, ui.al2.maxTriggered) + '" href="#" onclick="event.preventDefault();editAlarmThreshold(\'' + esc(id) + '\',\'al2\',\'max\')">' + esc(tplCurrentValue(ui.al2.max)) + '</a>');
     html.push('</section>');
   } else if (ui.toggleOnly) {
     var toggleCls = alarmNameClass(ui.toggle.enabled, ui.toggle.triggered);
@@ -4068,15 +4156,15 @@ function renderSensorAlarm(id){
     var al1Triggered = !!(ui.al1.minTriggered || ui.al1.maxTriggered);
     var al2Triggered = !!(ui.al2.minTriggered || ui.al2.maxTriggered);
     html.push('<section class="alarm-row">');
-    html.push('<a class="cell value' + alarmValueClass(ui.al1.enabled, ui.al1.minTriggered) + '" href="#" onclick="event.preventDefault();editAlarmThreshold(\'' + esc(id) + '\',\'al1\',\'min\')">' + esc(tplComma2(ui.al1.min)) + '</a>');
+    html.push('<a class="cell value' + alarmValueClass(ui.al1.enabled, ui.al1.minTriggered) + '" href="#" onclick="event.preventDefault();editAlarmThreshold(\'' + esc(id) + '\',\'al1\',\'min\')">' + esc(tplComma2(sensorDisplayThreshold(id, ui.al1.min))) + '</a>');
     html.push('<a class="cell center" href="#" onclick="event.preventDefault();toggleAlarmPref(\'' + esc(id) + '\',\'al1\')"><div class="al-name' + alarmNameClass(ui.al1.enabled, al1Triggered) + '">AL1</div></a>');
-    html.push('<a class="cell value' + alarmValueClass(ui.al1.enabled, ui.al1.maxTriggered) + '" href="#" onclick="event.preventDefault();editAlarmThreshold(\'' + esc(id) + '\',\'al1\',\'max\')">' + esc(tplComma2(ui.al1.max)) + '</a>');
+    html.push('<a class="cell value' + alarmValueClass(ui.al1.enabled, ui.al1.maxTriggered) + '" href="#" onclick="event.preventDefault();editAlarmThreshold(\'' + esc(id) + '\',\'al1\',\'max\')">' + esc(tplComma2(sensorDisplayThreshold(id, ui.al1.max))) + '</a>');
     html.push('</section>');
 
     html.push('<section class="alarm-row">');
-    html.push('<a class="cell value' + alarmValueClass(ui.al2.enabled, ui.al2.minTriggered) + '" href="#" onclick="event.preventDefault();editAlarmThreshold(\'' + esc(id) + '\',\'al2\',\'min\')">' + esc(tplComma2(ui.al2.min)) + '</a>');
+    html.push('<a class="cell value' + alarmValueClass(ui.al2.enabled, ui.al2.minTriggered) + '" href="#" onclick="event.preventDefault();editAlarmThreshold(\'' + esc(id) + '\',\'al2\',\'min\')">' + esc(tplComma2(sensorDisplayThreshold(id, ui.al2.min))) + '</a>');
     html.push('<a class="cell center" href="#" onclick="event.preventDefault();toggleAlarmPref(\'' + esc(id) + '\',\'al2\')"><div class="al-name' + alarmNameClass(ui.al2.enabled, al2Triggered) + '">AL2</div></a>');
-    html.push('<a class="cell value' + alarmValueClass(ui.al2.enabled, ui.al2.maxTriggered) + '" href="#" onclick="event.preventDefault();editAlarmThreshold(\'' + esc(id) + '\',\'al2\',\'max\')">' + esc(tplComma2(ui.al2.max)) + '</a>');
+    html.push('<a class="cell value' + alarmValueClass(ui.al2.enabled, ui.al2.maxTriggered) + '" href="#" onclick="event.preventDefault();editAlarmThreshold(\'' + esc(id) + '\',\'al2\',\'max\')">' + esc(tplComma2(sensorDisplayThreshold(id, ui.al2.max))) + '</a>');
     html.push('</section>');
   }
   html.push('<a class="back" href="#/home">Вернуться на стартовую страницу</a>');

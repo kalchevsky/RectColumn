@@ -166,6 +166,10 @@ inline bool applyFactoryDefaults(Storage& storage,
     _applyOffOnlySensor(sm.c);
     if (sm.c) {
         sm.c->alarm[0].threshold = FactoryDefaultsTable::CURRENT_ALARM_THRESHOLD_AMPS;
+        sm.c->alarm[0].isMax = false;
+        sm.c->alarm[1].enabled = false;
+        sm.c->alarm[1].threshold = FactoryDefaultsTable::CURRENT_MAX_ALARM_THRESHOLD_AMPS;
+        sm.c->alarm[1].isMax = true;
     }
 
     _syncCtrlLogicFromOutputModes(sm, om);

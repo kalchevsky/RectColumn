@@ -33,12 +33,11 @@ public:
 
     OutputManager() {
         out[OUT_CH1] = new Output("CH1", PIN_CH1);
+        out[OUT_CH2] = new Output("CH2", PIN_CH2);
 #if LIGHT_PROFILE
-        out[OUT_CH2] = nullptr;
         out[OUT_CH3] = nullptr;
         out[OUT_CH4] = nullptr;
 #else
-        out[OUT_CH2] = new Output("CH2", PIN_CH2);
         out[OUT_CH3] = new Output("CH3", PIN_CH3);
         out[OUT_CH4] = new Output("CH4", PIN_CH4);
 #endif
@@ -940,7 +939,7 @@ private:
 
         if (out[OUT_CH4]) out[OUT_CH4]->setBellPatternActive(ch4Enabled && !soundMuted && soundRequired);
 #if LIGHT_PROFILE
-        _lastActiveAlarm = hasUnackedAlarms(sm) || _safetyAlarmActive;
+        _lastActiveAlarm = activeAlarmCount(sm) != 0 || _safetyAlarmActive;
 #endif
     }
 
@@ -955,7 +954,7 @@ private:
                      (on && alarmLedIndicatorEnabled) == LIGHT_ALARM_LED_ACTIVE_HIGH ? HIGH : LOW);
     }
     void _updateLedIndicators(const SensorManager& sm) {
-        _lastActiveAlarm = hasUnackedAlarms(sm) || _safetyAlarmActive;
+        _lastActiveAlarm = activeAlarmCount(sm) != 0 || _safetyAlarmActive;
         _writeRelayLed(out[OUT_CH1] && out[OUT_CH1]->actualOn());
         _writeAlarmLed(_lastActiveAlarm);
     }

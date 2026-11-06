@@ -133,10 +133,8 @@ public:
             out += _fmtPlainValue(e.T1);
             out += " | T2=";
             out += _fmtPlainValue(e.T2);
-#if ACTIVE_PROFILE != PROFILE_ECONOMY_LIGHT
             out += " | T3=";
             out += _fmtPlainValue(e.T3);
-#endif
             out += " | dT=";
             out += _fmtPlainValue(e.dT);
         }

@@ -86,7 +86,7 @@ public:
         }
 
         if (sm.l) {
-            sm.l->value = val.L ? 1.0f : 0.0f;
+            sm.l->value = (sm.l->inverted ? !val.L : val.L) ? 1.0f : 0.0f;
             sm.l->error = false;
             sm.l->present = true;
             sm.l->sensorErrorReason = SENSOR_ERR_NONE;
@@ -94,7 +94,7 @@ public:
         }
 
         if (sm.f) {
-            sm.f->value = val.F ? 1.0f : 0.0f;
+            sm.f->value = (sm.f->inverted ? !val.F : val.F) ? 1.0f : 0.0f;
             sm.f->error = false;
             sm.f->present = true;
             sm.f->sensorErrorReason = SENSOR_ERR_NONE;

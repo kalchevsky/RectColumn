@@ -16,7 +16,7 @@
 #define SERIAL_DEBUG_SENSOR_SNAPSHOT  0
 
 // ─── Версия прошивки / API ───────────────────────────────────────
-#define FW_VERSION      "1.7.21"
+#define FW_VERSION      "1.7.24"
 #define API_VERSION     "v1"
 #define AP_SSID_DEF     "Control_System"
 #define DEVICE_NAME     "RectColumn"
@@ -116,8 +116,8 @@ static_assert(ACTIVE_PROFILE == PROFILE_FULL ||
 #define PIN_CH3   33   // CH3: клапан 1
 #define PIN_CH4   32   // CH4: внешний звонок
 #define PIN_CH5   13   // CH5: встроенный буззер
-// LIGHT п.8: LED CH1. TODO GPIO по схеме. output:18/19/23. НЕ 35/39.
-#define PIN_CH1_LED          18
+// LIGHT п.8: LED CH1 (GPIO33).
+#define PIN_CH1_LED          33
 #define CH1_LED_DEFAULT_ON   true
 #define PIN_WIFI_LED 4 // LED индикации WiFi
 // GPIO14 — strapping pin. Если удерживать кнопку нажатой во время
@@ -127,14 +127,20 @@ static_assert(ACTIVE_PROFILE == PROFILE_FULL ||
 #define ACK_BUTTON_ACTIVE_LOW 1
 #define ACK_BUTTON_DEBOUNCE_MS 50UL
 
-// Экспериментальная распайка платы LIGHT. GPIO требуют подтверждения схемой.
+// Согласованная распайка светодиодов платы LIGHT.
 #define LIGHT_RELAY_LED_DEFAULT_ON  true
 #define LIGHT_ALARM_LED_DEFAULT_ON  true
 #if LIGHT_PROFILE
-  #define PIN_LIGHT_RELAY_LED       18
+  #define PIN_LIGHT_CH1_LED         33
+  #define PIN_LIGHT_RELAY_LED       PIN_LIGHT_CH1_LED
   #define PIN_LIGHT_ALARM_LED       32
   #define LIGHT_RELAY_LED_ACTIVE_HIGH true
   #define LIGHT_ALARM_LED_ACTIVE_HIGH true
+  static_assert(PIN_LIGHT_ALARM_LED != PIN_LIGHT_RELAY_LED, "LIGHT LED pin conflict");
+  #define CHECK_LIGHT_LED_PIN(pin) static_assert((pin) != PIN_T1 && (pin) != PIN_T2 && (pin) != PIN_T3 && (pin) != PIN_L && (pin) != PIN_F && (pin) != PIN_CH1 && (pin) != PIN_CH2 && (pin) != PIN_CH5 && (pin) != PIN_WIFI_LED && (pin) != PIN_ACK_BUTTON, "LIGHT LED pin conflict")
+  CHECK_LIGHT_LED_PIN(PIN_LIGHT_ALARM_LED);
+  CHECK_LIGHT_LED_PIN(PIN_LIGHT_RELAY_LED);
+  #undef CHECK_LIGHT_LED_PIN
 #endif
 
 static_assert(PIN_CH5 != PIN_WER_CH1, "PIN_CH5 conflicts with WER_CH1");
@@ -249,7 +255,7 @@ static_assert(PIN_V != PIN_WER_CH4, "PIN_V conflicts with WER_CH4");
 
 static inline constexpr bool requiresWerConfirmation(uint8_t outIdx) {
 #if ACTIVE_PROFILE == PROFILE_ECONOMY_LIGHT
-    return outIdx == OUT_CH1;
+    return outIdx == OUT_CH1 || outIdx == OUT_CH2;
 #else
     return outIdx == OUT_CH1 || outIdx == OUT_CH2 || outIdx == OUT_CH3;
 #endif

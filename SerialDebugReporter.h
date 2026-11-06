@@ -64,7 +64,7 @@ private:
         switch (idx) {
             case SEN_L:
             case SEN_F:
-                Serial.print(s->value > 0.5f ? "CLOSED" : "OPEN");
+                Serial.print(s->value > 0.5f ? "OK" : "ALARM");
                 break;
             case SEN_T1:
             case SEN_T2:
@@ -74,8 +74,8 @@ private:
                 Serial.print("C");
                 break;
             case SEN_P:
-                Serial.print(s->value, 1);
-                Serial.print("гПа");
+                Serial.print(pressureHpaToDisplay(s->value, s->pressureUnitMode), 2);
+                Serial.print(pressureUnitName(s->pressureUnitMode));
                 break;
             default:
                 Serial.print(s->value, 0);
